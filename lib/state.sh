@@ -100,6 +100,57 @@ get_total_cost() {
   jq -r '.total_cost_cents' "$STATE_FILE"
 }
 
+# Session directory for the current run (set by init_session, used for log paths)
+SESSION_DIR=""
+SESSION_ID=""
+
+# Create a session directory for this run and set SESSION_DIR/SESSION_ID
+init_session() {
+  local base_dir="${1:-.}"
+  SESSION_ID=$(date -u +%Y-%m-%dT%H%M%SZ)
+  SESSION_DIR="$base_dir/state/sessions/$SESSION_ID"
+  mkdir -p "$SESSION_DIR/logs"
+}
+
+# Get the log path for a task phase within the current session
+session_log_path() {
+  local task_id="$1"
+  local phase="$2"  # plan, impl, review
+  echo "$SESSION_DIR/logs/${task_id}-${phase}.log"
+}
+
+# Archive the current session: copy progress.json snapshot into the session folder
+archive_session() {
+  local base_dir="${1:-.}"
+  if [[ -z "$SESSION_DIR" || ! -d "$SESSION_DIR" ]]; then
+    return 0  # no session to archive
+  fi
+
+  # Snapshot progress.json into the session folder
+  if [[ -f "$STATE_FILE" ]]; then
+    cp "$STATE_FILE" "$SESSION_DIR/progress.json"
+  fi
+
+  # Update log_file paths in the archived progress.json to be relative to session dir
+  # (the live STATE_FILE keeps absolute paths for backwards compat)
+  if [[ -f "$SESSION_DIR/progress.json" ]]; then
+    local tmp
+    tmp=$(mktemp)
+    jq --arg sid "$SESSION_ID" \
+      '.session_id = $sid' "$SESSION_DIR/progress.json" > "$tmp"
+    mv "$tmp" "$SESSION_DIR/progress.json"
+  fi
+}
+
+# List all archived sessions (newest first)
+list_sessions() {
+  local base_dir="${1:-.}"
+  local sessions_dir="$base_dir/state/sessions"
+  if [[ -d "$sessions_dir" ]]; then
+    ls -1r "$sessions_dir" 2>/dev/null | head -100
+  fi
+}
+
 write_sentinel() {
   local base_dir="${1:-.}"
   local summary="$2"

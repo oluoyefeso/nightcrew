@@ -1,0 +1,19 @@
+tasks:
+  - id: task-1
+    title: "Add user authentication"
+    branch: "task/auth"
+    type: implementation
+    complexity: medium
+    prompt: "Implement JWT-based authentication for the API"
+    goal: "Users can log in and receive a JWT token"
+    files_in_scope:
+      - "src/auth/**/*"
+
+  - id: task-2
+    title: "Add auth tests"
+    branch: "task/auth-tests"
+    type: test
+    complexity: low
+    prompt: "Write unit tests for the authentication module"
+    depends_on:
+      - task-1

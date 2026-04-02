@@ -1,0 +1,69 @@
+# yaml-language-server: $schema=schemas/task.schema.json
+#
+# NightCrew Task Queue
+# Copy this file to tasks.yaml and edit it with your tasks.
+#
+# Required fields: id, title, branch, type, prompt
+# Optional fields: complexity, goal, files_in_scope, max_time_minutes,
+#                  test_command, allowed_tools, depends_on
+#
+# If using depends_on, list tasks in dependency order (dependees before dependents).
+
+tasks:
+  - id: fix-auth-race
+    title: "Fix race condition in auth flow"
+    branch: fix/auth-race-condition
+    type: implementation
+    complexity: medium
+    prompt: |
+      There's a race condition in src/auth/login.ts where the session
+      token can expire mid-request if the refresh happens concurrently.
+
+      Fix the race condition using a mutex/lock pattern. Ensure existing
+      tests pass and add a test for the concurrent refresh scenario.
+    goal: |
+      - Race condition eliminated
+      - New test covers concurrent refresh
+      - All existing tests pass
+    files_in_scope:
+      - src/auth/**
+      - tests/auth/**
+    max_time_minutes: 30
+    test_command: "npm test"
+
+  - id: add-payment-tests
+    title: "Unit tests for PaymentService"
+    branch: test/payment-service-coverage
+    type: test
+    complexity: medium
+    depends_on:
+      - fix-auth-race
+    prompt: |
+      Add comprehensive unit tests for src/services/payment.ts.
+      Focus on edge cases: expired cards, insufficient funds,
+      currency conversion rounding, and idempotency keys.
+    goal: |
+      - Coverage of PaymentService goes from ~40% to >85%
+      - Edge cases listed above each have dedicated tests
+      - Tests are isolated (no real API calls)
+    files_in_scope:
+      - src/services/payment.ts
+      - tests/services/payment/**
+    max_time_minutes: 25
+
+  - id: research-caching
+    title: "Research caching strategies for the API layer"
+    branch: research/api-caching-strategy
+    type: research
+    complexity: low
+    prompt: |
+      Research caching strategies suitable for our Express API.
+      Compare Redis vs in-memory vs CDN-level caching for our
+      use case (50k RPM, mostly read-heavy, user-specific data).
+      Write findings to docs/research/caching-strategy.md.
+    goal: |
+      - docs/research/caching-strategy.md exists with comparison
+      - Includes pros/cons/recommendation
+    files_in_scope:
+      - docs/research/**
+    max_time_minutes: 20

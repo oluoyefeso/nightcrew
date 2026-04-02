@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NightCrew Dashboard</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --green: #3fb950;
+    --red: #f85149;
+    --yellow: #d29922;
+    --blue: #58a6ff;
+    --orange: #db6d28;
+    --gray: #484f58;
+    --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+    min-height: 100vh;
+    padding: 1.5rem;
+  }
+
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 1rem;
+  }
+
+  .header h1 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  .header .meta {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-family: var(--font-mono);
+  }
+
+  /* Summary stats bar */
+  .stats-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem 1.25rem;
+    flex: 1 1 140px;
+    min-width: 120px;
+    text-align: center;
+  }
+
+  .stat-card .value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    line-height: 1.2;
+  }
+
+  .stat-card .label {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 0.15rem;
+  }
+
+  .stat-card.complete .value { color: var(--green); }
+  .stat-card.failed .value   { color: var(--red); }
+  .stat-card.blocked .value  { color: var(--orange); }
+  .stat-card.timeout .value  { color: var(--yellow); }
+  .stat-card.paused .value   { color: var(--blue); }
+  .stat-card.pending .value  { color: var(--gray); }
+  .stat-card.cost .value     { color: var(--text); }
+
+  /* Session info */
+  .session-info {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    margin-bottom: 1.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+  }
+
+  /* Task cards */
+  .task-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 1rem;
+  }
+
+  .task-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    transition: border-color 0.15s;
+  }
+
+  .task-card:hover {
+    border-color: var(--text-muted);
+  }
+
+  .task-card .card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .task-card .task-id {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 1rem;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Status badges */
+  .badge {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.2em 0.6em;
+    border-radius: 999px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .badge.complete { background: rgba(63,185,80,0.15); color: var(--green); }
+  .badge.failed   { background: rgba(248,81,73,0.15); color: var(--red); }
+  .badge.timeout  { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .badge.paused   { background: rgba(88,166,255,0.15); color: var(--blue); }
+  .badge.blocked  { background: rgba(219,109,40,0.15); color: var(--orange); }
+  .badge.pending  { background: rgba(72,79,88,0.25); color: var(--text-muted); }
+
+  .task-card .detail-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    margin-bottom: 0.35rem;
+    line-height: 1.4;
+  }
+
+  .detail-row .detail-label {
+    color: var(--text-muted);
+    flex-shrink: 0;
+    min-width: 70px;
+  }
+
+  .detail-row .detail-value {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    word-break: break-all;
+  }
+
+  .detail-row .detail-value.reason {
+    color: var(--red);
+  }
+
+  .detail-row .detail-value.blocked-by {
+    color: var(--orange);
+  }
+
+  /* Empty / error state */
+  .empty-state {
+    text-align: center;
+    padding: 4rem 1rem;
+    color: var(--text-muted);
+  }
+
+  .empty-state .icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+  }
+
+  .empty-state h2 {
+    font-size: 1.25rem;
+    color: var(--text);
+    margin-bottom: 0.5rem;
+  }
+
+  .empty-state p {
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+  }
+
+  /* Refresh indicator */
+  .refresh-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 2px;
+    background: var(--blue);
+    transition: width 0.3s;
+    z-index: 100;
+  }
+
+  /* Responsive */
+  @media (max-width: 480px) {
+    body { padding: 1rem; }
+    .header h1 { font-size: 1.35rem; }
+    .task-grid { grid-template-columns: 1fr; }
+    .stat-card { padding: 0.6rem 0.75rem; }
+    .stat-card .value { font-size: 1.35rem; }
+  }
+</style>
+</head>
+<body>
+
+<div class="refresh-bar" id="refreshBar"></div>
+
+<div class="header">
+  <h1>&#127769; NightCrew</h1>
+  <div class="meta" id="lastUpdated">Loading...</div>
+</div>
+
+<div id="content">
+  <div class="empty-state">
+    <div class="icon">&#9203;</div>
+    <p>Loading...</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  const DATA_URL = 'state/progress.json';
+  const REFRESH_MS = 30000;
+  const contentEl = document.getElementById('content');
+  const lastUpdatedEl = document.getElementById('lastUpdated');
+  const refreshBar = document.getElementById('refreshBar');
+
+  const STATUS_ORDER = ['complete', 'failed', 'timeout', 'blocked', 'paused', 'pending'];
+
+  function formatTime(iso) {
+    if (!iso) return '—';
+    try {
+      const d = new Date(iso);
+      return d.toLocaleString();
+    } catch { return iso; }
+  }
+
+  function formatCost(cents) {
+    if (cents == null) return '—';
+    const n = Number(cents);
+    if (isNaN(n)) return '—';
+    return '$' + (n / 100).toFixed(2);
+  }
+
+  function escapeHtml(s) {
+    const el = document.createElement('span');
+    el.textContent = s;
+    return el.innerHTML;
+  }
+
+  function countByStatus(tasks) {
+    const counts = {};
+    for (const id of Object.keys(tasks)) {
+      const s = tasks[id].status || 'pending';
+      counts[s] = (counts[s] || 0) + 1;
+    }
+    return counts;
+  }
+
+  function render(data) {
+    const tasks = data.tasks || {};
+    const taskIds = Object.keys(tasks);
+    const counts = countByStatus(tasks);
+    const totalCost = formatCost(data.total_cost_cents);
+
+    // Sort tasks by status order
+    taskIds.sort((a, b) => {
+      const ai = STATUS_ORDER.indexOf(tasks[a].status);
+      const bi = STATUS_ORDER.indexOf(tasks[b].status);
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    });
+
+    let html = '';
+
+    // Session info
+    html += '<div class="session-info">';
+    html += '<span>Session started: ' + escapeHtml(formatTime(data.session_started)) + '</span>';
+    html += '<span>Tasks: ' + taskIds.length + '</span>';
+    html += '</div>';
+
+    // Stats bar
+    html += '<div class="stats-bar">';
+    for (const s of STATUS_ORDER) {
+      if (counts[s]) {
+        html += '<div class="stat-card ' + s + '">';
+        html += '<div class="value">' + counts[s] + '</div>';
+        html += '<div class="label">' + escapeHtml(s) + '</div>';
+        html += '</div>';
+      }
+    }
+    html += '<div class="stat-card cost">';
+    html += '<div class="value">' + escapeHtml(totalCost) + '</div>';
+    html += '<div class="label">Total Cost</div>';
+    html += '</div>';
+    html += '</div>';
+
+    // Task cards
+    if (taskIds.length === 0) {
+      html += '<div class="empty-state"><div class="icon">&#128203;</div>';
+      html += '<h2>No tasks in this session</h2>';
+      html += '<p>Tasks will appear here once they start running.</p></div>';
+    } else {
+      html += '<div class="task-grid">';
+      for (const id of taskIds) {
+        const t = tasks[id];
+        const status = t.status || 'pending';
+        html += '<div class="task-card">';
+        html += '<div class="card-header">';
+        html += '<span class="task-id">' + escapeHtml(id) + '</span>';
+        html += '<span class="badge ' + escapeHtml(status) + '">' + escapeHtml(status) + '</span>';
+        html += '</div>';
+
+        if (t.branch) {
+          html += '<div class="detail-row"><span class="detail-label">Branch</span>';
+          html += '<span class="detail-value">' + escapeHtml(t.branch) + '</span></div>';
+        }
+        if (t.model) {
+          html += '<div class="detail-row"><span class="detail-label">Model</span>';
+          html += '<span class="detail-value">' + escapeHtml(t.model) + '</span></div>';
+        }
+        if (t.cost_cents != null) {
+          html += '<div class="detail-row"><span class="detail-label">Cost</span>';
+          html += '<span class="detail-value">' + escapeHtml(formatCost(t.cost_cents)) + '</span></div>';
+        }
+        if (t.pr_url) {
+          html += '<div class="detail-row"><span class="detail-label">PR</span>';
+          html += '<span class="detail-value"><a href="' + escapeHtml(t.pr_url) + '" target="_blank" rel="noopener">' + escapeHtml(t.pr_url) + '</a></span></div>';
+        }
+        if (t.log_file) {
+          html += '<div class="detail-row"><span class="detail-label">Log</span>';
+          html += '<span class="detail-value">' + escapeHtml(t.log_file) + '</span></div>';
+        }
+        if (status === 'failed' && t.reason) {
+          html += '<div class="detail-row"><span class="detail-label">Reason</span>';
+          html += '<span class="detail-value reason">' + escapeHtml(t.reason) + '</span></div>';
+        }
+        if (status === 'blocked' && t.blocked_by) {
+          html += '<div class="detail-row"><span class="detail-label">Blocked by</span>';
+          html += '<span class="detail-value blocked-by">' + escapeHtml(t.blocked_by) + '</span></div>';
+        }
+        if (t.started_at) {
+          html += '<div class="detail-row"><span class="detail-label">Started</span>';
+          html += '<span class="detail-value">' + escapeHtml(formatTime(t.started_at)) + '</span></div>';
+        }
+        if (t.completed_at) {
+          html += '<div class="detail-row"><span class="detail-label">Completed</span>';
+          html += '<span class="detail-value">' + escapeHtml(formatTime(t.completed_at)) + '</span></div>';
+        }
+        if (t.failed_at) {
+          html += '<div class="detail-row"><span class="detail-label">Failed at</span>';
+          html += '<span class="detail-value">' + escapeHtml(formatTime(t.failed_at)) + '</span></div>';
+        }
+        if (t.blocked_at) {
+          html += '<div class="detail-row"><span class="detail-label">Blocked at</span>';
+          html += '<span class="detail-value">' + escapeHtml(formatTime(t.blocked_at)) + '</span></div>';
+        }
+
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
+    contentEl.innerHTML = html;
+  }
+
+  function renderEmpty() {
+    contentEl.innerHTML =
+      '<div class="empty-state">' +
+      '<div class="icon">&#127769;</div>' +
+      '<h2>No run data found</h2>' +
+      '<p>Run nightcrew first.</p>' +
+      '</div>';
+  }
+
+  function updateTimestamp() {
+    lastUpdatedEl.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+  }
+
+  async function fetchData() {
+    try {
+      refreshBar.style.width = '30%';
+      const resp = await fetch(DATA_URL, { cache: 'no-store' });
+      refreshBar.style.width = '70%';
+      if (!resp.ok) { renderEmpty(); }
+      else {
+        const data = await resp.json();
+        render(data);
+      }
+    } catch (e) {
+      renderEmpty();
+    }
+    refreshBar.style.width = '100%';
+    updateTimestamp();
+    setTimeout(function () { refreshBar.style.width = '0%'; }, 400);
+  }
+
+  fetchData();
+  setInterval(fetchData, REFRESH_MS);
+})();
+</script>
+</body>
+</html>

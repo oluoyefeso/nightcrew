@@ -1,0 +1,6 @@
+tasks:
+  - id: task-1
+    title: "Do something"
+    branch: "task/something"
+    type: deployment
+    prompt: "Deploy the thing"

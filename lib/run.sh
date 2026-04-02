@@ -116,7 +116,8 @@ preflight_check() {
   fi
 }
 
-# JSON output format support flag (set during preflight)
+# JSON output format support flag (set during preflight_validate, read by run_with_retry)
+# Must call preflight_validate() before run_with_retry() for accurate cost tracking.
 JSON_OUTPUT_SUPPORTED=false
 
 # Full preflight validation: schema, deps, git state, JSON output support
@@ -473,14 +474,9 @@ nightcrew_run() {
     exit 1
   fi
 
-  # Resolve repo path
+  # Resolve repo path (git validation already done in preflight_validate)
   REPO_DIR=$(config_get "repo_path" "$(pwd)" "$config_file")
   REPO_DIR=$(cd "$REPO_DIR" && pwd)  # resolve to absolute
-
-  if [[ ! -d "$REPO_DIR/.git" ]]; then
-    log_error "Not a git repository: $REPO_DIR"
-    exit 1
-  fi
 
   local base_branch
   base_branch=$(config_get "pr_defaults.base" "main" "$config_file")

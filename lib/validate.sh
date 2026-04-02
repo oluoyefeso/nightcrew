@@ -32,23 +32,24 @@ validate_task() {
 
     while IFS= read -r file; do
       [[ -z "$file" ]] && continue
+      # Allow NightCrew metadata files at repo root
+      if [[ "$file" =~ ^(DECISIONS|PLAN|REVIEW)- ]]; then
+        continue
+      fi
       local in_scope=false
       for pattern in $files_in_scope; do
-        # Use find -path for proper ** glob matching.
-        # find -path matches the full path, so prepend ./ to match relative patterns.
-        # Convert ** to find's * (find -path treats * as matching across /).
-        local find_pattern
-        find_pattern=$(echo "$pattern" | sed 's|\*\*|*|g')
-        if find "$worktree_dir" -path "$worktree_dir/$find_pattern" -print -quit 2>/dev/null | grep -q "$file"; then
+        # Convert ** glob to a regex for matching relative paths.
+        # git diff --name-only returns paths like "src/auth/login.ts"
+        # Pattern "src/auth/**" should match "src/auth/login.ts" and "src/auth/sub/file.ts"
+        local regex
+        regex=$(echo "$pattern" | sed 's|\.|\\.|g; s|\*\*/|DOUBLEWILD/|g; s|\*\*|DOUBLEWILD|g; s|\*|[^/]*|g; s|DOUBLEWILD|.*|g')
+        regex="^${regex}$"
+        if echo "$file" | grep -qE "$regex"; then
           in_scope=true
           break
         fi
       done
       if [[ "$in_scope" == "false" ]]; then
-        # Allow DECISIONS-*.md and PLAN-*.md and REVIEW-*.md at repo root
-        if [[ "$file" =~ ^(DECISIONS|PLAN|REVIEW)- ]]; then
-          continue
-        fi
         log_error "VALIDATION: Out-of-scope file modified: $file"
         ((violations++))
       fi

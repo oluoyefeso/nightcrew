@@ -87,3 +87,39 @@ teardown() {
   run validate_task "$TEST_TEMP_DIR" "task/test-branch" "**/*" "" "main"
   [ "$status" -eq 0 ]
 }
+
+# ── Glob / file-scope matching ───────────────────────────────
+
+@test "glob matching: file in scoped dir matches pattern" {
+  # src/auth/login.ts should match "src/auth/**"
+  mkdir -p "$TEST_TEMP_DIR/src/auth"
+  echo 'export {}' > "$TEST_TEMP_DIR/src/auth/login.ts"
+  git -C "$TEST_TEMP_DIR" add src/auth/login.ts
+  git -C "$TEST_TEMP_DIR" commit -m "add login" --quiet
+
+  run validate_task "$TEST_TEMP_DIR" "task/test-branch" "src/auth/**" "" "main"
+  [ "$status" -eq 0 ]
+}
+
+@test "glob matching: file outside scoped dir does NOT match pattern" {
+  # src/other/file.ts should NOT match "src/auth/**"
+  mkdir -p "$TEST_TEMP_DIR/src/other"
+  echo 'export {}' > "$TEST_TEMP_DIR/src/other/file.ts"
+  git -C "$TEST_TEMP_DIR" add src/other/file.ts
+  git -C "$TEST_TEMP_DIR" commit -m "add other file" --quiet
+
+  run validate_task "$TEST_TEMP_DIR" "task/test-branch" "src/auth/**" "" "main"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Out-of-scope"* ]]
+}
+
+@test "glob matching: deeply nested file matches pattern" {
+  # src/auth/sub/deep.ts should match "src/auth/**"
+  mkdir -p "$TEST_TEMP_DIR/src/auth/sub"
+  echo 'export {}' > "$TEST_TEMP_DIR/src/auth/sub/deep.ts"
+  git -C "$TEST_TEMP_DIR" add src/auth/sub/deep.ts
+  git -C "$TEST_TEMP_DIR" commit -m "add deep file" --quiet
+
+  run validate_task "$TEST_TEMP_DIR" "task/test-branch" "src/auth/**" "" "main"
+  [ "$status" -eq 0 ]
+}

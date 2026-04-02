@@ -10,6 +10,12 @@ validate_task() {
 
   local violations=0
 
+  # 0. Guard: verify working directory is accessible
+  if [[ ! -d "$worktree_dir" ]]; then
+    log_error "VALIDATION: Worktree directory does not exist: $worktree_dir"
+    return 1
+  fi
+
   # 1. Branch assertion
   local current_branch
   current_branch=$(git -C "$worktree_dir" branch --show-current 2>/dev/null)

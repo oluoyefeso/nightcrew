@@ -113,6 +113,33 @@ teardown() {
   [[ "$output" == *"Out-of-scope"* ]]
 }
 
+# ── Worktree directory guard ──────────────────────────────────
+
+@test "validate_task returns error when worktree_dir does not exist" {
+  run validate_task "/nonexistent/path/nowhere" "task/test-branch" "**/*" "" "main"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"does not exist"* ]]
+}
+
+@test "validate_task error message says 'does not exist' not 'wrong branch'" {
+  run validate_task "/nonexistent/path/nowhere" "task/test-branch" "**/*" "" "main"
+  [ "$status" -ne 0 ]
+  # Should NOT get the misleading "Wrong branch" error
+  [[ "$output" != *"Wrong branch"* ]]
+  # Should get the clear directory error
+  [[ "$output" == *"Worktree directory does not exist"* ]]
+}
+
+@test "validate_task with nonexistent dir does not attempt test command" {
+  # If the test command were attempted, it would try to run "echo SHOULD_NOT_RUN"
+  # and we'd see that string in the output
+  run validate_task "/nonexistent/path/nowhere" "task/test-branch" "**/*" "echo SHOULD_NOT_RUN" "main"
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"SHOULD_NOT_RUN"* ]]
+}
+
+# ── Glob / file-scope matching (continued) ───────────────────
+
 @test "glob matching: deeply nested file matches pattern" {
   # src/auth/sub/deep.ts should match "src/auth/**"
   mkdir -p "$TEST_TEMP_DIR/src/auth/sub"

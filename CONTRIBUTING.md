@@ -15,11 +15,14 @@ chmod +x nightcrew.sh
 brew install jq yq gettext
 brew install bats-core  # for running tests
 
+# Install Node dependency (for web UI server)
+npm install
+
 # Verify everything works
 bats tests/
 ```
 
-**Required tools:** `bash` (4.0+), `jq`, `yq`, `envsubst` (from gettext), `bats-core` (for tests).
+**Required tools:** `bash` (4.0+), `jq`, `yq`, `envsubst` (from gettext), `bats-core` (for tests), `node` (for web UI server).
 
 **Note for macOS users:** The default `/bin/bash` on macOS is 3.2 (ancient). NightCrew requires bash 4+ for associative arrays. Install modern bash: `brew install bash`. Tests will use the Homebrew version automatically if available.
 
@@ -42,16 +45,20 @@ The test suite covers: state machine transitions, model/tool routing, schema val
 
 ```
 nightcrew/
-  nightcrew.sh              # Entry point (nightcrew run | nightcrew review)
-  config.yaml               # User settings (repo path, cost cap, models)
+  nightcrew.sh              # Entry point (run, review, serve, preflight, config)
+  server.js                 # Web UI server (Node.js, started via nightcrew serve)
+  index.html                # Web UI single-page app (4 pages + overlay)
+  package.json              # Node dependency (js-yaml)
+  config.yaml.example       # User settings (repo path, cost cap, models)
   tasks.yaml.example        # Example task queue
-  dashboard.html            # Static morning review dashboard
+  dashboard.html            # Static morning review dashboard (file:// fallback)
   schemas/
     task.schema.json         # JSON Schema for tasks.yaml validation
+  design/                    # UI design mockups and design system (DESIGN.md)
   lib/
     00-common.sh             # Logging, config reading, utilities
-    run.sh                   # Core 3-phase loop (plan, implement, review)
-    state.sh                 # progress.json state machine
+    run.sh                   # Core 3-phase loop + preflight/config commands
+    state.sh                 # progress.json state machine + session archiving
     model-router.sh          # Opus vs Sonnet routing per phase
     tool-router.sh           # allowedTools whitelist per task type
     prompt-builder.sh        # Template rendering with envsubst
@@ -63,6 +70,9 @@ nightcrew/
     plan-prompt.md           # Phase 1: Engineering planning prompt (Opus)
     system-prompt.md         # Phase 2: Implementation prompt (Sonnet)
     review-prompt.md         # Phase 3: Pre-landing review prompt (Sonnet)
+  state/
+    progress.json            # Current run status (overwritten each run)
+    sessions/                # Archived sessions (one folder per run)
   tests/
     test_helper.bash         # Common test setup
     state.bats               # State machine tests
@@ -71,6 +81,7 @@ nightcrew/
     deps.bats                # Dependency resolution tests
     schema.bats              # Schema validation tests
     cost-tracker.bats        # Cost estimation tests
+    git-ops.bats             # Worktree setup + hardening tests
     fixtures/                # Test YAML fixtures
 ```
 
@@ -80,7 +91,7 @@ nightcrew/
 2. **Open an issue first** for anything not in TODOS.md, so we can discuss scope.
 3. **Fork, branch, PR.** Use a descriptive branch name (`fix/glob-matching`, `feat/parallel-exec`).
 4. **Write tests.** Every new feature or bug fix should include tests. Run `bats tests/` before submitting.
-5. **Keep it bash.** NightCrew's zero-dependency approach is intentional. Don't add Python/Node/Ruby dependencies.
+5. **Keep it simple.** The core pipeline is pure bash. The web UI uses a minimal Node.js server (one dependency: js-yaml). Don't add frameworks or build steps.
 
 ## Code Style
 

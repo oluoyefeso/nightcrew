@@ -30,12 +30,6 @@ When a task fails validation, spawn a repair Claude session that reads the valid
 
 Add a flock-based lockfile (e.g., `.worktrees/.nightcrew.lock`) to prevent concurrent NightCrew runs colliding on the same repo. Two runs targeting the same `.worktrees/` directory would corrupt worktree state. Check for lock at startup, fail with a clear message if another run is active.
 
-## Server-Backed Dashboard (`nightcrew serve`)
-**Priority:** P2 | **Effort:** M (human: ~1 day / CC: ~30min)
-**Depends on:** Static dashboard (dashboard.html) proving useful
-
-Local HTTP server with API endpoints for reading status and adding/editing tasks. Upgrades the static dashboard to a full task management UI. Adds a Node/Python dependency.
-
 ## Completed
 
 ### Gitignore User Config
@@ -45,6 +39,10 @@ Added `.gitignore` for `config.yaml`, `tasks.yaml`, `state/`, `logs/`. Created `
 ### Fix glob-to-regex validation on macOS
 **Completed:** v0.2.0 (2026-04-02)
 Replaced `\+` (BRE repetition) with `-vF` fixed-string matching. Replaced `\s*` with POSIX `[[:space:]]*`.
+
+### Server-Backed Dashboard (`nightcrew serve`)
+**Completed:** v0.3.0 (2026-04-02)
+Node.js HTTP server with 11 API endpoints. Full SPA web UI with 4 pages (Dashboard, Queue Manager, Log Archive, System Health) + run confirmation overlay. Session archiving to `state/sessions/`. New CLI subcommands: `serve`, `preflight --json`, `config --json`. Task `enabled` field for disable/enable from the UI.
 
 ### Fix draft PR creation output capture
 **Completed:** v0.2.0 (2026-04-02)

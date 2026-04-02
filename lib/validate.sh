@@ -21,7 +21,7 @@ validate_task() {
   current_branch=$(git -C "$worktree_dir" branch --show-current 2>/dev/null)
   if [[ "$current_branch" != "$task_branch" ]]; then
     log_error "VALIDATION: Wrong branch. Expected '$task_branch', got '$current_branch'"
-    ((violations++))
+    violations=$((violations + 1))
   fi
 
   # 2. File scope check (defense-in-depth)
@@ -57,7 +57,7 @@ validate_task() {
       done
       if [[ "$in_scope" == "false" ]]; then
         log_error "VALIDATION: Out-of-scope file modified: $file"
-        ((violations++))
+        violations=$((violations + 1))
       fi
     done <<< "$all_changed"
   fi
@@ -65,12 +65,12 @@ validate_task() {
   # 3. Secret scan
   local secrets_found
   secrets_found=$(git -C "$worktree_dir" diff "$base_branch"...HEAD 2>/dev/null | \
-    grep -iE '^\+.*(api_key|secret_key|password|private_key)\s*[=:]' | \
-    grep -v '^\+\+\+' || true)
+    grep -iE '^\+.*(api_key|secret_key|password|private_key)[[:space:]]*[=:]' | \
+    grep -vF '+++' || true)
   if [[ -n "$secrets_found" ]]; then
     log_error "VALIDATION: Possible secrets detected in diff:"
     echo "$secrets_found" >&2
-    ((violations++))
+    violations=$((violations + 1))
   fi
 
   # 4. Test command
@@ -78,7 +78,7 @@ validate_task() {
     log "Running test command: $test_command"
     if ! (cd "$worktree_dir" && eval "$test_command" 2>&1); then
       log_error "VALIDATION: Test command failed: $test_command"
-      ((violations++))
+      violations=$((violations + 1))
     fi
   fi
 

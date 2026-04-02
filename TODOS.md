@@ -6,24 +6,6 @@
 
 Add a root manifest (`nightcrew.yaml`) that points to per-project task files, each scoped to a repo. Enables overnight runs across multiple repositories in sequence. Wrap the existing `nightcrew_run()` in an outer project loop. Namespace `state/progress.json` by project. Update `nightcrew review` to group results by project.
 
-## Gitignore User Config (prevent accidental path leaks)
-**Priority:** P0 | **Effort:** S (human: ~30min / CC: ~5min)
-**Depends on:** Nothing (ready to build)
-
-Add `.gitignore` for `config.yaml`, `tasks.yaml`, `state/`, `logs/`. Rename existing `config.yaml` to `config.yaml.example`. Users copy examples to real files. Prevents accidentally committing personal paths (like `repo_path: /Users/mac/...`) to the public repo. Optionally add a pre-commit hook that rejects absolute paths in YAML files.
-
-## Fix glob-to-regex validation on macOS
-**Priority:** P1 | **Effort:** XS (human: ~30min / CC: ~5min)
-**Depends on:** Nothing (ready to build)
-
-`validate.sh:45` converts `files_in_scope` glob patterns (like `**`) to regex via sed, but the resulting regex triggers `grep: repetition-operator operand invalid` on macOS grep. Validation still passes (non-blocking), but the warning is noisy and the scope check is silently skipped for affected patterns. Fix the sed conversion or switch to a glob-native matching approach.
-
-## Fix draft PR creation output capture
-**Priority:** P1 | **Effort:** XS (human: ~30min / CC: ~5min)
-**Depends on:** Nothing (ready to build)
-
-After a successful push, `create_draft_pr()` in `git-ops.sh` doesn't surface the PR URL in the run output. The `gh pr create` call's output may be swallowed by `2>/dev/null` or the URL variable isn't propagated back to the log. First successful run pushed the branch but showed no PR URL. Verify `gh pr create` runs and its output reaches the summary log.
-
 ## v2: Pipeline-First Task Format
 **Priority:** P2 | **Effort:** S (human: ~30min / CC: ~10min)
 **Depends on:** Real overnight usage data from v1
@@ -53,3 +35,17 @@ Add a flock-based lockfile (e.g., `.worktrees/.nightcrew.lock`) to prevent concu
 **Depends on:** Static dashboard (dashboard.html) proving useful
 
 Local HTTP server with API endpoints for reading status and adding/editing tasks. Upgrades the static dashboard to a full task management UI. Adds a Node/Python dependency.
+
+## Completed
+
+### Gitignore User Config
+**Completed:** v0.2.0 (2026-04-02)
+Added `.gitignore` for `config.yaml`, `tasks.yaml`, `state/`, `logs/`. Created `.example` files for config and tasks.
+
+### Fix glob-to-regex validation on macOS
+**Completed:** v0.2.0 (2026-04-02)
+Replaced `\+` (BRE repetition) with `-vF` fixed-string matching. Replaced `\s*` with POSIX `[[:space:]]*`.
+
+### Fix draft PR creation output capture
+**Completed:** v0.2.0 (2026-04-02)
+Captured `gh pr create` stderr to temp file instead of discarding. Added warning log when PR creation fails.

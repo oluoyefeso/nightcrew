@@ -2,6 +2,27 @@
 
 All notable changes to NightCrew are documented here.
 
+## [0.2.0] - 2026-04-02
+
+### Fixed
+- Pipeline crash when first task completes: `((var++))` with `set -e` killed the script on first counter increment from zero. All 21 arithmetic sites converted to safe `var=$((var + 1))` form.
+- `claude -p` running in NightCrew's directory instead of the worktree. Code edits now land in the correct target repository.
+- `gh pr create` failing silently: stderr was discarded via `2>/dev/null`. Now captured and logged so you can see why PR creation failed.
+- `grep: repetition-operator operand invalid` on macOS: BSD grep choked on `\+` in BRE mode and `\s` in ERE mode. Replaced with POSIX-compatible patterns.
+- Dashboard HTML showing "No run data" on refresh: `fetch()` is blocked on `file://` protocol. `nightcrew review` now embeds JSON data inline.
+- Worktree setup silently succeeding on stale directories from crashed runs. Now validates `.git` file exists and recreates if needed.
+
+### Added
+- `.gitignore` for runtime artifacts (`logs/`, `state/`) and user-specific config (`config.yaml`, `tasks.yaml`)
+- `config.yaml.example` and `tasks.yaml.example` so users copy to local files without leaking paths
+- Warning message when branch pushes but PR creation fails
+- Worktree guard: validates path is non-empty, single-line, and directory exists before proceeding
+- Error capture in `commit_changes` and `push_branch` with directory existence checks
+- 7 new bats tests for worktree hardening and validation edge cases (60 total)
+
+### Changed
+- `nightcrew review --open` now opens rendered dashboard from `state/dashboard.html` (with embedded data) instead of the template
+
 ## [0.1.0] - 2026-04-02
 
 First release. Queue tasks before bed, wake up to draft PRs.

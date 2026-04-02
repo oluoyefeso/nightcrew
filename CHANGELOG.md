@@ -2,6 +2,29 @@
 
 All notable changes to NightCrew are documented here.
 
+## [0.3.0] - 2026-04-02
+
+### Added
+- Web UI: run `nightcrew serve` to open a 4-page operations console at http://127.0.0.1:3721
+  - **Dashboard** with stats grid, task cards, click-to-expand logs, and empty state
+  - **Queue Manager** with split-pane task list + editor form (add, edit, duplicate, delete, enable/disable tasks)
+  - **Log Archive** with session history and full terminal-style log viewer per task/phase
+  - **System Health** with live preflight checks, config viewer, and lifetime cost summary
+  - **Run Confirmation overlay** with task count, estimated time, model routing preview, and warnings
+- Session archiving: each run is archived to `state/sessions/{timestamp}/` with its own progress.json and logs
+- `nightcrew preflight --json` for structured preflight check output
+- `nightcrew config --json` for resolved configuration with model routing table
+- `enabled` field on tasks: set `enabled: false` in tasks.yaml to skip a task without deleting it
+- Node.js HTTP server (server.js) with 11 API endpoints for the web UI
+- Design system: "The Silent Sentinel" dark theme from DESIGN.md with tonal layering, no borders, monospace data
+
+### Security
+- Cross-origin request protection (localhost-only, no CORS wildcard)
+- Path traversal prevention on all file-serving endpoints
+- Shell injection prevention (execFileSync with argument arrays, not string interpolation)
+- XSS prevention in the SPA (proper HTML entity escaping, URL protocol validation, data-attribute event delegation)
+- Request body size limit (1MB) on POST endpoints
+
 ## [0.2.1] - 2026-04-02
 
 ### Changed

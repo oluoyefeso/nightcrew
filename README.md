@@ -54,6 +54,7 @@ Install these CLI tools before running NightCrew:
 | `jq` | `brew install jq` | JSON processing |
 | `yq` | `brew install yq` | YAML processing |
 | `envsubst` | `brew install gettext` | Template rendering |
+| `node` | [nodejs.org](https://nodejs.org) | Web UI server (optional, for `nightcrew serve`) |
 
 ## Quick Start
 
@@ -101,6 +102,7 @@ Optional fields for more control:
 
 ```yaml
     complexity: medium           # low | medium | high (affects model routing)
+    enabled: true                # Set to false to skip this task without deleting it
     goal: |                      # Acceptance criteria
       - Tests pass
       - No regressions
@@ -153,14 +155,19 @@ pr_defaults:
 ## CLI Reference
 
 ```
-nightcrew.sh run [OPTIONS]      Run the task queue
-nightcrew.sh review [OPTIONS]   Morning review dashboard
+nightcrew.sh run [OPTIONS]        Run the task queue
+nightcrew.sh review [OPTIONS]     Morning review dashboard
+nightcrew.sh serve [OPTIONS]      Start the web UI (http://127.0.0.1:3721)
+nightcrew.sh preflight [OPTIONS]  Run preflight checks
+nightcrew.sh config [OPTIONS]     Show resolved configuration
 
 Options:
   --tasks FILE      Path to tasks.yaml (default: ./tasks.yaml)
   --config FILE     Path to config.yaml (default: ./config.yaml)
   --dry-run         Preflight validation + show what would run
   --open            Open HTML dashboard in browser (with review)
+  --json            Output as JSON (for preflight, config)
+  --port PORT       Server port (default: 3721, for serve)
   --version         Show version
   --help            Show help
 ```
@@ -192,17 +199,38 @@ If Claude hits a rate limit, NightCrew automatically:
 echo "0 0 * * * cd /path/to/nightcrew && ./nightcrew.sh run" | crontab -
 ```
 
+## Web UI
+
+NightCrew includes a web-based operations console for managing tasks and viewing results.
+
+```bash
+# Install Node dependency (one-time)
+npm install
+
+# Start the web UI
+./nightcrew.sh serve
+# Opens http://127.0.0.1:3721
+```
+
+The web UI has 4 pages:
+- **Dashboard** — Live task status, stats, cost tracking (same data as `nightcrew review`)
+- **Queue Manager** — Add, edit, reorder, enable/disable tasks visually (writes to tasks.yaml)
+- **Log Archive** — Browse past sessions and read full execution logs per task/phase
+- **System Health** — Preflight status, config viewer, lifetime cost summary
+
+The server is localhost-only (127.0.0.1) with no authentication. It reads and writes the same local files as the CLI.
+
 ## Output
 
 After a run, you'll find:
 - **`state/progress.json`** — Task statuses, costs, PR URLs, timing
-- **`logs/`** — Per-task execution logs
+- **`state/sessions/{timestamp}/`** — Archived session with progress snapshot and logs
 - **Draft PRs** on GitHub — One per completed task
 - **`DECISIONS-*.md`** — Decision logs when Claude made judgment calls
 - **macOS notification** — If enabled, a native notification on completion
 - **Webhook** — If configured, a JSON POST to your Slack/Discord
 
-Run `./nightcrew.sh review` for a formatted summary, or `./nightcrew.sh review --open` to open the HTML dashboard in your browser.
+Run `./nightcrew.sh review` for a formatted summary, or `./nightcrew.sh review --open` to open the HTML dashboard. Or start the full web UI with `./nightcrew.sh serve`.
 
 ## Architecture
 

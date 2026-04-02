@@ -455,6 +455,162 @@ send_notification() {
   fi
 }
 
+# Standalone preflight check with optional JSON output
+nightcrew_preflight() {
+  local tasks_file="$1"
+  local config_file="$2"
+  local json_output="${3:-false}"
+
+  if [[ "$json_output" == "true" ]]; then
+    local checks=()
+    local passed=0 warned=0 failed_count=0
+
+    # 1. CLI dependencies
+    local missing=()
+    for dep in claude gh jq yq envsubst; do
+      command -v "$dep" >/dev/null 2>&1 || missing+=("$dep")
+    done
+    if [[ ${#missing[@]} -eq 0 ]]; then
+      checks+=('{"name":"cli_deps","status":"ok","detail":"claude,gh,jq,yq,envsubst found"}')
+      passed=$((passed + 1))
+    else
+      checks+=('{"name":"cli_deps","status":"fail","detail":"missing: '"${missing[*]}"'"}')
+      failed_count=$((failed_count + 1))
+    fi
+
+    # 2. GitHub auth
+    if gh auth status >/dev/null 2>&1; then
+      local gh_user
+      gh_user=$(gh api user -q .login 2>/dev/null || echo "unknown")
+      checks+=('{"name":"github_auth","status":"ok","detail":"authenticated as '"$gh_user"'"}')
+      passed=$((passed + 1))
+    else
+      checks+=('{"name":"github_auth","status":"fail","detail":"not authenticated, run gh auth login"}')
+      failed_count=$((failed_count + 1))
+    fi
+
+    # 3. Schema validation
+    if [[ -f "$tasks_file" ]]; then
+      local task_count
+      task_count=$(yq e '.tasks | length' "$tasks_file" 2>/dev/null || echo "0")
+      if [[ "$task_count" -gt 0 ]]; then
+        checks+=('{"name":"schema","status":"ok","detail":"'"$task_count"' tasks validated"}')
+        passed=$((passed + 1))
+      else
+        checks+=('{"name":"schema","status":"fail","detail":"no tasks found in '"$tasks_file"'"}')
+        failed_count=$((failed_count + 1))
+      fi
+    else
+      checks+=('{"name":"schema","status":"fail","detail":"tasks file not found: '"$tasks_file"'"}')
+      failed_count=$((failed_count + 1))
+    fi
+
+    # 4. Dependency graph
+    if [[ -f "$tasks_file" ]] && validate_dependencies "$tasks_file" 2>/dev/null; then
+      checks+=('{"name":"dep_graph","status":"ok","detail":"no circular dependencies"}')
+      passed=$((passed + 1))
+    else
+      checks+=('{"name":"dep_graph","status":"fail","detail":"circular or missing dependencies"}')
+      failed_count=$((failed_count + 1))
+    fi
+
+    # 5. Git state
+    local repo_dir
+    repo_dir=$(config_get "repo_path" "$(pwd)" "$config_file")
+    if [[ -d "$repo_dir/.git" ]]; then
+      local dirty
+      dirty=$(git -C "$repo_dir" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+      if [[ "$dirty" -gt 0 ]]; then
+        checks+=('{"name":"git_state","status":"warn","detail":"'"$dirty"' uncommitted changes"}')
+        warned=$((warned + 1))
+      else
+        checks+=('{"name":"git_state","status":"ok","detail":"working tree clean"}')
+        passed=$((passed + 1))
+      fi
+    else
+      checks+=('{"name":"git_state","status":"fail","detail":"not a git repo: '"$repo_dir"'"}')
+      failed_count=$((failed_count + 1))
+    fi
+
+    # 6. JSON output support
+    if claude --help 2>&1 | grep -q 'output-format'; then
+      checks+=('{"name":"json_output","status":"ok","detail":"--output-format supported"}')
+      passed=$((passed + 1))
+    else
+      checks+=('{"name":"json_output","status":"warn","detail":"--output-format not supported, using flat-rate cost"}')
+      warned=$((warned + 1))
+    fi
+
+    # 7. Bats
+    if command -v bats >/dev/null 2>&1; then
+      checks+=('{"name":"bats","status":"ok","detail":"test runner available"}')
+      passed=$((passed + 1))
+    else
+      checks+=('{"name":"bats","status":"warn","detail":"not installed, tests wont run"}')
+      warned=$((warned + 1))
+    fi
+
+    # Output JSON
+    local checks_json
+    checks_json=$(printf '%s\n' "${checks[@]}" | jq -s '.')
+    jq -n --argjson checks "$checks_json" \
+      --argjson passed "$passed" --argjson warned "$warned" --argjson failed "$failed_count" \
+      '{checks: $checks, passed: $passed, warned: $warned, failed: $failed}'
+  else
+    # Human-readable output (reuse existing preflight_validate)
+    preflight_check
+    preflight_validate "$tasks_file" "$config_file"
+  fi
+}
+
+# Dump resolved configuration as JSON
+nightcrew_config() {
+  local config_file="$1"
+  local json_output="${2:-false}"
+
+  if [[ "$json_output" == "true" ]]; then
+    local repo_path max_cost max_time base_branch
+    repo_path=$(config_get "repo_path" "$(pwd)" "$config_file")
+    max_cost=$(config_get "max_cost_cents" "500" "$config_file")
+    max_time=$(config_get "max_task_time_minutes" "45" "$config_file")
+    base_branch=$(config_get "pr_defaults.base" "main" "$config_file")
+
+    local default_model complex_model
+    default_model=$(config_get "models.default" "claude-sonnet-4-20250514" "$config_file")
+    complex_model=$(config_get "models.complex" "claude-opus-4-20250514" "$config_file")
+
+    # Build routing table from model-router logic
+    # Low/medium use default, high uses complex. Plan always uses complex.
+    jq -n \
+      --arg repo_path "$repo_path" \
+      --argjson max_cost "$max_cost" \
+      --argjson max_time "$max_time" \
+      --arg base_branch "$base_branch" \
+      --arg default_model "$default_model" \
+      --arg complex_model "$complex_model" \
+      '{
+        repo_path: $repo_path,
+        max_cost_cents: $max_cost,
+        max_task_time_minutes: $max_time,
+        pr_defaults: { base: $base_branch, draft: true },
+        models: { default: $default_model, complex: $complex_model },
+        routing: {
+          plan:      { low: $complex_model, medium: $complex_model, high: $complex_model },
+          implement: { low: $default_model, medium: $default_model, high: $complex_model },
+          review:    { low: $default_model, medium: $default_model, high: $default_model }
+        }
+      }'
+  else
+    # Human-readable: just dump the config file
+    if [[ -f "$config_file" ]]; then
+      cat "$config_file"
+    else
+      echo "Config file not found: $config_file" >&2
+      exit 1
+    fi
+  fi
+}
+
 nightcrew_run() {
   local tasks_file="$1"
   local config_file="$2"
@@ -486,8 +642,10 @@ nightcrew_run() {
   max_task_time=$(config_get "max_task_time_minutes" "45" "$config_file")
   local template_dir="$NIGHTCREW_DIR/templates"
 
-  # Init state
+  # Init state and session
   init_state "$NIGHTCREW_DIR"
+  init_session "$NIGHTCREW_DIR"
+  log "Session: $SESSION_ID"
 
   # Parse tasks
   local task_count
@@ -518,9 +676,18 @@ nightcrew_run() {
     task_custom_tools=$(yq e ".tasks[$i].allowed_tools // \"\"" "$tasks_file")
     local task_depends_on
     task_depends_on=$(yq e '.tasks['"$i"'].depends_on // [] | join(" ")' "$tasks_file")
+    local task_enabled
+    task_enabled=$(yq e ".tasks[$i].enabled // \"true\"" "$tasks_file")
 
     log "────────────────────────────────────────"
     log "Task $((i+1))/$task_count: $task_title [$task_id]"
+
+    # Skip disabled tasks (YAML booleans: false, no, off, 0 are all falsy)
+    if [[ "$task_enabled" == "false" || "$task_enabled" == "no" || "$task_enabled" == "off" || "$task_enabled" == "0" || "$task_enabled" == "False" || "$task_enabled" == "No" ]]; then
+      log "Skipping (disabled)"
+      skipped=$((skipped + 1))
+      continue
+    fi
 
     # Skip completed
     local status
@@ -640,7 +807,8 @@ nightcrew_run() {
     # Plan uses read-only tools + write (to save the plan file)
     local plan_tools="Read,Grep,Glob,Write,Bash(git diff*),Bash(git log*),Bash(git status*)"
 
-    local plan_log="$NIGHTCREW_DIR/logs/${task_id}-plan-$(date +%s).log"
+    local plan_log
+    plan_log=$(session_log_path "$task_id" "plan")
 
     # The plan prompt instructs Claude to output a structured plan.
     # We capture it and save it as the plan file.
@@ -688,7 +856,8 @@ $task_prompt"
       "$task_branch" "$task_files" \
       "$template_dir" "$worktree_dir" "$base_branch" "$plan_file")
 
-    local impl_log="$NIGHTCREW_DIR/logs/${task_id}-impl-$(date +%s).log"
+    local impl_log
+    impl_log=$(session_log_path "$task_id" "impl")
 
     local run_exit=0
     run_with_retry "$task_prompt" "$impl_model" "$tools" "$impl_prompt_file" "$task_max_time" "$impl_log" "$worktree_dir" || run_exit=$?
@@ -741,7 +910,8 @@ $task_prompt"
       "$template_dir" "$worktree_dir" "$base_branch")
 
     local review_tools="Read,Grep,Glob,Write,Edit,Bash(git diff*),Bash(git log*),Bash(git status*),Bash(git fetch*),Bash(git add*)"
-    local review_log="$NIGHTCREW_DIR/logs/${task_id}-review-$(date +%s).log"
+    local review_log
+    review_log=$(session_log_path "$task_id" "review")
 
     local review_user_prompt="Review the diff on branch $task_branch against $base_branch. Auto-fix mechanical issues. Log concerns to REVIEW-${task_id}.md."
 
@@ -832,6 +1002,10 @@ $task_prompt"
 
   # Write sentinel
   write_sentinel "$NIGHTCREW_DIR" "completed=$completed failed=$failed blocked=$blocked skipped=$skipped"
+
+  # Archive session (snapshot progress.json + logs into session folder)
+  archive_session "$NIGHTCREW_DIR"
+  log "Session archived: state/sessions/$SESSION_ID/"
 
   # Send notifications
   send_notification "$config_file" "$completed" "$failed" "$blocked"

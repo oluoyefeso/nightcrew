@@ -11,7 +11,7 @@ init_state() {
   mkdir -p "$STATE_DIR"
 
   if [[ ! -f "$STATE_FILE" ]]; then
-    echo '{"session_started":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","tasks":{},"total_cost_cents":0}' | jq '.' > "$STATE_FILE"
+    echo '{"session_started":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","tasks":{},"total_cost_cents":0,"total_input_tokens":0,"total_output_tokens":0}' | jq '.' > "$STATE_FILE"
   fi
 }
 
@@ -83,6 +83,16 @@ add_cost() {
   local tmp
   tmp=$(mktemp)
   jq --argjson c "$cents" '.total_cost_cents += $c' "$STATE_FILE" > "$tmp"
+  mv "$tmp" "$STATE_FILE"
+}
+
+add_tokens() {
+  local input_tokens="$1"
+  local output_tokens="$2"
+  local tmp
+  tmp=$(mktemp)
+  jq --argjson i "$input_tokens" --argjson o "$output_tokens" \
+    '.total_input_tokens += $i | .total_output_tokens += $o' "$STATE_FILE" > "$tmp"
   mv "$tmp" "$STATE_FILE"
 }
 

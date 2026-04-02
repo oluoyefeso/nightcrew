@@ -172,9 +172,39 @@ nightcrew_review() {
   local dashboard_template="$NIGHTCREW_DIR/dashboard.html"
   local dashboard_output="$NIGHTCREW_DIR/state/dashboard.html"
   if [[ -f "$dashboard_template" ]]; then
+    # Enrich state with log contents (last 50 lines per log, truncated for size)
+    local enriched_json
+    enriched_json=$(jq -c '
+      .tasks |= with_entries(
+        if .value.log_file then
+          .value.log_preview = (
+            try (input | tostring) catch "Log not available"
+          )
+        else . end
+      )
+    ' "$state_file" 2>/dev/null || jq -c '.' "$state_file")
+
+    # Build enriched JSON with log previews injected
+    local tmp_enriched
+    tmp_enriched=$(mktemp /tmp/nightcrew-enrich-XXXXXXXX.json)
+    cp "$state_file" "$tmp_enriched"
+    while IFS= read -r task_id; do
+      [[ -z "$task_id" ]] && continue
+      local log_path
+      log_path=$(jq -r ".tasks[\"$task_id\"].log_file // \"\"" "$state_file")
+      if [[ -n "$log_path" && -f "$log_path" ]]; then
+        local log_content
+        log_content=$(tail -50 "$log_path" | jq -Rs '.')
+        jq --arg id "$task_id" --argjson content "$log_content" \
+          '.tasks[$id].log_preview = $content' "$tmp_enriched" > "${tmp_enriched}.tmp"
+        mv "${tmp_enriched}.tmp" "$tmp_enriched"
+      fi
+    done <<< "$(jq -r '.tasks | keys[]' "$state_file" 2>/dev/null)"
+
     # Compact JSON to single line, escape for JS embedding
     local compact_json
-    compact_json=$(jq -c '.' "$state_file" | sed 's|</script>|<\\/script>|g')
+    compact_json=$(jq -c '.' "$tmp_enriched" | sed 's|</script>|<\\/script>|g')
+    rm -f "$tmp_enriched"
     # Use awk to replace the placeholder (handles special chars better than sed)
     awk -v data="$compact_json" '{
       gsub(/\/\*NIGHTCREW_DATA_PLACEHOLDER\*\/ null/, data)

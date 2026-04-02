@@ -2,6 +2,13 @@
 
 All notable changes to NightCrew are documented here.
 
+## [0.3.1] - 2026-04-03
+
+### Fixed
+- Preflight crash on empty tasks.yaml: `validate_dependencies()` no longer fails on macOS when task count is zero (macOS `seq 0 -1` counts down instead of producing nothing)
+- `/api/status` now returns consistent shape `{tasks:{}, total_cost_cents:0, session_started:null}` when progress.json is empty or missing
+- `/api/tasks` returns `{tasks:[]}` instead of `{tasks:null}` when tasks.yaml has no entries
+
 ## [0.3.0] - 2026-04-02
 
 ### Added

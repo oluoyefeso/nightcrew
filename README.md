@@ -4,6 +4,45 @@ Overnight autonomous task orchestrator for Claude Code. Queue up development tas
 
 NightCrew runs each task in an isolated git worktree, routes it to the appropriate Claude model, enforces safety guardrails (file scope, branch protection, cost caps, timeouts), and creates draft PRs with decision logs.
 
+## How It Works
+
+NightCrew doesn't just run your prompt and hope for the best. Each task goes through a 3-phase pipeline that separates thinking from doing:
+
+```
+ YOU (before bed)
+  │  Write tasks.yaml
+  │  Run ./nightcrew.sh run
+  ▼
+ ┌─────────────────────────────────────────┐
+ │  For each task:                         │
+ │                                         │
+ │  1. PLAN (Opus)                         │
+ │     Scope challenge, architecture       │
+ │     review, test coverage plan,         │
+ │     failure mode analysis               │
+ │     → Saves PLAN-{task-id}.md           │
+ │                                         │
+ │  2. IMPLEMENT (Sonnet)                  │
+ │     Follows the plan precisely.         │
+ │     Writes code, runs tests.            │
+ │     Logs decisions to DECISIONS.md      │
+ │                                         │
+ │  3. REVIEW (Sonnet)                     │
+ │     Pre-landing code review.            │
+ │     Auto-fixes mechanical issues.       │
+ │     Logs concerns to REVIEW.md          │
+ │                                         │
+ │  Then: validate, commit, push, draft PR │
+ └─────────────────────────────────────────┘
+  │
+  ▼
+ YOU (next morning)
+  Run ./nightcrew.sh review
+  Open draft PRs with decision logs
+```
+
+Opus does the hard thinking (architecture, edge cases, test planning). Sonnet follows clear instructions. By the time you review in the morning, each PR has a plan, a decision log, and a review report.
+
 ## Prerequisites
 
 Install these CLI tools before running NightCrew:
@@ -20,7 +59,7 @@ Install these CLI tools before running NightCrew:
 
 ```bash
 # 1. Clone and enter the repo
-git clone <repo-url> && cd night-crawler
+git clone <repo-url> && cd nightcrew
 
 # 2. Make the script executable
 chmod +x nightcrew.sh
@@ -150,7 +189,7 @@ If Claude hits a rate limit, NightCrew automatically:
 
 ```bash
 # Run every night at midnight
-echo "0 0 * * * cd /path/to/night-crawler && ./nightcrew.sh run" | crontab -
+echo "0 0 * * * cd /path/to/nightcrew && ./nightcrew.sh run" | crontab -
 ```
 
 ## Output
@@ -167,4 +206,12 @@ Run `./nightcrew.sh review` for a formatted summary, or `./nightcrew.sh review -
 
 ## Architecture
 
-See `nightcrew-architecture.md` for the full design document including the orchestrator loop, model routing matrix, prompt template system, and implementation roadmap.
+See [nightcrew-architecture.md](nightcrew-architecture.md) for the full design document including the orchestrator loop, model routing matrix, prompt template system, and implementation roadmap.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, project structure, and how to submit PRs.
+
+## License
+
+[MIT](LICENSE)

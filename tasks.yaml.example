@@ -1,69 +1,60 @@
 # yaml-language-server: $schema=schemas/task.schema.json
 #
-# NightCrew Task Queue
-# Copy this file to tasks.yaml and edit it with your tasks.
-#
-# Required fields: id, title, branch, type, prompt
-# Optional fields: complexity, goal, files_in_scope, max_time_minutes,
-#                  test_command, allowed_tools, depends_on
-#
-# If using depends_on, list tasks in dependency order (dependees before dependents).
+# NightCrew Task Queue — termiflow CLI
+# Generated from termiflow/TODOS.md Phase 1
 
 tasks:
-  - id: fix-auth-race
-    title: "Fix race condition in auth flow"
-    branch: fix/auth-race-condition
-    type: implementation
-    complexity: medium
-    prompt: |
-      There's a race condition in src/auth/login.ts where the session
-      token can expire mid-request if the refresh happens concurrently.
-
-      Fix the race condition using a mutex/lock pattern. Ensure existing
-      tests pass and add a test for the concurrent refresh scenario.
-    goal: |
-      - Race condition eliminated
-      - New test covers concurrent refresh
-      - All existing tests pass
-    files_in_scope:
-      - src/auth/**
-      - tests/auth/**
-    max_time_minutes: 30
-    test_command: "npm test"
-
-  - id: add-payment-tests
-    title: "Unit tests for PaymentService"
-    branch: test/payment-service-coverage
+  - id: admin-endpoints-tests
+    title: "Add tests for admin API endpoints"
+    branch: test/admin-endpoints
     type: test
-    complexity: medium
-    depends_on:
-      - fix-auth-race
-    prompt: |
-      Add comprehensive unit tests for src/services/payment.ts.
-      Focus on edge cases: expired cards, insufficient funds,
-      currency conversion rounding, and idempotency keys.
-    goal: |
-      - Coverage of PaymentService goes from ~40% to >85%
-      - Edge cases listed above each have dedicated tests
-      - Tests are isolated (no real API calls)
-    files_in_scope:
-      - src/services/payment.ts
-      - tests/services/payment/**
-    max_time_minutes: 25
-
-  - id: research-caching
-    title: "Research caching strategies for the API layer"
-    branch: research/api-caching-strategy
-    type: research
     complexity: low
     prompt: |
-      Research caching strategies suitable for our Express API.
-      Compare Redis vs in-memory vs CDN-level caching for our
-      use case (50k RPM, mostly read-heavy, user-specific data).
-      Write findings to docs/research/caching-strategy.md.
+      Add unit tests for the admin API endpoints in internal/api/admin.go.
+
+      Cover these handlers:
+      - handleAdminStats (GET /admin/stats): test 200 response with expected JSON shape,
+        test method-not-allowed for non-GET requests.
+      - handleIssueKey (POST /admin/keys): test successful key issuance,
+        test missing/invalid request body, test method-not-allowed for non-POST requests.
+      - handleRevokeKey, handleListKeys, and any other admin handlers in the file.
+
+      Follow the existing test patterns in the codebase (see auth_test.go, keys_test.go
+      for how the test Server is set up with a temp SQLite DB).
+      Each test should use httptest.NewRequest + httptest.NewRecorder.
+      Keep tests focused — one behavior per test function.
     goal: |
-      - docs/research/caching-strategy.md exists with comparison
-      - Includes pros/cons/recommendation
+      - admin_test.go created with tests for all handlers in admin.go
+      - Tests cover success paths, error paths, and method guards
+      - All tests pass with `go test ./internal/api/...`
     files_in_scope:
-      - docs/research/**
-    max_time_minutes: 20
+      - internal/api/**
+    max_time_minutes: 30
+    test_command: "go test ./internal/api/..."
+
+  - id: user-store-tests
+    title: "Add tests for UserStore CRUD operations"
+    branch: test/user-store
+    type: test
+    complexity: low
+    prompt: |
+      Add unit tests for the UserStore in internal/api/user_store.go.
+
+      Cover the core data layer operations:
+      - Table creation / schema migration (verify tables exist after init)
+      - Subscription CRUD: create, read, update, delete user subscriptions
+      - Feed items: insert feed items, query by key/topic, pagination if present
+      - Edge cases: duplicate primary key handling, empty results, invalid foreign keys
+
+      Use a fresh in-memory SQLite DB (`sql.Open("sqlite3", ":memory:")`) for each test
+      so tests are isolated and fast. Follow the patterns in existing test files.
+      No mocking — test against real SQLite.
+    goal: |
+      - user_store_test.go created with tests for all exported UserStore methods
+      - Tests cover happy paths, edge cases, and error conditions
+      - All tests pass with `go test ./internal/api/...`
+    files_in_scope:
+      - internal/api/**
+    max_time_minutes: 30
+    test_command: "go test ./internal/api/..."
+

@@ -135,12 +135,17 @@ create_draft_pr() {
     echo "$existing_pr"
   else
     # Create new draft PR
-    local pr_url
+    local pr_url pr_stderr_file
+    pr_stderr_file=$(mktemp /tmp/nightcrew-gh-pr-XXXXXXXX)
     pr_url=$(cd "$worktree_dir" && gh pr create \
       --title "$title" \
       --body "$body" \
       --draft \
-      --base "$base_branch" 2>/dev/null || true)
+      --base "$base_branch" 2>"$pr_stderr_file" || true)
+    if [[ -z "$pr_url" && -s "$pr_stderr_file" ]]; then
+      echo "WARNING: gh pr create failed: $(cat "$pr_stderr_file")" >&2
+    fi
+    rm -f "$pr_stderr_file"
     echo "$pr_url"
   fi
 }

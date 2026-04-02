@@ -1,0 +1,16 @@
+tasks:
+  - id: task-a
+    title: "Task A"
+    branch: "task/a"
+    type: implementation
+    prompt: "Do A"
+    depends_on:
+      - task-b
+
+  - id: task-b
+    title: "Task B"
+    branch: "task/b"
+    type: implementation
+    prompt: "Do B"
+    depends_on:
+      - task-a

@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "NightCrew Tasks",
+  "description": "Schema for NightCrew tasks.yaml task queue definition",
+  "type": "object",
+  "required": ["tasks"],
+  "properties": {
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "branch", "type", "prompt"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "Unique task identifier (lowercase alphanumeric + hyphens)"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Human-readable title (used in PR title and logs)"
+          },
+          "branch": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9._/-]+$",
+            "description": "Git branch name to create"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["research", "implementation", "refactor", "test"],
+            "description": "Task type (affects model routing and tool permissions)"
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Full prompt sent to Claude Code"
+          },
+          "complexity": {
+            "type": "string",
+            "enum": ["low", "medium", "high"],
+            "default": "medium",
+            "description": "Task complexity (affects model routing)"
+          },
+          "goal": {
+            "type": "string",
+            "description": "Acceptance criteria (included in system prompt)"
+          },
+          "files_in_scope": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Glob patterns for files Claude may modify"
+          },
+          "max_time_minutes": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 120,
+            "description": "Task timeout in minutes"
+          },
+          "test_command": {
+            "type": "string",
+            "description": "Command to run for post-task validation"
+          },
+          "allowed_tools": {
+            "type": "string",
+            "description": "Override default allowedTools whitelist for this task"
+          },
+          "depends_on": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": [],
+            "description": "Task IDs that must complete before this task runs"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,9 @@
+tasks:
+  - id: task-a
+    title: "Task A"
+    branch: fix/task-a
+    type: implementation
+    depends_on:
+      - nonexistent-task
+    prompt: |
+      Do something.

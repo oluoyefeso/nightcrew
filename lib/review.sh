@@ -167,4 +167,46 @@ nightcrew_review() {
     echo "─────────────────────────────────────────────"
     echo "Session completed at: $(head -1 "$NIGHTCREW_DIR/state/done" | cut -d= -f2)"
   fi
+
+  # Generate self-contained dashboard HTML with embedded data
+  local dashboard_template="$NIGHTCREW_DIR/dashboard.html"
+  local dashboard_output="$NIGHTCREW_DIR/state/dashboard.html"
+  if [[ -f "$dashboard_template" ]]; then
+    # Build enriched JSON with log previews injected (last 50 lines per log)
+    local tmp_enriched
+    tmp_enriched=$(mktemp /tmp/nightcrew-enrich-XXXXXXXX.json)
+    cp "$state_file" "$tmp_enriched"
+    while IFS= read -r task_id; do
+      [[ -z "$task_id" ]] && continue
+      local log_path
+      log_path=$(jq -r ".tasks[\"$task_id\"].log_file // \"\"" "$state_file")
+      if [[ -n "$log_path" && -f "$log_path" ]]; then
+        local log_content
+        log_content=$(tail -50 "$log_path" | jq -Rs '.')
+        jq --arg id "$task_id" --argjson content "$log_content" \
+          '.tasks[$id].log_preview = $content' "$tmp_enriched" > "${tmp_enriched}.tmp"
+        mv "${tmp_enriched}.tmp" "$tmp_enriched"
+      fi
+    done <<< "$(jq -r '.tasks | keys[]' "$state_file" 2>/dev/null)"
+
+    # Compact JSON to single line, escape for JS embedding
+    local compact_json_file
+    compact_json_file=$(mktemp /tmp/nightcrew-compact-XXXXXXXX)
+    jq -c '.' "$tmp_enriched" | sed 's|</script>|<\\/script>|g' > "$compact_json_file"
+    rm -f "$tmp_enriched"
+    # Split template at placeholder, write data between halves.
+    # Can't use awk/sed for substitution — they interpret \n in replacement strings.
+    local placeholder_line
+    placeholder_line=$(grep -nF 'NIGHTCREW_DATA_PLACEHOLDER' "$dashboard_template" | head -1 | cut -d: -f1)
+    {
+      head -n $((placeholder_line - 1)) "$dashboard_template"
+      printf '  const EMBEDDED_DATA = '
+      cat "$compact_json_file"
+      printf ';\n'
+      tail -n +$((placeholder_line + 1)) "$dashboard_template"
+    } > "$dashboard_output"
+    rm -f "$compact_json_file"
+    echo ""
+    echo "Dashboard: file://$dashboard_output"
+  fi
 }

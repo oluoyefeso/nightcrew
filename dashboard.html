@@ -123,10 +123,45 @@
     border-radius: 8px;
     padding: 1.25rem;
     transition: border-color 0.15s;
+    cursor: pointer;
   }
 
   .task-card:hover {
     border-color: var(--text-muted);
+  }
+
+  .task-card .expand-hint {
+    font-size: 0.75rem;
+    color: var(--gray);
+    text-align: center;
+    margin-top: 0.5rem;
+  }
+
+  .task-card.expanded .expand-hint { display: none; }
+
+  .task-card .log-preview {
+    display: none;
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 300px;
+    overflow-y: auto;
+    color: var(--text-muted);
+  }
+
+  .task-card.expanded .log-preview { display: block; }
+
+  .token-count {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
   }
 
   .task-card .card-header {
@@ -257,7 +292,10 @@
 
 <script>
 (function () {
-  const DATA_URL = 'state/progress.json';
+  // Data is either embedded inline by `nightcrew review` or fetched from file.
+  // When opened via file:// protocol, fetch() is blocked by CORS, so we embed.
+  const EMBEDDED_DATA = /*NIGHTCREW_DATA_PLACEHOLDER*/ null;
+
   const REFRESH_MS = 30000;
   const contentEl = document.getElementById('content');
   const lastUpdatedEl = document.getElementById('lastUpdated');
@@ -284,6 +322,15 @@
     const el = document.createElement('span');
     el.textContent = s;
     return el.innerHTML;
+  }
+
+  function formatTokens(n) {
+    if (n == null) return null;
+    n = Number(n);
+    if (isNaN(n) || n === 0) return null;
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+    return String(n);
   }
 
   function countByStatus(tasks) {
@@ -328,7 +375,13 @@
     }
     html += '<div class="stat-card cost">';
     html += '<div class="value">' + escapeHtml(totalCost) + '</div>';
-    html += '<div class="label">Total Cost</div>';
+    var totalIn = formatTokens(data.total_input_tokens);
+    var totalOut = formatTokens(data.total_output_tokens);
+    if (totalIn || totalOut) {
+      html += '<div class="label">Cost (' + (totalIn || '0') + ' in / ' + (totalOut || '0') + ' out)</div>';
+    } else {
+      html += '<div class="label">Total Cost</div>';
+    }
     html += '</div>';
     html += '</div>';
 
@@ -357,14 +410,21 @@
           html += '<span class="detail-value">' + escapeHtml(t.model) + '</span></div>';
         }
         if (t.cost_cents != null) {
+          var costStr = formatCost(t.cost_cents);
+          var taskIn = formatTokens(t.input_tokens);
+          var taskOut = formatTokens(t.output_tokens);
+          var tokenStr = (taskIn || taskOut) ? ' <span class="token-count">(' + (taskIn || '0') + ' in / ' + (taskOut || '0') + ' out)</span>' : '';
           html += '<div class="detail-row"><span class="detail-label">Cost</span>';
-          html += '<span class="detail-value">' + escapeHtml(formatCost(t.cost_cents)) + '</span></div>';
+          html += '<span class="detail-value">' + escapeHtml(costStr) + tokenStr + '</span></div>';
         }
         if (t.pr_url) {
           html += '<div class="detail-row"><span class="detail-label">PR</span>';
           html += '<span class="detail-value"><a href="' + escapeHtml(t.pr_url) + '" target="_blank" rel="noopener">' + escapeHtml(t.pr_url) + '</a></span></div>';
         }
-        if (t.log_file) {
+        if (t.log_preview) {
+          html += '<div class="expand-hint">click to view logs</div>';
+          html += '<div class="log-preview">' + escapeHtml(t.log_preview) + '</div>';
+        } else if (t.log_file) {
           html += '<div class="detail-row"><span class="detail-label">Log</span>';
           html += '<span class="detail-value">' + escapeHtml(t.log_file) + '</span></div>';
         }
@@ -417,12 +477,18 @@
   async function fetchData() {
     try {
       refreshBar.style.width = '30%';
-      const resp = await fetch(DATA_URL, { cache: 'no-store' });
-      refreshBar.style.width = '70%';
-      if (!resp.ok) { renderEmpty(); }
-      else {
-        const data = await resp.json();
-        render(data);
+      // Use embedded data if available (file:// protocol), otherwise fetch
+      if (EMBEDDED_DATA) {
+        refreshBar.style.width = '70%';
+        render(EMBEDDED_DATA);
+      } else {
+        const resp = await fetch('state/progress.json', { cache: 'no-store' });
+        refreshBar.style.width = '70%';
+        if (!resp.ok) { renderEmpty(); }
+        else {
+          const data = await resp.json();
+          render(data);
+        }
       }
     } catch (e) {
       renderEmpty();
@@ -433,7 +499,14 @@
   }
 
   fetchData();
-  setInterval(fetchData, REFRESH_MS);
+  // Only auto-refresh when fetching live (not embedded static data)
+  if (!EMBEDDED_DATA) { setInterval(fetchData, REFRESH_MS); }
+
+  // Click to expand/collapse task cards
+  contentEl.addEventListener('click', function (e) {
+    var card = e.target.closest('.task-card');
+    if (card) card.classList.toggle('expanded');
+  });
 })();
 </script>
 </body>

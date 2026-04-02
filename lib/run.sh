@@ -656,10 +656,13 @@ $task_prompt"
     run_with_retry "$plan_user_prompt" "$plan_model" "$plan_tools" "$plan_prompt_file" "$plan_timeout" "$plan_log" "$worktree_dir" || plan_exit=$?
     rm -f "$plan_prompt_file"
 
-    # Track plan cost
-    local plan_cost
-    plan_cost=$(estimate_cost_cents "$plan_model" "$LAST_INPUT_TOKENS" "$LAST_OUTPUT_TOKENS")
+    # Track plan cost and tokens
+    local plan_cost plan_in_tokens plan_out_tokens
+    plan_in_tokens=$LAST_INPUT_TOKENS
+    plan_out_tokens=$LAST_OUTPUT_TOKENS
+    plan_cost=$(estimate_cost_cents "$plan_model" "$plan_in_tokens" "$plan_out_tokens")
     add_cost "$plan_cost"
+    add_tokens "$plan_in_tokens" "$plan_out_tokens"
 
     if [[ $plan_exit -ne 0 ]]; then
       log_error "Planning phase failed (exit $plan_exit). Falling back to direct implementation."
@@ -691,10 +694,13 @@ $task_prompt"
     run_with_retry "$task_prompt" "$impl_model" "$tools" "$impl_prompt_file" "$task_max_time" "$impl_log" "$worktree_dir" || run_exit=$?
     rm -f "$impl_prompt_file"
 
-    # Track implementation cost
-    local impl_cost
-    impl_cost=$(estimate_cost_cents "$impl_model" "$LAST_INPUT_TOKENS" "$LAST_OUTPUT_TOKENS")
+    # Track implementation cost and tokens
+    local impl_cost impl_in_tokens impl_out_tokens
+    impl_in_tokens=$LAST_INPUT_TOKENS
+    impl_out_tokens=$LAST_OUTPUT_TOKENS
+    impl_cost=$(estimate_cost_cents "$impl_model" "$impl_in_tokens" "$impl_out_tokens")
     add_cost "$impl_cost"
+    add_tokens "$impl_in_tokens" "$impl_out_tokens"
     set_task_field "$task_id" "model" "$impl_model"
     set_task_field "$task_id" "log_file" "$impl_log"
 
@@ -745,10 +751,13 @@ $task_prompt"
     run_with_retry "$review_user_prompt" "$review_model" "$review_tools" "$review_prompt_file" "$review_timeout" "$review_log" "$worktree_dir" || review_exit=$?
     rm -f "$review_prompt_file"
 
-    # Track review cost
-    local review_cost
-    review_cost=$(estimate_cost_cents "$review_model" "$LAST_INPUT_TOKENS" "$LAST_OUTPUT_TOKENS")
+    # Track review cost and tokens
+    local review_cost review_in_tokens review_out_tokens
+    review_in_tokens=$LAST_INPUT_TOKENS
+    review_out_tokens=$LAST_OUTPUT_TOKENS
+    review_cost=$(estimate_cost_cents "$review_model" "$review_in_tokens" "$review_out_tokens")
     add_cost "$review_cost"
+    add_tokens "$review_in_tokens" "$review_out_tokens"
 
     if [[ $review_exit -ne 0 ]]; then
       log "Warning: Review phase failed (exit $review_exit). Proceeding with unreviewed code."
@@ -776,9 +785,13 @@ $task_prompt"
       continue
     fi
 
-    # Total cost for this task
+    # Total cost and tokens for this task
     local total_task_cost=$(( plan_cost + impl_cost + review_cost ))
+    local total_in_tokens=$(( plan_in_tokens + impl_in_tokens + review_in_tokens ))
+    local total_out_tokens=$(( plan_out_tokens + impl_out_tokens + review_out_tokens ))
     set_task_field "$task_id" "cost_cents" "$total_task_cost"
+    set_task_field "$task_id" "input_tokens" "$total_in_tokens"
+    set_task_field "$task_id" "output_tokens" "$total_out_tokens"
 
     # Push and create PR
     log "Pushing branch $task_branch..."

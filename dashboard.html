@@ -257,7 +257,10 @@
 
 <script>
 (function () {
-  const DATA_URL = 'state/progress.json';
+  // Data is either embedded inline by `nightcrew review` or fetched from file.
+  // When opened via file:// protocol, fetch() is blocked by CORS, so we embed.
+  const EMBEDDED_DATA = /*NIGHTCREW_DATA_PLACEHOLDER*/ null;
+
   const REFRESH_MS = 30000;
   const contentEl = document.getElementById('content');
   const lastUpdatedEl = document.getElementById('lastUpdated');
@@ -417,12 +420,18 @@
   async function fetchData() {
     try {
       refreshBar.style.width = '30%';
-      const resp = await fetch(DATA_URL, { cache: 'no-store' });
-      refreshBar.style.width = '70%';
-      if (!resp.ok) { renderEmpty(); }
-      else {
-        const data = await resp.json();
-        render(data);
+      // Use embedded data if available (file:// protocol), otherwise fetch
+      if (EMBEDDED_DATA) {
+        refreshBar.style.width = '70%';
+        render(EMBEDDED_DATA);
+      } else {
+        const resp = await fetch('state/progress.json', { cache: 'no-store' });
+        refreshBar.style.width = '70%';
+        if (!resp.ok) { renderEmpty(); }
+        else {
+          const data = await resp.json();
+          render(data);
+        }
       }
     } catch (e) {
       renderEmpty();
@@ -433,7 +442,8 @@
   }
 
   fetchData();
-  setInterval(fetchData, REFRESH_MS);
+  // Only auto-refresh when fetching live (not embedded static data)
+  if (!EMBEDDED_DATA) { setInterval(fetchData, REFRESH_MS); }
 })();
 </script>
 </body>

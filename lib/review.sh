@@ -167,4 +167,20 @@ nightcrew_review() {
     echo "─────────────────────────────────────────────"
     echo "Session completed at: $(head -1 "$NIGHTCREW_DIR/state/done" | cut -d= -f2)"
   fi
+
+  # Generate self-contained dashboard HTML with embedded data
+  local dashboard_template="$NIGHTCREW_DIR/dashboard.html"
+  local dashboard_output="$NIGHTCREW_DIR/state/dashboard.html"
+  if [[ -f "$dashboard_template" ]]; then
+    # Compact JSON to single line, escape for JS embedding
+    local compact_json
+    compact_json=$(jq -c '.' "$state_file" | sed 's|</script>|<\\/script>|g')
+    # Use awk to replace the placeholder (handles special chars better than sed)
+    awk -v data="$compact_json" '{
+      gsub(/\/\*NIGHTCREW_DATA_PLACEHOLDER\*\/ null/, data)
+      print
+    }' "$dashboard_template" > "$dashboard_output"
+    echo ""
+    echo "Dashboard: file://$dashboard_output"
+  fi
 }

@@ -9,7 +9,7 @@
 set -euo pipefail
 
 NIGHTCREW_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NIGHTCREW_VERSION="0.1.0"
+NIGHTCREW_VERSION="0.2.0"
 
 # Source all lib modules
 for lib in "$NIGHTCREW_DIR"/lib/*.sh; do
@@ -99,10 +99,10 @@ case "$COMMAND" in
     ;;
   review)
     nightcrew_review "$CONFIG_FILE"
-    if [[ "$OPEN_DASHBOARD" == "true" && -f "$NIGHTCREW_DIR/dashboard.html" ]]; then
-      open "$NIGHTCREW_DIR/dashboard.html" 2>/dev/null || \
-        xdg-open "$NIGHTCREW_DIR/dashboard.html" 2>/dev/null || \
-        echo "Dashboard: file://$NIGHTCREW_DIR/dashboard.html"
+    if [[ "$OPEN_DASHBOARD" == "true" && -f "$NIGHTCREW_DIR/state/dashboard.html" ]]; then
+      open "$NIGHTCREW_DIR/state/dashboard.html" 2>/dev/null || \
+        xdg-open "$NIGHTCREW_DIR/state/dashboard.html" 2>/dev/null || \
+        echo "Dashboard: file://$NIGHTCREW_DIR/state/dashboard.html"
     fi
     ;;
 esac

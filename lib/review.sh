@@ -172,19 +172,7 @@ nightcrew_review() {
   local dashboard_template="$NIGHTCREW_DIR/dashboard.html"
   local dashboard_output="$NIGHTCREW_DIR/state/dashboard.html"
   if [[ -f "$dashboard_template" ]]; then
-    # Enrich state with log contents (last 50 lines per log, truncated for size)
-    local enriched_json
-    enriched_json=$(jq -c '
-      .tasks |= with_entries(
-        if .value.log_file then
-          .value.log_preview = (
-            try (input | tostring) catch "Log not available"
-          )
-        else . end
-      )
-    ' "$state_file" 2>/dev/null || jq -c '.' "$state_file")
-
-    # Build enriched JSON with log previews injected
+    # Build enriched JSON with log previews injected (last 50 lines per log)
     local tmp_enriched
     tmp_enriched=$(mktemp /tmp/nightcrew-enrich-XXXXXXXX.json)
     cp "$state_file" "$tmp_enriched"

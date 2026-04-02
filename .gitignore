@@ -1,0 +1,10 @@
+# Runtime artifacts
+logs/
+state/
+
+# OS
+.DS_Store
+
+# User-specific config (copy from *.example)
+config.yaml
+tasks.yaml

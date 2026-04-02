@@ -2,6 +2,16 @@
 
 All notable changes to NightCrew are documented here.
 
+## [0.2.1] - 2026-04-02
+
+### Changed
+- Plan prompt now classifies architectural patterns using a Layer 1/2/3 framework (built-in, library, first-principles) with a boring-by-default challenge for new dependencies.
+- Architecture decisions in the plan prompt require a 1-10 confidence score so morning reviewers know where to focus scrutiny.
+- Failure mode analysis expanded: critical gap rule now flags crash/hang failures alongside silent ones, and the "user impact" column asks for specific user experience descriptions.
+- Plan output format now includes a "What Already Exists" section to surface reuse opportunities.
+- Plan prompt includes a distribution check for new artifacts (binaries, packages, containers).
+- Review prompt adds Step 3.5 (Regression Detection) with scope-aware test writing: mandatory regression tests within scope, logged concerns for out-of-scope paths, and post-write test verification.
+
 ## [0.2.0] - 2026-04-02
 
 ### Fixed

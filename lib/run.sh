@@ -32,6 +32,12 @@ validate_dependencies() {
   local tasks_file="$1"
   local task_count
   task_count=$(yq e '.tasks | length' "$tasks_file")
+
+  # Empty tasks file is valid (no deps to validate)
+  if [[ "$task_count" -eq 0 ]]; then
+    return 0
+  fi
+
   local errors=0
 
   # Build ID list and position map

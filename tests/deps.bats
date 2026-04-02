@@ -33,6 +33,17 @@ teardown() {
   [ "$status" -eq 0 ]
 }
 
+# ── Empty tasks file ─────────────────────────────────────────
+
+@test "validate_dependencies passes for empty tasks" {
+  cat > "$TEST_TEMP_DIR/tasks-empty.yaml" <<'EOF'
+tasks:
+EOF
+
+  run validate_dependencies "$TEST_TEMP_DIR/tasks-empty.yaml"
+  [ "$status" -eq 0 ]
+}
+
 # ── Out-of-order dependencies ────────────────────────────────
 
 @test "validate_dependencies warns on out-of-order deps" {

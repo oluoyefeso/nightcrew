@@ -66,7 +66,7 @@ function getTasks(req, res) {
   try {
     const content = fs.readFileSync(TASKS_FILE, 'utf8');
     const data = yaml.load(content);
-    jsonResponse(res, data);
+    jsonResponse(res, { tasks: (data && data.tasks) || [] });
   } catch (err) {
     if (err.code === 'ENOENT') {
       jsonResponse(res, { tasks: [] });
@@ -94,10 +94,15 @@ function getStatus(req, res) {
   const stateFile = path.join(NIGHTCREW_DIR, 'state', 'progress.json');
   try {
     const data = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-    jsonResponse(res, data);
+    jsonResponse(res, {
+      ...data,
+      tasks: data.tasks || {},
+      total_cost_cents: data.total_cost_cents || 0,
+      session_started: data.session_started || null,
+    });
   } catch (err) {
     if (err.code === 'ENOENT') {
-      jsonResponse(res, { tasks: {}, total_cost_cents: 0 });
+      jsonResponse(res, { tasks: {}, total_cost_cents: 0, session_started: null });
     } else {
       errorResponse(res, 'Failed to read status: ' + err.message);
     }

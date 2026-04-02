@@ -53,7 +53,7 @@ validate_dependencies() {
     for dep in $deps; do
       if [[ -z "${id_positions[$dep]+x}" ]]; then
         log_error "PREFLIGHT: Task '$tid' depends on unknown task '$dep'"
-        ((errors++))
+        errors=$((errors + 1))
       elif [[ ${id_positions[$dep]} -ge $i ]]; then
         log "WARNING: Task '$tid' depends on '$dep' but '$dep' is listed after it. Reorder tasks.yaml."
       fi
@@ -88,7 +88,7 @@ validate_dependencies() {
   for tid in "${all_ids[@]}"; do
     if [[ "${visited[$tid]:-0}" == "0" ]]; then
       _dfs_cycle_check "$tid"
-      [[ "$has_cycle" == "true" ]] && ((errors++)) && break
+      [[ "$has_cycle" == "true" ]] && errors=$((errors + 1)) && break
     fi
   done
 
@@ -131,11 +131,11 @@ preflight_validate() {
   log "Running preflight validation..."
 
   # 1. Schema validation
-  ((checks_total++))
+  checks_total=$((checks_total + 1))
   local schema_file="$NIGHTCREW_DIR/schemas/task.schema.json"
   if [[ ! -f "$schema_file" ]]; then
     log "WARNING: Schema file not found ($schema_file). Skipping schema validation."
-    ((checks_warned++))
+    checks_warned=$((checks_warned + 1))
   else
     # Convert YAML to JSON and validate structure
     local json_tmp
@@ -156,7 +156,7 @@ preflight_validate() {
         val=$(jq -r ".tasks[$i].$field // empty" "$json_tmp")
         if [[ -z "$val" ]]; then
           log_error "PREFLIGHT: Task $i missing required field '$field'"
-          ((schema_errors++))
+          schema_errors=$((schema_errors + 1))
         fi
       done
       # Validate type enum
@@ -164,14 +164,14 @@ preflight_validate() {
       task_type=$(jq -r ".tasks[$i].type // empty" "$json_tmp")
       if [[ -n "$task_type" ]] && ! echo "$task_type" | grep -qE '^(research|implementation|refactor|test)$'; then
         log_error "PREFLIGHT: Task $i has invalid type '$task_type' (must be research|implementation|refactor|test)"
-        ((schema_errors++))
+        schema_errors=$((schema_errors + 1))
       fi
       # Validate complexity enum
       local complexity
       complexity=$(jq -r ".tasks[$i].complexity // empty" "$json_tmp")
       if [[ -n "$complexity" ]] && ! echo "$complexity" | grep -qE '^(low|medium|high)$'; then
         log_error "PREFLIGHT: Task $i has invalid complexity '$complexity' (must be low|medium|high)"
-        ((schema_errors++))
+        schema_errors=$((schema_errors + 1))
       fi
     done
     rm -f "$json_tmp"
@@ -181,21 +181,21 @@ preflight_validate() {
       return 1
     fi
     log "  [OK] Schema validation passed ($task_count tasks)"
-    ((checks_passed++))
+    checks_passed=$((checks_passed + 1))
   fi
 
   # 2. Dependency graph validation
-  ((checks_total++))
+  checks_total=$((checks_total + 1))
   if validate_dependencies "$tasks_file"; then
     log "  [OK] Dependency graph is valid"
-    ((checks_passed++))
+    checks_passed=$((checks_passed + 1))
   else
     log_error "PREFLIGHT: Dependency validation failed"
     return 1
   fi
 
   # 3. Prompt template rendering check
-  ((checks_total++))
+  checks_total=$((checks_total + 1))
   local template_dir="$NIGHTCREW_DIR/templates"
   local template_ok=true
   for tmpl in plan-prompt.md system-prompt.md review-prompt.md; do
@@ -216,13 +216,13 @@ preflight_validate() {
       return 1
     fi
     log "  [OK] Templates render successfully"
-    ((checks_passed++))
+    checks_passed=$((checks_passed + 1))
   else
     return 1
   fi
 
   # 4. Git state checks
-  ((checks_total++))
+  checks_total=$((checks_total + 1))
   local repo_dir
   repo_dir=$(config_get "repo_path" "$(pwd)" "$config_file")
   if [[ ! -d "$repo_dir/.git" ]]; then
@@ -233,13 +233,13 @@ preflight_validate() {
   dirty=$(git -C "$repo_dir" status --porcelain 2>/dev/null | head -1)
   if [[ -n "$dirty" ]]; then
     log "WARNING: Working tree has uncommitted changes in $repo_dir"
-    ((checks_warned++))
+    checks_warned=$((checks_warned + 1))
   fi
   log "  [OK] Git repository verified"
-  ((checks_passed++))
+  checks_passed=$((checks_passed + 1))
 
   # 5. JSON output format support
-  ((checks_total++))
+  checks_total=$((checks_total + 1))
   if claude --help 2>&1 | grep -q 'output-format'; then
     JSON_OUTPUT_SUPPORTED=true
     log "  [OK] JSON output format supported (real cost tracking enabled)"
@@ -247,16 +247,16 @@ preflight_validate() {
     JSON_OUTPUT_SUPPORTED=false
     log "  [--] JSON output format not supported (using flat-rate cost estimates)"
   fi
-  ((checks_passed++))
+  checks_passed=$((checks_passed + 1))
 
   # 6. Optional: bats availability
-  ((checks_total++))
+  checks_total=$((checks_total + 1))
   if command -v bats >/dev/null 2>&1; then
     log "  [OK] bats test runner available"
   else
     log "  [--] bats not installed (tests won't run). Install: brew install bats-core"
   fi
-  ((checks_passed++))
+  checks_passed=$((checks_passed + 1))
 
   log "PREFLIGHT: $checks_passed/$checks_total checks passed ($checks_warned warnings)"
   return 0
@@ -286,13 +286,14 @@ run_with_retry() {
       # JSON output mode: capture full JSON to temp file, extract text and tokens
       local json_output_file
       json_output_file=$(mktemp /tmp/nightcrew-json-XXXXXXXX.json)
-      timeout --signal=TERM --kill-after=60 "${max_time}m" \
+      # Run claude from inside the worktree so file edits land in the right repo
+      (cd "$worktree_dir" && timeout --signal=TERM --kill-after=60 "${max_time}m" \
         claude -p "$prompt" \
           --model "$model" \
           --allowedTools "$tools" \
           --system-prompt-file "$prompt_file" \
           --output-format json \
-        > "$json_output_file" 2>"$stderr_file" || exit_code=$?
+        > "$json_output_file" 2>"$stderr_file") || exit_code=$?
 
       if [[ $exit_code -eq 0 && -s "$json_output_file" ]]; then
         # Extract text content for the log file
@@ -312,12 +313,13 @@ run_with_retry() {
       rm -f "$json_output_file"
     else
       # Legacy mode: pipe through tee, flat-rate cost estimate
-      timeout --signal=TERM --kill-after=60 "${max_time}m" \
+      # Run claude from inside the worktree so file edits land in the right repo
+      (cd "$worktree_dir" && timeout --signal=TERM --kill-after=60 "${max_time}m" \
         claude -p "$prompt" \
           --model "$model" \
           --allowedTools "$tools" \
           --system-prompt-file "$prompt_file" \
-        2>"$stderr_file" | tee "$log_file" || exit_code=$?
+        2>"$stderr_file") | tee "$log_file" || exit_code=$?
       LAST_INPUT_TOKENS=0
       LAST_OUTPUT_TOKENS=0
     fi
@@ -347,7 +349,7 @@ run_with_retry() {
       # Save WIP before sleeping
       commit_changes "$worktree_dir" "WIP: rate limit pause (attempt $((attempt+1)))"
       sleep "$sleep_secs"
-      ((attempt++))
+      attempt=$((attempt + 1))
       continue
     fi
 
@@ -525,7 +527,7 @@ nightcrew_run() {
     status=$(get_task_status "$task_id")
     if [[ "$status" == "complete" ]]; then
       log "Skipping (already complete)"
-      ((skipped++))
+      skipped=$((skipped + 1))
       continue
     fi
 
@@ -547,7 +549,7 @@ nightcrew_run() {
         blocker_status=$(get_task_status "$blocking_dep")
         log "Skipping: dependency '$blocking_dep' is $blocker_status (not complete)"
         mark_task "blocked" "$task_id" "$blocking_dep"
-        ((blocked++))
+        blocked=$((blocked + 1))
         continue
       fi
     fi
@@ -562,7 +564,7 @@ nightcrew_run() {
     if is_protected_branch "$task_branch" "$config_file"; then
       log_error "Refusing to work on protected branch: $task_branch"
       mark_task "failed" "$task_id" "protected branch"
-      ((failed++))
+      failed=$((failed + 1))
       continue
     fi
 
@@ -592,7 +594,7 @@ nightcrew_run() {
     worktree_dir=$(setup_worktree "$REPO_DIR" "$task_id" "$task_branch" "$base_branch") || {
       log_error "Worktree setup failed for task $task_id"
       mark_task "failed" "$task_id" "worktree setup failed"
-      ((failed++))
+      failed=$((failed + 1))
       CURRENT_TASK_ID=""
       continue
     }
@@ -601,14 +603,14 @@ nightcrew_run() {
     if [[ -z "$worktree_dir" || "$worktree_dir" == *$'\n'* ]]; then
       log_error "Worktree path invalid (empty or multiline): $(echo "$worktree_dir" | head -1)"
       mark_task "failed" "$task_id" "worktree setup returned invalid path"
-      ((failed++))
+      failed=$((failed + 1))
       CURRENT_TASK_ID=""
       continue
     fi
     if [[ ! -d "$worktree_dir" ]]; then
       log_error "Worktree directory does not exist: $worktree_dir"
       mark_task "failed" "$task_id" "worktree directory missing"
-      ((failed++))
+      failed=$((failed + 1))
       CURRENT_TASK_ID=""
       continue
     fi
@@ -699,7 +701,7 @@ $task_prompt"
     if [[ $run_exit -eq 124 ]]; then
       commit_changes "$worktree_dir" "WIP: $task_title (timed out)"
       mark_task "timeout" "$task_id"
-      ((failed++))
+      failed=$((failed + 1))
       log_error "Implementation timed out: $task_id"
       cleanup_worktree "$REPO_DIR" "$task_id"
       CURRENT_TASK_ID=""
@@ -709,7 +711,7 @@ $task_prompt"
     if [[ $run_exit -ne 0 ]]; then
       commit_changes "$worktree_dir" "WIP: $task_title (failed)"
       mark_task "failed" "$task_id" "implementation exit code $run_exit"
-      ((failed++))
+      failed=$((failed + 1))
       log_error "Implementation failed: $task_id"
       cleanup_worktree "$REPO_DIR" "$task_id"
       CURRENT_TASK_ID=""
@@ -768,7 +770,7 @@ $task_prompt"
       log_error "Validation failed with $validation_exit violation(s)"
       commit_changes "$worktree_dir" "WIP: $task_title (validation failed)"
       mark_task "failed" "$task_id" "validation failed"
-      ((failed++))
+      failed=$((failed + 1))
       cleanup_worktree "$REPO_DIR" "$task_id"
       CURRENT_TASK_ID=""
       continue
@@ -789,13 +791,15 @@ $task_prompt"
       if [[ -n "$pr_url" ]]; then
         log "Draft PR created: $pr_url"
         set_task_field "$task_id" "pr_url" "$pr_url"
+      else
+        log "WARNING: Branch pushed but PR creation failed. Check gh auth and repo remote."
       fi
     else
       log_error "Failed to push branch $task_branch (no remote configured?)"
     fi
 
     mark_task "complete" "$task_id" "${pr_url:-}"
-    ((completed++))
+    completed=$((completed + 1))
     log "Task complete: $task_id (plan: $plan_model, impl: $impl_model, review: $review_model)"
 
     # Cleanup worktree

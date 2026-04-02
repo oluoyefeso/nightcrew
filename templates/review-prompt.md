@@ -125,6 +125,28 @@ score (1-10). Only surface findings with confidence >= 5.
 - Build tool versions, artifact names, secrets handling
 - New artifact types without publish/release workflow
 
+## Step 3.5: Regression Detection
+
+**IRON RULE:** When the diff modifies existing behavior (not new code) and the
+existing test suite doesn't cover the changed path, that is a regression risk.
+
+For each modified function/method in the diff where the change affects
+control flow, return values, side effects, or public API signatures
+(skip formatting-only or comment-only changes):
+1. Was this function working before? (Check git blame, existing tests)
+2. Does the change introduce a new failure mode for existing callers?
+3. Is there a test that would catch if the old behavior broke?
+
+If you find a regression risk with no covering test:
+- If the test file is within ${TASK_FILES_IN_SCOPE}, classify as **AUTO-FIX**
+  and write the regression test yourself.
+- If the test file would be outside ${TASK_FILES_IN_SCOPE}, classify as **ASK**
+  and log to `REVIEW-${TASK_ID}.md` with the test code you would write.
+- A regression test is never silently skipped.
+- After writing a regression test, run it to verify it passes. If it fails,
+  fix or remove it before proceeding.
+- Format: `[AUTO-FIXED] [REGRESSION] file:line — added test for {what could break}`
+
 ## Step 4: Fix-First Review
 
 Every finding gets action. Classify each as AUTO-FIX or ASK:

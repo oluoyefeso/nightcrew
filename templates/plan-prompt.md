@@ -37,14 +37,30 @@ Before planning anything, answer these questions:
    more than 2 new classes/services, that is a smell. Challenge whether the same
    goal can be achieved with fewer moving parts.
 
-4. **Search check:** For each architectural pattern or approach:
-   - Does the runtime/framework have a built-in? Don't reinvent.
-   - Is the chosen approach current best practice?
-   - Are there known footguns?
+4. **Search check:** For each architectural pattern or approach, classify it:
+   - **[Layer 1] Tried and true** — Does the runtime/framework have a built-in?
+     Don't reinvent what already exists. This is the default.
+   - **[Layer 2] New and popular** — Is there a well-maintained library? Scrutinize
+     it: check maintenance status, issue count, last release date.
+   - **[Layer 3] First principles** — Building from scratch. Only justified when
+     Layer 1 and Layer 2 genuinely don't fit. Prize this when it's earned.
+
+   Label every pattern you introduce with its layer. If you're building Layer 3
+   when a Layer 1 exists, justify why the built-in won't work.
+
+   **Boring-by-default challenge:** If your plan introduces a new dependency,
+   framework, or infrastructure component, justify why the boring/existing
+   alternative won't work. Every project gets about three innovation tokens.
+   Spend them only where they create real differentiation.
 
 5. **Completeness check:** Plan the complete version, not a shortcut. Cover all
    edge cases, full error paths, full test coverage. The implementation agent
    can handle it.
+
+6. **Distribution check:** If the task creates a new artifact (CLI binary, library
+   package, container image, script meant to be installed), does the plan include
+   the build/publish pipeline? Code without distribution is code nobody can use.
+   If distribution is out of scope, say so explicitly in the "NOT In Scope" section.
 
 ## Step 1: Architecture Review
 
@@ -56,6 +72,10 @@ Evaluate and decide:
 
 For each issue found, **choose the recommended approach and document your decision.**
 Do NOT leave open questions. You are the decision-maker.
+
+**Confidence calibration:** Rate each decision 1-10. A 9-10 means you verified it
+against the code. A 5-6 means you're making a reasonable guess with incomplete info.
+The human reviewer will focus scrutiny on low-confidence decisions in the morning.
 
 When choosing between approaches, apply these principles:
 - **Boring by default.** Proven technology over novel. Innovation only where it matters.
@@ -139,10 +159,12 @@ For each new codepath identified in the test diagram, describe:
 1. One realistic way it could fail in production
 2. Whether the plan includes a test for that failure
 3. Whether error handling exists for it
-4. Whether the user would see a clear error or a silent failure
+4. **What the user actually experiences:** clear error message they can act on,
+   silent failure they'd never notice, or a crash/hang. Be specific. "The user
+   sees a spinner that never resolves" is better than "poor UX."
 
-If any failure mode has no test AND no error handling AND would be silent,
-flag it as a **critical gap** and add it to the plan.
+If any failure mode has no test AND no error handling AND would be silent
+or cause a crash/hang, flag it as a **critical gap** and add it to the plan.
 
 ---
 
@@ -155,6 +177,10 @@ Your output MUST be a structured plan document in this exact format:
 
 ## Scope Decision
 [One paragraph: what you chose to include and what you explicitly excluded, with rationale]
+
+## What Already Exists
+[List existing code, functions, or flows that already partially solve sub-problems in this task.
+For each: does the plan reuse it, extend it, or replace it? If replacing, why?]
 
 ## Architecture Decisions
 [Numbered list of every decision you made, with the chosen approach and one-line rationale]
@@ -170,7 +196,7 @@ Your output MUST be a structured plan document in this exact format:
 [List of specific tests to write]
 
 ## Failure Modes
-[Table: codepath | failure scenario | test covers it? | error handling exists? | user impact]
+[Table: codepath | failure scenario | test covers it? | error handling exists? | what user sees (clear error / silent failure / crash)]
 
 ## NOT In Scope
 [Bulleted list of work explicitly deferred with one-line rationale each]

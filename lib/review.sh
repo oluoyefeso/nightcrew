@@ -202,14 +202,22 @@ nightcrew_review() {
     done <<< "$(jq -r '.tasks | keys[]' "$state_file" 2>/dev/null)"
 
     # Compact JSON to single line, escape for JS embedding
-    local compact_json
-    compact_json=$(jq -c '.' "$tmp_enriched" | sed 's|</script>|<\\/script>|g')
+    local compact_json_file
+    compact_json_file=$(mktemp /tmp/nightcrew-compact-XXXXXXXX)
+    jq -c '.' "$tmp_enriched" | sed 's|</script>|<\\/script>|g' > "$compact_json_file"
     rm -f "$tmp_enriched"
-    # Use awk to replace the placeholder (handles special chars better than sed)
-    awk -v data="$compact_json" '{
-      gsub(/\/\*NIGHTCREW_DATA_PLACEHOLDER\*\/ null/, data)
-      print
-    }' "$dashboard_template" > "$dashboard_output"
+    # Split template at placeholder, write data between halves.
+    # Can't use awk/sed for substitution — they interpret \n in replacement strings.
+    local placeholder_line
+    placeholder_line=$(grep -nF 'NIGHTCREW_DATA_PLACEHOLDER' "$dashboard_template" | head -1 | cut -d: -f1)
+    {
+      head -n $((placeholder_line - 1)) "$dashboard_template"
+      printf '  const EMBEDDED_DATA = '
+      cat "$compact_json_file"
+      printf ';\n'
+      tail -n +$((placeholder_line + 1)) "$dashboard_template"
+    } > "$dashboard_output"
+    rm -f "$compact_json_file"
     echo ""
     echo "Dashboard: file://$dashboard_output"
   fi

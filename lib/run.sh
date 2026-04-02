@@ -589,7 +589,30 @@ nightcrew_run() {
 
     # Set up worktree
     local worktree_dir
-    worktree_dir=$(setup_worktree "$REPO_DIR" "$task_id" "$task_branch" "$base_branch")
+    worktree_dir=$(setup_worktree "$REPO_DIR" "$task_id" "$task_branch" "$base_branch") || {
+      log_error "Worktree setup failed for task $task_id"
+      mark_task "failed" "$task_id" "worktree setup failed"
+      ((failed++))
+      CURRENT_TASK_ID=""
+      continue
+    }
+
+    # Guard: validate worktree path before using it downstream
+    if [[ -z "$worktree_dir" || "$worktree_dir" == *$'\n'* ]]; then
+      log_error "Worktree path invalid (empty or multiline): $(echo "$worktree_dir" | head -1)"
+      mark_task "failed" "$task_id" "worktree setup returned invalid path"
+      ((failed++))
+      CURRENT_TASK_ID=""
+      continue
+    fi
+    if [[ ! -d "$worktree_dir" ]]; then
+      log_error "Worktree directory does not exist: $worktree_dir"
+      mark_task "failed" "$task_id" "worktree directory missing"
+      ((failed++))
+      CURRENT_TASK_ID=""
+      continue
+    fi
+
     log "Worktree: $worktree_dir"
 
     # Route tools (same for all phases — plan only reads, review reads+fixes)

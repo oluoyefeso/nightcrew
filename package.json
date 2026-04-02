@@ -1,0 +1,9 @@
+{
+  "name": "nightcrew",
+  "version": "0.3.0",
+  "private": true,
+  "description": "NightCrew web UI server",
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  }
+}

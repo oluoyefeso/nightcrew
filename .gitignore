@@ -2,6 +2,10 @@
 logs/
 state/
 
+# Node
+node_modules/
+design/
+
 # OS
 .DS_Store
 

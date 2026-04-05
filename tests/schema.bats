@@ -93,3 +93,55 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"missing required field"* ]]
 }
+
+# ── enabled field accepted ────────────────────────────────────
+
+@test "task with enabled: false passes schema validation" {
+  cat > "$TEST_TEMP_DIR/tasks-enabled.yaml" <<'EOF'
+tasks:
+  - id: task-1
+    title: "Some task"
+    branch: "task/some"
+    type: implementation
+    prompt: "Do the thing"
+    enabled: false
+EOF
+
+  run validate_schema "$TEST_TEMP_DIR/tasks-enabled.yaml"
+  [ "$status" -eq 0 ]
+}
+
+# ── project_path field accepted ───────────────────────────────
+
+@test "task with project_path passes schema validation" {
+  cat > "$TEST_TEMP_DIR/tasks-project-path.yaml" <<'EOF'
+tasks:
+  - id: task-1
+    title: "Some task"
+    branch: "task/some"
+    type: implementation
+    prompt: "Do the thing"
+    project_path: "/tmp/some-repo"
+EOF
+
+  run validate_schema "$TEST_TEMP_DIR/tasks-project-path.yaml"
+  [ "$status" -eq 0 ]
+}
+
+# ── both enabled and project_path accepted ────────────────────
+
+@test "task with both enabled and project_path passes schema validation" {
+  cat > "$TEST_TEMP_DIR/tasks-both.yaml" <<'EOF'
+tasks:
+  - id: task-1
+    title: "Some task"
+    branch: "task/some"
+    type: implementation
+    prompt: "Do the thing"
+    enabled: true
+    project_path: "/tmp/some-repo"
+EOF
+
+  run validate_schema "$TEST_TEMP_DIR/tasks-both.yaml"
+  [ "$status" -eq 0 ]
+}

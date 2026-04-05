@@ -1,8 +1,10 @@
 # NightCrew
 
-Overnight autonomous task orchestrator for Claude Code. Queue up development tasks before bed, wake up to draft PRs with completed work.
+Queue tasks across repos before bed. Wake up to draft PRs.
 
-NightCrew runs each task in an isolated git worktree, routes it to the appropriate Claude model, enforces safety guardrails (file scope, branch protection, cost caps, timeouts), and creates draft PRs with decision logs.
+NightCrew is an overnight autonomous task orchestrator for Claude Code. It runs each task in an isolated git worktree, routes it to the appropriate Claude model, enforces 7 layers of safety guardrails, and creates draft PRs with decision logs.
+
+![NightCrew Dashboard](docs/screenshots/dashboard.png)
 
 ## How It Works
 
@@ -103,6 +105,7 @@ Optional fields for more control:
 ```yaml
     complexity: medium           # low | medium | high (affects model routing)
     enabled: true                # Set to false to skip this task without deleting it
+    project_path: /path/to/repo  # Target a different repo (absolute path, must be a git repo)
     goal: |                      # Acceptance criteria
       - Tests pass
       - No regressions
@@ -160,17 +163,43 @@ nightcrew.sh review [OPTIONS]     Morning review dashboard
 nightcrew.sh serve [OPTIONS]      Start the web UI (http://127.0.0.1:3721)
 nightcrew.sh preflight [OPTIONS]  Run preflight checks
 nightcrew.sh config [OPTIONS]     Show resolved configuration
+nightcrew.sh enable <task-id>     Enable a task
+nightcrew.sh disable <task-id>    Disable a task
+nightcrew.sh sessions [OPTIONS]   List archived sessions
 
 Options:
   --tasks FILE      Path to tasks.yaml (default: ./tasks.yaml)
   --config FILE     Path to config.yaml (default: ./config.yaml)
   --dry-run         Preflight validation + show what would run
   --open            Open HTML dashboard in browser (with review)
-  --json            Output as JSON (for preflight, config)
+  --json            Output as JSON (for preflight, config, sessions)
   --port PORT       Server port (default: 3721, for serve)
   --version         Show version
   --help            Show help
 ```
+
+## Multi-Project Support
+
+Queue tasks across multiple repositories in a single overnight run:
+
+```yaml
+tasks:
+  - id: api-pagination
+    title: "Add pagination to /api/users"
+    branch: feat/pagination
+    type: implementation
+    prompt: "Implement cursor-based pagination..."
+    project_path: /Users/me/acme-api
+
+  - id: frontend-dark-mode
+    title: "Add dark mode toggle"
+    branch: feat/dark-mode
+    type: implementation
+    prompt: "Implement dark mode..."
+    project_path: /Users/me/widget-frontend
+```
+
+Each task creates its worktree under the specified project's `.worktrees/` directory. Tasks without `project_path` use the default `repo_path` from config.yaml. The `protected_branches` list applies to all projects.
 
 ## Safety Guardrails
 
@@ -213,10 +242,22 @@ npm install
 ```
 
 The web UI has 4 pages:
-- **Dashboard** — Live task status, stats, cost tracking (same data as `nightcrew review`)
-- **Queue Manager** — Add, edit, reorder, enable/disable tasks visually (writes to tasks.yaml)
-- **Log Archive** — Browse past sessions and read full execution logs per task/phase
-- **System Health** — Preflight status, config viewer, lifetime cost summary
+
+**Dashboard** -- Live task status, stats, cost tracking
+
+![Dashboard](docs/screenshots/dashboard.png)
+
+**Queue Manager** -- Add, edit, enable/disable tasks, configure multi-project paths
+
+![Queue Manager](docs/screenshots/queue-manager.png)
+
+**Log Archive** -- Browse past sessions and read full execution logs per task/phase
+
+![Log Archive](docs/screenshots/log-archive.png)
+
+**System Health** -- Preflight status, version, config viewer
+
+![System Health](docs/screenshots/system-health.png)
 
 The server is localhost-only (127.0.0.1) with no authentication. It reads and writes the same local files as the CLI.
 

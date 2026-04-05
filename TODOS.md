@@ -1,10 +1,16 @@
 # NightCrew TODOs
 
-## Multi-Project Support
-**Priority:** P0 | **Effort:** S (human: ~4h / CC: ~20min)
-**Depends on:** Nothing (ready to build)
+## Per-Project Protected Branches
+**Priority:** P3 | **Effort:** XS (human: ~30min / CC: ~5min)
+**Depends on:** Multi-project support (v0.3.2)
 
-Add a root manifest (`nightcrew.yaml`) that points to per-project task files, each scoped to a repo. Enables overnight runs across multiple repositories in sequence. Wrap the existing `nightcrew_run()` in an outer project loop. Namespace `state/progress.json` by project. Update `nightcrew review` to group results by project.
+Currently `protected_branches` from config.yaml applies uniformly to all projects. For real multi-project use, users may need per-project branch protection (e.g., repo A protects `main`, repo B protects `production`). Consider adding optional `protected_branches` to the per-task `project_path` config or a separate projects section in config.yaml.
+
+## Promote DESIGN.md to Project Root
+**Priority:** P3 | **Effort:** XS (human: ~15min / CC: ~2min)
+**Depends on:** Nothing
+
+The design system spec ("The Silent Sentinel") lives at `design/nocturnal_command/DESIGN.md`. Move or symlink it to the project root as `DESIGN.md` so contributors can find it. The design system applies to all UI, not just the original mockup directory.
 
 ## v2: Pipeline-First Task Format
 **Priority:** P2 | **Effort:** S (human: ~30min / CC: ~10min)
@@ -31,6 +37,11 @@ When a task fails validation, spawn a repair Claude session that reads the valid
 Add a flock-based lockfile (e.g., `.worktrees/.nightcrew.lock`) to prevent concurrent NightCrew runs colliding on the same repo. Two runs targeting the same `.worktrees/` directory would corrupt worktree state. Check for lock at startup, fail with a clear message if another run is active.
 
 ## Completed
+
+### Multi-Project Support
+**Completed:** v0.3.2 (2026-04-05)
+Implemented via per-task `project_path` field in tasks.yaml (replacing the originally proposed manifest approach). Each task can target a different git repo. Worktrees created under each project's own `.worktrees/` directory. Schema, preflight, run loop, CLI, web UI, and server all updated. 20 new tests added.
+
 
 ### Gitignore User Config
 **Completed:** v0.2.0 (2026-04-02)

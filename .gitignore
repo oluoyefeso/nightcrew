@@ -12,3 +12,4 @@ design/
 # User-specific config (copy from *.example)
 config.yaml
 tasks.yaml
+.gstack/

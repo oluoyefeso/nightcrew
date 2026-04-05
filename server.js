@@ -247,6 +247,16 @@ function getPreflight(req, res) {
   }
 }
 
+// GET /api/version — read VERSION file
+function getVersion(req, res) {
+  try {
+    const version = fs.readFileSync(path.join(NIGHTCREW_DIR, 'VERSION'), 'utf8').trim();
+    jsonResponse(res, { version });
+  } catch {
+    jsonResponse(res, { version: 'unknown' });
+  }
+}
+
 // POST /api/run — start a nightcrew run (non-blocking)
 async function postRun(req, res) {
   if (activeRun && !activeRun.killed) {
@@ -254,9 +264,18 @@ async function postRun(req, res) {
     return;
   }
 
+  let opts = {};
+  try {
+    const body = await readBody(req);
+    if (body) opts = JSON.parse(body);
+  } catch { /* ignore parse errors, use defaults */ }
+
+  const args = ['run', '--tasks', TASKS_FILE, '--config', CONFIG_FILE];
+  if (opts.dry_run) args.push('--dry-run');
+
   const child = spawn(
     path.join(NIGHTCREW_DIR, 'nightcrew.sh'),
-    ['run', '--tasks', TASKS_FILE, '--config', CONFIG_FILE],
+    args,
     { cwd: NIGHTCREW_DIR, detached: false, stdio: 'ignore' }
   );
 
@@ -359,6 +378,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (resource === 'config' && req.method === 'GET') return getConfig(req, res);
     if (resource === 'preflight' && req.method === 'GET') return getPreflight(req, res);
+    if (resource === 'version' && req.method === 'GET') return getVersion(req, res);
     if (resource === 'run') {
       if (req.method === 'POST') return postRun(req, res);
       if (req.method === 'GET' && parts[2] === 'status') return getRunStatus(req, res);

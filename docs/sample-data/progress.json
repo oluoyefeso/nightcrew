@@ -1,0 +1,46 @@
+{
+  "session_started": "2026-04-04T02:15:00Z",
+  "tasks": {
+    "add-pagination": {
+      "status": "complete",
+      "started_at": "2026-04-04T02:15:05Z",
+      "completed_at": "2026-04-04T02:38:22Z",
+      "model": "claude-sonnet-4-20250514",
+      "cost_cents": 142,
+      "input_tokens": 28400,
+      "output_tokens": 6800,
+      "pr_url": "https://github.com/acme/acme-api/pull/87"
+    },
+    "fix-auth-race": {
+      "status": "complete",
+      "started_at": "2026-04-04T02:38:30Z",
+      "completed_at": "2026-04-04T03:12:45Z",
+      "model": "claude-opus-4-20250514",
+      "cost_cents": 485,
+      "input_tokens": 42100,
+      "output_tokens": 12300,
+      "pr_url": "https://github.com/acme/acme-api/pull/88"
+    },
+    "add-search-index": {
+      "status": "failed",
+      "started_at": "2026-04-04T03:13:00Z",
+      "failed_at": "2026-04-04T03:28:15Z",
+      "reason": "validation failed",
+      "model": "claude-sonnet-4-20250514",
+      "cost_cents": 98
+    },
+    "widget-dark-mode": {
+      "status": "complete",
+      "started_at": "2026-04-04T03:28:30Z",
+      "completed_at": "2026-04-04T03:52:10Z",
+      "model": "claude-sonnet-4-20250514",
+      "cost_cents": 127,
+      "input_tokens": 25200,
+      "output_tokens": 5900,
+      "pr_url": "https://github.com/acme/widget-frontend/pull/23"
+    }
+  },
+  "total_cost_cents": 852,
+  "total_input_tokens": 95700,
+  "total_output_tokens": 25000
+}

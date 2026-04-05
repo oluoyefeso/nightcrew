@@ -1,6 +1,6 @@
 {
   "name": "nightcrew",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "private": true,
   "description": "NightCrew web UI server",
   "dependencies": {

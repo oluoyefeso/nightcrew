@@ -2,6 +2,31 @@
 
 All notable changes to NightCrew are documented here.
 
+## [0.3.2] - 2026-04-05
+
+### Added
+- Multi-project support: per-task `project_path` field lets you queue tasks across different repos in a single overnight run
+- CLI `enable` / `disable` commands to toggle tasks from the terminal
+- CLI `sessions` command to list archived sessions (supports `--json`)
+- Web UI: PROJECT_PATH input in Queue Manager editor, grouped with BRANCH
+- Web UI: PROJECT_TARGETS summary in run confirmation overlay shows which repos will be targeted
+- Web UI: DRY_RUN toggle in run confirmation overlay
+- Web UI: VERSION display on System Health page via new `GET /api/version` endpoint
+- Web UI: task cards show project repo name when project_path is set
+- README screenshots for all 4 web UI pages
+- README multi-project usage section with example tasks.yaml
+
+### Fixed
+- Schema bug: `enabled` field was used in code but missing from `task.schema.json` (additionalProperties: false rejected it)
+- Signal handler now uses per-task repo dir (`CURRENT_TASK_REPO_DIR`) instead of global `REPO_DIR`, preventing worktree corruption on interrupt during multi-project runs
+- JSON preflight path now validates required fields, type/complexity enums, and project_path (previously only checked task count)
+- Dry-run from web UI now correctly passes `--dry-run` flag to the server spawn
+
+### Changed
+- Form layout restructured: git fields (BRANCH, PROJECT_PATH) grouped together, ENABLED moved to config row
+- Preflight field validation extracted to shared `validate_task_fields()` function (DRY)
+- Version bumped to 0.3.2 across VERSION, package.json, nightcrew.sh
+
 ## [0.3.1] - 2026-04-03
 
 ### Fixed

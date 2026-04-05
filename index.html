@@ -654,6 +654,7 @@ select.form-input { appearance: none; cursor: pointer; }
         <div style="margin-bottom:2rem;">
           <span class="label-caps">DIAGNOSTICS / GLOBAL</span>
           <h2 style="font-size:1.5rem; font-weight:900; letter-spacing:-0.02em; text-transform:uppercase;">SYSTEM_HEALTH</h2>
+          <div style="margin-top:0.5rem;"><span class="label-caps">VERSION</span> <span id="version-display" style="font-family:var(--font-mono); color:var(--text);">...</span></div>
         </div>
         <div class="health-section">
           <div class="health-section-title">01 // PREFLIGHT_STATUS</div>
@@ -881,7 +882,9 @@ select.form-input { appearance: none; cursor: pointer; }
         '<span class="tag" style="' + (enabled ? 'background:rgba(55,52,173,0.2); color:var(--on-primary-container);' : 'color:var(--text-muted);') + '">' + (enabled ? 'QUEUED' : 'DISABLED') + '</span></div>' +
         '<div class="qi-title">' + esc(t.title || '') + '</div>' +
         '<div class="qi-tags"><span class="tag">' + esc(t.type || 'implementation').toUpperCase() + '</span>' +
-        '<span class="tag">' + esc(t.complexity || 'medium').toUpperCase() + '</span></div></div>';
+        '<span class="tag">' + esc(t.complexity || 'medium').toUpperCase() + '</span>' +
+        (t.project_path ? '<span class="tag" style="font-family:var(--font-mono); color:var(--text-muted);">' + esc(t.project_path.split('/').pop()) + '</span>' : '') +
+        '</div></div>';
     }).join('');
   }
 
@@ -919,7 +922,14 @@ select.form-input { appearance: none; cursor: pointer; }
         '<div class="form-group"><label>COMPLEXITY</label><select class="form-input" id="f-complexity">' +
           ['low','medium','high'].map(v => '<option' + (v === t.complexity ? ' selected' : '') + '>' + v.toUpperCase() + '</option>').join('') +
         '</select></div>' +
+        '<div class="form-group"><label>ENABLED</label><select class="form-input" id="f-enabled">' +
+          '<option value="true"' + (t.enabled !== false ? ' selected' : '') + '>YES</option>' +
+          '<option value="false"' + (t.enabled === false ? ' selected' : '') + '>NO</option>' +
+        '</select></div>' +
+      '</div>' +
+      '<div class="form-grid">' +
         '<div class="form-group"><label>BRANCH</label><input class="form-input mono-input" id="f-branch" value="' + esc(t.branch || '') + '" style="color:var(--secondary);"/></div>' +
+        '<div class="form-group"><label>PROJECT_PATH</label><input class="form-input mono-input" id="f-project-path" value="' + esc(t.project_path || '') + '" placeholder="/path/to/repo (defaults to config repo_path)" style="color:var(--secondary);"/></div>' +
       '</div>' +
       '<div class="form-group"><label>SYSTEM_PROMPT</label><textarea class="form-input" id="f-prompt" rows="8">' + esc(t.prompt || '') + '</textarea></div>' +
       '<div class="form-group"><label>PRIMARY_GOAL</label><textarea class="form-input" id="f-goal" rows="3">' + esc(t.goal || '') + '</textarea></div>' +
@@ -930,12 +940,8 @@ select.form-input { appearance: none; cursor: pointer; }
         '</div></div>' +
       '<div class="form-grid">' +
         '<div class="form-group"><label>MAX_TIME_(MINUTES)</label><input class="form-input mono-input" id="f-maxtime" type="number" value="' + (t.max_time_minutes || 45) + '"/></div>' +
-        '<div class="form-group"><label>ENABLED</label><select class="form-input" id="f-enabled">' +
-          '<option value="true"' + (t.enabled !== false ? ' selected' : '') + '>YES</option>' +
-          '<option value="false"' + (t.enabled === false ? ' selected' : '') + '>NO</option>' +
-        '</select></div>' +
+        '<div class="form-group"><label>TEST_COMMAND</label><input class="test-cmd-input" id="f-testcmd" value="' + esc(t.test_command || '') + '"/></div>' +
       '</div>' +
-      '<div class="form-group"><label>TEST_COMMAND</label><input class="test-cmd-input" id="f-testcmd" value="' + esc(t.test_command || '') + '"/></div>' +
       '<div style="padding-top:2rem; border-top:1px solid var(--surface); display:flex; justify-content:flex-end;">' +
         '<button class="btn btn-danger" onclick="window._deleteTask()">DELETE_TASK</button>' +
       '</div>';
@@ -964,6 +970,8 @@ select.form-input { appearance: none; cursor: pointer; }
     t.type = document.getElementById('f-type').value.toLowerCase();
     t.complexity = document.getElementById('f-complexity').value.toLowerCase();
     t.branch = document.getElementById('f-branch').value.trim();
+    var pp = document.getElementById('f-project-path').value.trim();
+    if (pp) { t.project_path = pp; } else { delete t.project_path; }
     t.prompt = document.getElementById('f-prompt').value;
     t.goal = document.getElementById('f-goal').value;
     t.max_time_minutes = parseInt(document.getElementById('f-maxtime').value) || 45;
@@ -1020,13 +1028,29 @@ select.form-input { appearance: none; cursor: pointer; }
     let configData = {};
     try { configData = await API.get('config'); } catch {}
 
+    // Build project targets summary
+    var projectCounts = {};
+    enabled.forEach(function(t) {
+      var key = t.project_path || '(default repo)';
+      projectCounts[key] = (projectCounts[key] || 0) + 1;
+    });
+    var projectKeys = Object.keys(projectCounts);
+    var projectTargetsHtml = '';
+    if (projectKeys.length > 1 || (projectKeys.length === 1 && projectKeys[0] !== '(default repo)')) {
+      projectTargetsHtml = '<div class="overlay-stat" style="grid-column:1/-1;"><span class="label-caps">PROJECT_TARGETS</span><div style="font-family:var(--font-mono); font-size:0.7rem; margin-top:0.25rem;">' +
+        projectKeys.map(function(k) { return esc(k) + '  (' + projectCounts[k] + ' task' + (projectCounts[k] > 1 ? 's' : '') + ')'; }).join('<br/>') +
+      '</div></div>';
+    }
+
     document.getElementById('run-overlay-stats').innerHTML =
       '<div class="overlay-stat"><span class="label-caps">TOTAL_TASKS</span><div class="os-value">' + enabled.length + '_RECORDS</div></div>' +
       '<div class="overlay-stat"><span class="label-caps">ESTIMATED_TIME</span><div class="os-value">' + String(Math.floor(totalTime/60)).padStart(2,'0') + ':' + String(totalTime%60).padStart(2,'0') + '_MINS</div></div>' +
       '<div class="overlay-stat"><span class="label-caps">ROUTING_CONFIG</span><div style="font-family:var(--font-mono); font-size:0.7rem; margin-top:0.25rem;">' +
         'PLAN: ' + esc((configData.routing && configData.routing.plan && configData.routing.plan.medium || 'opus').split('-')[1] || 'opus') + '<br/>' +
         'IMPL: ' + esc((configData.routing && configData.routing.implement && configData.routing.implement.medium || 'sonnet').split('-')[1] || 'sonnet') +
-      '</div></div>';
+      '</div></div>' +
+      '<div class="overlay-stat"><span class="label-caps">DRY_RUN</span><select class="form-input" id="dry-run-toggle" style="width:auto; margin-top:0.25rem;"><option value="false" selected>NO</option><option value="true">YES</option></select></div>' +
+      projectTargetsHtml;
 
     // Warnings
     const warnings = [];
@@ -1044,11 +1068,16 @@ select.form-input { appearance: none; cursor: pointer; }
   window.hideRunOverlay = function() { document.getElementById('run-overlay').classList.remove('active'); };
 
   window.confirmRun = async function() {
+    var dryRun = document.getElementById('dry-run-toggle').value === 'true';
     try {
-      await API.post('run', {});
+      await API.post('run', { dry_run: dryRun });
       hideRunOverlay();
-      alert('NightCrew run started. Switch to the Dashboard to monitor progress.');
-      navigateTo('dashboard');
+      if (dryRun) {
+        alert('DRY_RUN COMPLETE. Output written to terminal. No tasks were executed.');
+      } else {
+        alert('NightCrew run started. Switch to the Dashboard to monitor progress.');
+        navigateTo('dashboard');
+      }
     } catch (e) { alert('Failed to start run: ' + e.message); }
   };
 
@@ -1130,6 +1159,13 @@ select.form-input { appearance: none; cursor: pointer; }
 
   // ── SYSTEM HEALTH ──
   async function loadHealth() {
+    // Version
+    try {
+      const ver = await API.get('version');
+      var versionEl = document.getElementById('version-display');
+      if (versionEl) versionEl.textContent = ver.version || 'unknown';
+    } catch {}
+
     // Preflight
     try {
       const pf = await API.get('preflight');

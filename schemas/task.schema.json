@@ -71,6 +71,15 @@
             "items": { "type": "string" },
             "default": [],
             "description": "Task IDs that must complete before this task runs"
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether this task is active (false to skip)"
+          },
+          "project_path": {
+            "type": "string",
+            "description": "Absolute path to the target repository. Defaults to config.yaml repo_path."
           }
         },
         "additionalProperties": false

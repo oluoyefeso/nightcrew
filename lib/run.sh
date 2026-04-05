@@ -5,6 +5,7 @@ MAX_RETRIES=5
 BACKOFF_BASE=300  # 5 minutes
 
 CURRENT_TASK_ID=""
+CURRENT_TASK_REPO_DIR=""
 REPO_DIR=""
 LAST_INPUT_TOKENS=0
 LAST_OUTPUT_TOKENS=0
@@ -12,16 +13,17 @@ LAST_OUTPUT_TOKENS=0
 # Signal handler for clean shutdown
 cleanup_on_signal() {
   log "Signal received. Cleaning up..."
-  if [[ -n "${CURRENT_TASK_ID:-}" && -n "${REPO_DIR:-}" ]]; then
-    local wt="$REPO_DIR/$WORKTREE_BASE/$CURRENT_TASK_ID"
+  local cleanup_repo="${CURRENT_TASK_REPO_DIR:-$REPO_DIR}"
+  if [[ -n "${CURRENT_TASK_ID:-}" && -n "$cleanup_repo" ]]; then
+    local wt="$cleanup_repo/$WORKTREE_BASE/$CURRENT_TASK_ID"
     if [[ -d "$wt" ]]; then
       git -C "$wt" add -A 2>/dev/null || true
       git -C "$wt" commit -m "WIP: interrupted by signal" 2>/dev/null || true
     fi
     mark_task "paused" "$CURRENT_TASK_ID"
   fi
-  if [[ -n "${REPO_DIR:-}" ]]; then
-    git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+  if [[ -n "$cleanup_repo" ]]; then
+    git -C "$cleanup_repo" worktree prune 2>/dev/null || true
   fi
   log "State saved. Re-run 'nightcrew run' to resume."
   exit 1
@@ -122,6 +124,54 @@ preflight_check() {
   fi
 }
 
+# Shared field validation for tasks (used by both preflight_validate and nightcrew_preflight)
+# Returns number of errors found
+validate_task_fields() {
+  local json_file="$1"
+  local task_count
+  task_count=$(jq '.tasks | length' "$json_file")
+  local schema_errors=0
+
+  for i in $(seq 0 $((task_count - 1))); do
+    for field in id title branch type prompt; do
+      local val
+      val=$(jq -r ".tasks[$i].$field // empty" "$json_file")
+      if [[ -z "$val" ]]; then
+        log_error "PREFLIGHT: Task $i missing required field '$field'"
+        schema_errors=$((schema_errors + 1))
+      fi
+    done
+    # Validate type enum
+    local task_type
+    task_type=$(jq -r ".tasks[$i].type // empty" "$json_file")
+    if [[ -n "$task_type" ]] && ! echo "$task_type" | grep -qE '^(research|implementation|refactor|test)$'; then
+      log_error "PREFLIGHT: Task $i has invalid type '$task_type' (must be research|implementation|refactor|test)"
+      schema_errors=$((schema_errors + 1))
+    fi
+    # Validate complexity enum
+    local complexity
+    complexity=$(jq -r ".tasks[$i].complexity // empty" "$json_file")
+    if [[ -n "$complexity" ]] && ! echo "$complexity" | grep -qE '^(low|medium|high)$'; then
+      log_error "PREFLIGHT: Task $i has invalid complexity '$complexity' (must be low|medium|high)"
+      schema_errors=$((schema_errors + 1))
+    fi
+    # Validate project_path if present
+    local pp
+    pp=$(jq -r ".tasks[$i].project_path // empty" "$json_file")
+    if [[ -n "$pp" ]]; then
+      if [[ ! "$pp" = /* ]]; then
+        log_error "PREFLIGHT: Task $i project_path is not absolute: $pp"
+        schema_errors=$((schema_errors + 1))
+      elif [[ ! -d "$pp/.git" ]]; then
+        log_error "PREFLIGHT: Task $i project_path is not a git repo: $pp"
+        schema_errors=$((schema_errors + 1))
+      fi
+    fi
+  done
+
+  return $schema_errors
+}
+
 # JSON output format support flag (set during preflight_validate, read by run_with_retry)
 # Must call preflight_validate() before run_with_retry() for accurate cost tracking.
 JSON_OUTPUT_SUPPORTED=false
@@ -152,40 +202,18 @@ preflight_validate() {
       return 1
     fi
 
-    # Check required fields per task
     local task_count
     task_count=$(jq '.tasks | length' "$json_tmp")
-    local schema_errors=0
-    for i in $(seq 0 $((task_count - 1))); do
-      for field in id title branch type prompt; do
-        local val
-        val=$(jq -r ".tasks[$i].$field // empty" "$json_tmp")
-        if [[ -z "$val" ]]; then
-          log_error "PREFLIGHT: Task $i missing required field '$field'"
-          schema_errors=$((schema_errors + 1))
-        fi
-      done
-      # Validate type enum
-      local task_type
-      task_type=$(jq -r ".tasks[$i].type // empty" "$json_tmp")
-      if [[ -n "$task_type" ]] && ! echo "$task_type" | grep -qE '^(research|implementation|refactor|test)$'; then
-        log_error "PREFLIGHT: Task $i has invalid type '$task_type' (must be research|implementation|refactor|test)"
-        schema_errors=$((schema_errors + 1))
-      fi
-      # Validate complexity enum
-      local complexity
-      complexity=$(jq -r ".tasks[$i].complexity // empty" "$json_tmp")
-      if [[ -n "$complexity" ]] && ! echo "$complexity" | grep -qE '^(low|medium|high)$'; then
-        log_error "PREFLIGHT: Task $i has invalid complexity '$complexity' (must be low|medium|high)"
-        schema_errors=$((schema_errors + 1))
-      fi
-    done
-    rm -f "$json_tmp"
 
-    if [[ $schema_errors -gt 0 ]]; then
+    # Validate required fields, enums, and project_path
+    if ! validate_task_fields "$json_tmp"; then
+      local schema_errors=$?
+      rm -f "$json_tmp"
       log_error "PREFLIGHT: Schema validation failed ($schema_errors errors)"
       return 1
     fi
+    rm -f "$json_tmp"
+
     log "  [OK] Schema validation passed ($task_count tasks)"
     checks_passed=$((checks_passed + 1))
   fi
@@ -495,17 +523,30 @@ nightcrew_preflight() {
       failed_count=$((failed_count + 1))
     fi
 
-    # 3. Schema validation
+    # 3. Schema validation (full field + enum + project_path validation)
     if [[ -f "$tasks_file" ]]; then
-      local task_count
-      task_count=$(yq e '.tasks | length' "$tasks_file" 2>/dev/null || echo "0")
-      if [[ "$task_count" -gt 0 ]]; then
-        checks+=('{"name":"schema","status":"ok","detail":"'"$task_count"' tasks validated"}')
-        passed=$((passed + 1))
+      local json_tmp
+      json_tmp=$(mktemp /tmp/nightcrew-validate-XXXXXXXX.json)
+      if yq e -o=json '.' "$tasks_file" > "$json_tmp" 2>/dev/null; then
+        local task_count
+        task_count=$(jq '.tasks | length' "$json_tmp")
+        if [[ "$task_count" -gt 0 ]]; then
+          if validate_task_fields "$json_tmp" 2>/dev/null; then
+            checks+=('{"name":"schema","status":"ok","detail":"'"$task_count"' tasks validated"}')
+            passed=$((passed + 1))
+          else
+            checks+=('{"name":"schema","status":"fail","detail":"field validation failed for '"$task_count"' tasks"}')
+            failed_count=$((failed_count + 1))
+          fi
+        else
+          checks+=('{"name":"schema","status":"fail","detail":"no tasks found in '"$tasks_file"'"}')
+          failed_count=$((failed_count + 1))
+        fi
       else
-        checks+=('{"name":"schema","status":"fail","detail":"no tasks found in '"$tasks_file"'"}')
+        checks+=('{"name":"schema","status":"fail","detail":"tasks.yaml is not valid YAML"}')
         failed_count=$((failed_count + 1))
       fi
+      rm -f "$json_tmp"
     else
       checks+=('{"name":"schema","status":"fail","detail":"tasks file not found: '"$tasks_file"'"}')
       failed_count=$((failed_count + 1))
@@ -684,6 +725,8 @@ nightcrew_run() {
     task_depends_on=$(yq e '.tasks['"$i"'].depends_on // [] | join(" ")' "$tasks_file")
     local task_enabled
     task_enabled=$(yq e ".tasks[$i].enabled // \"true\"" "$tasks_file")
+    local task_project_path
+    task_project_path=$(yq e ".tasks[$i].project_path // \"\"" "$tasks_file")
 
     log "────────────────────────────────────────"
     log "Task $((i+1))/$task_count: $task_title [$task_id]"
@@ -758,17 +801,37 @@ nightcrew_run() {
       continue
     fi
 
+    # Resolve per-task repo directory (multi-project support)
+    local task_repo_dir="$REPO_DIR"
+    if [[ -n "$task_project_path" && "$task_project_path" != "null" ]]; then
+      if [[ ! "$task_project_path" = /* ]]; then
+        log_error "project_path must be absolute: $task_project_path"
+        mark_task "failed" "$task_id" "project_path not absolute"
+        failed=$((failed + 1))
+        continue
+      fi
+      if [[ ! -d "$task_project_path/.git" ]]; then
+        log_error "project_path is not a git repo: $task_project_path"
+        mark_task "failed" "$task_id" "project_path not a git repo"
+        failed=$((failed + 1))
+        continue
+      fi
+      task_repo_dir=$(cd "$task_project_path" && pwd)
+    fi
+
     # Set current task for signal handler
     CURRENT_TASK_ID="$task_id"
+    CURRENT_TASK_REPO_DIR="$task_repo_dir"
     mark_task "in_progress" "$task_id"
 
     # Set up worktree
     local worktree_dir
-    worktree_dir=$(setup_worktree "$REPO_DIR" "$task_id" "$task_branch" "$base_branch") || {
+    worktree_dir=$(setup_worktree "$task_repo_dir" "$task_id" "$task_branch" "$base_branch") || {
       log_error "Worktree setup failed for task $task_id"
       mark_task "failed" "$task_id" "worktree setup failed"
       failed=$((failed + 1))
       CURRENT_TASK_ID=""
+      CURRENT_TASK_REPO_DIR=""
       continue
     }
 
@@ -778,6 +841,7 @@ nightcrew_run() {
       mark_task "failed" "$task_id" "worktree setup returned invalid path"
       failed=$((failed + 1))
       CURRENT_TASK_ID=""
+      CURRENT_TASK_REPO_DIR=""
       continue
     fi
     if [[ ! -d "$worktree_dir" ]]; then
@@ -785,6 +849,7 @@ nightcrew_run() {
       mark_task "failed" "$task_id" "worktree directory missing"
       failed=$((failed + 1))
       CURRENT_TASK_ID=""
+      CURRENT_TASK_REPO_DIR=""
       continue
     fi
 
@@ -884,8 +949,9 @@ $task_prompt"
       mark_task "timeout" "$task_id"
       failed=$((failed + 1))
       log_error "Implementation timed out: $task_id"
-      cleanup_worktree "$REPO_DIR" "$task_id"
+      cleanup_worktree "$task_repo_dir" "$task_id"
       CURRENT_TASK_ID=""
+      CURRENT_TASK_REPO_DIR=""
       continue
     fi
 
@@ -894,8 +960,9 @@ $task_prompt"
       mark_task "failed" "$task_id" "implementation exit code $run_exit"
       failed=$((failed + 1))
       log_error "Implementation failed: $task_id"
-      cleanup_worktree "$REPO_DIR" "$task_id"
+      cleanup_worktree "$task_repo_dir" "$task_id"
       CURRENT_TASK_ID=""
+      CURRENT_TASK_REPO_DIR=""
       continue
     fi
 
@@ -956,8 +1023,9 @@ $task_prompt"
       commit_changes "$worktree_dir" "WIP: $task_title (validation failed)"
       mark_task "failed" "$task_id" "validation failed"
       failed=$((failed + 1))
-      cleanup_worktree "$REPO_DIR" "$task_id"
+      cleanup_worktree "$task_repo_dir" "$task_id"
       CURRENT_TASK_ID=""
+      CURRENT_TASK_REPO_DIR=""
       continue
     fi
 
@@ -992,8 +1060,9 @@ $task_prompt"
     log "Task complete: $task_id (plan: $plan_model, impl: $impl_model, review: $review_model)"
 
     # Cleanup worktree
-    cleanup_worktree "$REPO_DIR" "$task_id"
+    cleanup_worktree "$task_repo_dir" "$task_id"
     CURRENT_TASK_ID=""
+    CURRENT_TASK_REPO_DIR=""
   done
 
   # Summary

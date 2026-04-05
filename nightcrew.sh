@@ -9,7 +9,7 @@
 set -euo pipefail
 
 NIGHTCREW_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NIGHTCREW_VERSION="0.3.0"
+NIGHTCREW_VERSION="0.3.2"
 
 # Source all lib modules
 for lib in "$NIGHTCREW_DIR"/lib/*.sh; do
@@ -27,6 +27,9 @@ Usage:
   nightcrew serve     [OPTIONS]    Start web UI server
   nightcrew preflight [OPTIONS]    Run preflight checks
   nightcrew config    [OPTIONS]    Show resolved configuration
+  nightcrew enable    <task-id>    Enable a task
+  nightcrew disable   <task-id>    Disable a task
+  nightcrew sessions  [OPTIONS]    List archived sessions
 
 Options:
   --tasks FILE     Path to tasks.yaml (default: ./tasks.yaml)
@@ -62,12 +65,21 @@ DRY_RUN=false
 OPEN_DASHBOARD=false
 JSON_OUTPUT=false
 SERVE_PORT=3721
+TASK_ID_ARG=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    run|review|serve|preflight|config)
+    run|review|serve|preflight|config|sessions)
       COMMAND="$1"
       shift
+      ;;
+    enable|disable)
+      COMMAND="$1"
+      shift
+      if [[ $# -gt 0 && ! "$1" == --* ]]; then
+        TASK_ID_ARG="$1"
+        shift
+      fi
       ;;
     --tasks)
       TASKS_FILE="$2"
@@ -143,5 +155,98 @@ case "$COMMAND" in
     ;;
   config)
     nightcrew_config "$CONFIG_FILE" "$JSON_OUTPUT"
+    ;;
+  enable)
+    if [[ -z "$TASK_ID_ARG" ]]; then
+      echo "Error: task ID required. Usage: nightcrew enable <task-id>" >&2
+      exit 1
+    fi
+    if [[ ! -f "$TASKS_FILE" ]]; then
+      echo "Error: tasks file not found: $TASKS_FILE" >&2
+      exit 1
+    fi
+    exists=$(yq e '.tasks[] | select(.id == "'"$TASK_ID_ARG"'") | .id' "$TASKS_FILE")
+    if [[ -z "$exists" ]]; then
+      echo "Error: task '$TASK_ID_ARG' not found" >&2
+      exit 1
+    fi
+    yq e '(.tasks[] | select(.id == "'"$TASK_ID_ARG"'")).enabled = true' -i "$TASKS_FILE"
+    echo "Enabled: $TASK_ID_ARG"
+    ;;
+  disable)
+    if [[ -z "$TASK_ID_ARG" ]]; then
+      echo "Error: task ID required. Usage: nightcrew disable <task-id>" >&2
+      exit 1
+    fi
+    if [[ ! -f "$TASKS_FILE" ]]; then
+      echo "Error: tasks file not found: $TASKS_FILE" >&2
+      exit 1
+    fi
+    exists=$(yq e '.tasks[] | select(.id == "'"$TASK_ID_ARG"'") | .id' "$TASKS_FILE")
+    if [[ -z "$exists" ]]; then
+      echo "Error: task '$TASK_ID_ARG' not found" >&2
+      exit 1
+    fi
+    yq e '(.tasks[] | select(.id == "'"$TASK_ID_ARG"'")).enabled = false' -i "$TASKS_FILE"
+    echo "Disabled: $TASK_ID_ARG"
+    ;;
+  sessions)
+    sessions_dir="$NIGHTCREW_DIR/state/sessions"
+    if [[ ! -d "$sessions_dir" ]]; then
+      if [[ "$JSON_OUTPUT" == "true" ]]; then
+        echo '{"sessions":[]}'
+      else
+        echo "No sessions found."
+      fi
+      exit 0
+    fi
+    dirs=$(ls -1r "$sessions_dir" 2>/dev/null | head -100)
+    if [[ -z "$dirs" ]]; then
+      if [[ "$JSON_OUTPUT" == "true" ]]; then
+        echo '{"sessions":[]}'
+      else
+        echo "No sessions found."
+      fi
+      exit 0
+    fi
+    if [[ "$JSON_OUTPUT" == "true" ]]; then
+      # Build JSON output
+      json_sessions="["
+      first=true
+      while IFS= read -r sid; do
+        [[ -z "$sid" ]] && continue
+        pf="$sessions_dir/$sid/progress.json"
+        if [[ -f "$pf" ]]; then
+          task_count=$(jq '.tasks | length' "$pf" 2>/dev/null || echo "0")
+          total_cost=$(jq -r '.total_cost_cents // 0' "$pf" 2>/dev/null || echo "0")
+          completed=$(jq '[.tasks[] | select(.status == "complete")] | length' "$pf" 2>/dev/null || echo "0")
+          failed_count=$(jq '[.tasks[] | select(.status == "failed")] | length' "$pf" 2>/dev/null || echo "0")
+        else
+          task_count=0; total_cost=0; completed=0; failed_count=0
+        fi
+        [[ "$first" == "true" ]] && first=false || json_sessions="$json_sessions,"
+        json_sessions="$json_sessions{\"id\":\"$sid\",\"task_count\":$task_count,\"total_cost_cents\":$total_cost,\"completed\":$completed,\"failed\":$failed_count}"
+      done <<< "$dirs"
+      json_sessions="$json_sessions]"
+      echo "{\"sessions\":$json_sessions}" | jq '.'
+    else
+      # Human-readable table
+      printf "%-28s %-8s %-10s %-10s %-10s\n" "SESSION" "TASKS" "COST" "PASSED" "FAILED"
+      printf "%-28s %-8s %-10s %-10s %-10s\n" "────────────────────────────" "────────" "──────────" "──────────" "──────────"
+      while IFS= read -r sid; do
+        [[ -z "$sid" ]] && continue
+        pf="$sessions_dir/$sid/progress.json"
+        if [[ -f "$pf" ]]; then
+          task_count=$(jq '.tasks | length' "$pf" 2>/dev/null || echo "0")
+          total_cost=$(jq -r '.total_cost_cents // 0' "$pf" 2>/dev/null || echo "0")
+          completed=$(jq '[.tasks[] | select(.status == "complete")] | length' "$pf" 2>/dev/null || echo "0")
+          failed_count=$(jq '[.tasks[] | select(.status == "failed")] | length' "$pf" 2>/dev/null || echo "0")
+        else
+          task_count=0; total_cost=0; completed=0; failed_count=0
+        fi
+        cost_display="\$$(awk "BEGIN {printf \"%.2f\", $total_cost / 100}")"
+        printf "%-28s %-8s %-10s %-10s %-10s\n" "$sid" "$task_count" "$cost_display" "$completed" "$failed_count"
+      done <<< "$dirs"
+    fi
     ;;
 esac

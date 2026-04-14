@@ -2,6 +2,24 @@
 
 All notable changes to NightCrew are documented here.
 
+## [0.3.3] - 2026-04-14
+
+### Added
+- Smart retry: when implementation fails, NightCrew retries once with the error log injected into the prompt. Controlled per-task via `retry_strategy` field in tasks.yaml (default: "once")
+- Failure diagnosis: `extract_diagnosis()` parses stderr and implementation logs to produce a one-line failure summary stored in `progress.json`
+- Enhanced `nightcrew review` output: failed tasks now show a "Diagnosis:" line and retry status
+- Web dashboard: failed task cards show DIAGNOSIS and RETRY badges
+- New `is_retryable()` function skips retry for segfaults, OOM kills, and safety refusals
+- `LAST_STDERR_FILE` global preserves stderr across the `run_with_retry()` boundary for caller-side diagnosis
+- 20 new bats tests covering `is_retryable`, `extract_diagnosis`, and `build_error_context`
+- `retry_strategy` field added to task schema (`"none"` or `"once"`, default `"once"`)
+
+### Changed
+- Retry resets worktree to pre-implementation commit for a clean-slate second attempt
+- Cost cap is checked before retry to prevent budget overruns
+- Retry gets half the original timeout (minimum 10 minutes)
+- TODOS.md updated: Self-Healing Repair Loop now references smart retry as its precursor
+
 ## [0.3.2] - 2026-04-05
 
 ### Added

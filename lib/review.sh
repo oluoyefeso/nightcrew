@@ -104,10 +104,21 @@ nightcrew_review() {
 
     # Show failure reason
     if [[ "$status" == "failed" ]]; then
-      local reason
+      local reason diagnosis retried
       reason=$(jq -r ".tasks[\"$task_id\"].reason // \"unknown\"" "$state_file")
+      diagnosis=$(jq -r ".tasks[\"$task_id\"].diagnosis // \"\"" "$state_file")
+      retried=$(jq -r ".tasks[\"$task_id\"].retried // \"false\"" "$state_file")
+
       echo "── $task_id (failed) ───────────────────────"
+      if [[ -n "$diagnosis" && "$diagnosis" != "null" ]]; then
+        echo "  Diagnosis: $diagnosis"
+      fi
       echo "  Reason: $reason"
+      if [[ "$retried" == "true" ]]; then
+        local retry_outcome
+        retry_outcome=$(jq -r ".tasks[\"$task_id\"].retry_outcome // \"unknown\"" "$state_file")
+        echo "  Retry: attempted ($retry_outcome)"
+      fi
       local log_file
       log_file=$(jq -r ".tasks[\"$task_id\"].log_file // \"\"" "$state_file")
       if [[ -n "$log_file" && -f "$log_file" ]]; then

@@ -140,3 +140,22 @@ PLAN_EOF
 
   echo "$prompt_file"
 }
+
+# Append error context from a failed attempt to a prompt file for retry
+inject_error_context() {
+  local prompt_file="$1"
+  local error_context="$2"
+  local exit_code="${3:-1}"
+
+  cat >> "$prompt_file" <<RETRY_EOF
+
+## RETRY: Previous Attempt Failed (exit code $exit_code)
+
+The previous implementation attempt failed. Here is the error output.
+Analyze what went wrong and fix it. Do NOT repeat the same approach if it clearly failed.
+
+<error_log>
+$error_context
+</error_log>
+RETRY_EOF
+}

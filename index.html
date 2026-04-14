@@ -842,8 +842,16 @@ select.form-input { appearance: none; cursor: pointer; }
         html += '<div class="card-footer"><a href="' + safeUrl + '" target="_blank" rel="noopener" style="font-family:var(--font-mono); font-size:0.65rem; letter-spacing:0.05em; text-transform:uppercase;">VIEW PR</a>';
         html += '<span class="mono" style="font-size:0.6rem; color:var(--text-muted);">' + esc(t.started_at || '') + '</span></div>';
       }
+      if (t.diagnosis) {
+        html += '<div style="margin-top:0.5rem; font-family:var(--font-mono); font-size:0.65rem; color:var(--error);">'
+          + 'DIAGNOSIS: ' + esc(t.diagnosis) + '</div>';
+      }
+      if (t.retried === 'true') {
+        html += '<div style="margin-top:0.25rem; font-family:var(--font-mono); font-size:0.6rem; color:var(--secondary);">'
+          + 'RETRY: ' + esc(t.retry_outcome || 'unknown') + '</div>';
+      }
       if (t.reason) {
-        html += '<div style="margin-top:0.5rem; font-family:var(--font-mono); font-size:0.65rem; color:var(--error);">' + esc(t.reason) + '</div>';
+        html += '<div style="margin-top:0.25rem; font-family:var(--font-mono); font-size:0.65rem; color:var(--error);">' + esc(t.reason) + '</div>';
       }
       if (t.log_preview) {
         html += '<div class="expand-hint">CLICK TO VIEW LOGS</div>';

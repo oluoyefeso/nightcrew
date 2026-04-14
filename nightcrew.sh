@@ -9,7 +9,7 @@
 set -euo pipefail
 
 NIGHTCREW_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NIGHTCREW_VERSION="0.3.2"
+NIGHTCREW_VERSION="0.3.3"
 
 # Source all lib modules
 for lib in "$NIGHTCREW_DIR"/lib/*.sh; do

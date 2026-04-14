@@ -80,6 +80,12 @@
           "project_path": {
             "type": "string",
             "description": "Absolute path to the target repository. Defaults to config.yaml repo_path."
+          },
+          "retry_strategy": {
+            "type": "string",
+            "enum": ["none", "once"],
+            "default": "once",
+            "description": "How to handle implementation failures. none=fail immediately, once=retry once with error context"
           }
         },
         "additionalProperties": false

@@ -30,6 +30,10 @@ After a task completes, spawn a second Claude session to review the draft PR. By
 
 When a task fails validation, spawn a repair Claude session that reads the validation errors, diagnoses root cause, attempts a fix, and re-validates. Distinct from the Self-Review Loop (which reviews PRs). The repair loop handles pipeline failures: wrong branch, out-of-scope files, failing tests. Requires a catalog of real failure modes before designing the retry logic. Don't build speculatively.
 
+**Precursor shipped:** Smart retry (v0.3.3) handles single-retry with error context injection.
+The `diagnosis` field in `progress.json` builds the failure catalog this TODO was waiting for.
+The full repair loop remains for multi-attempt diagnosis by a separate session.
+
 ## Run Lockfile
 **Priority:** P3 | **Effort:** XS (human: ~30min / CC: ~5min)
 **Depends on:** Nothing

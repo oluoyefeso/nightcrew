@@ -9,6 +9,7 @@ CURRENT_TASK_REPO_DIR=""
 REPO_DIR=""
 LAST_INPUT_TOKENS=0
 LAST_OUTPUT_TOKENS=0
+LAST_STDERR_FILE=""
 
 # Signal handler for clean shutdown
 cleanup_on_signal() {
@@ -296,6 +297,72 @@ preflight_validate() {
   return 0
 }
 
+# Check if a failure is worth retrying (false for segfaults, OOM, safety refusals)
+is_retryable() {
+  local exit_code="$1"
+  local stderr_file="${2:-}"
+  # Segfault / OOM — no point retrying
+  [[ $exit_code -eq 139 || $exit_code -eq 137 ]] && return 1
+  # Safety refusal — won't change on retry
+  if [[ -n "$stderr_file" && -f "$stderr_file" ]]; then
+    grep -qiE "safety|refused|content policy" "$stderr_file" && return 1
+  fi
+  return 0
+}
+
+# Combine stderr + impl log tail into error context for retry prompt
+build_error_context() {
+  local stderr_file="${1:-}"
+  local impl_log="${2:-}"
+  local max_lines="${3:-50}"
+  local context=""
+  if [[ -n "$stderr_file" && -f "$stderr_file" ]]; then
+    context+="=== STDERR ===\n"
+    context+=$(tail -"$max_lines" "$stderr_file" 2>/dev/null || true)
+    context+="\n"
+  fi
+  if [[ -n "$impl_log" && -f "$impl_log" ]]; then
+    context+="=== IMPLEMENTATION LOG (last $max_lines lines) ===\n"
+    context+=$(tail -"$max_lines" "$impl_log" 2>/dev/null || true)
+  fi
+  echo -e "$context"
+}
+
+# Extract a one-line diagnosis from stderr + impl log
+extract_diagnosis() {
+  local stderr_file="${1:-}"
+  local impl_log="${2:-}"
+  local diagnosis=""
+
+  # Priority 1: stderr patterns
+  if [[ -n "$stderr_file" && -f "$stderr_file" ]]; then
+    diagnosis=$(grep -iE "auth.*error|permission denied|unauthorized|forbidden" "$stderr_file" | head -1)
+    [[ -z "$diagnosis" ]] && diagnosis=$(grep -iE "safety|refused|content policy" "$stderr_file" | head -1)
+    [[ -z "$diagnosis" ]] && diagnosis=$(grep -iE "network|connection|timeout|ECONNREFUSED" "$stderr_file" | head -1)
+  fi
+
+  # Priority 2: test output patterns from impl log
+  if [[ -z "$diagnosis" && -n "$impl_log" && -f "$impl_log" ]]; then
+    diagnosis=$(grep -iE "FAIL|AssertionError|expected.*received|Error:|✗" "$impl_log" | tail -1)
+    [[ -z "$diagnosis" ]] && diagnosis=$(grep -iE "SyntaxError|TypeError|ImportError|ModuleNotFoundError" "$impl_log" | tail -1)
+  fi
+
+  # Priority 3: first non-empty stderr line
+  if [[ -z "$diagnosis" && -n "$stderr_file" && -f "$stderr_file" ]]; then
+    diagnosis=$(grep -v '^$' "$stderr_file" | head -1)
+  fi
+
+  # Priority 4: last non-empty impl log line
+  if [[ -z "$diagnosis" && -n "$impl_log" && -f "$impl_log" ]]; then
+    diagnosis=$(grep -v '^$' "$impl_log" | tail -1)
+  fi
+
+  # Fallback
+  [[ -z "$diagnosis" ]] && diagnosis="unknown error"
+  # Truncate to 120 chars
+  echo "${diagnosis:0:120}"
+}
+
 # Run claude -p with rate limit retry and exponential backoff
 run_with_retry() {
   local prompt="$1"
@@ -360,21 +427,23 @@ run_with_retry() {
 
     local stderr_content
     stderr_content=$(cat "$stderr_file" 2>/dev/null || true)
-    rm -f "$stderr_file"
 
     # Timeout (exit code 124 from GNU timeout, or 142 from perl alarm)
     if [[ $exit_code -eq 124 || $exit_code -eq 142 ]]; then
+      rm -f "$stderr_file"
       log_error "Task timed out after ${max_time} minutes"
       return 124
     fi
 
     # Success
     if [[ $exit_code -eq 0 ]]; then
+      rm -f "$stderr_file"
       return 0
     fi
 
     # Rate limit detection
     if echo "$stderr_content" | grep -qiE "rate limit|too many requests|429|capacity|exceeded.*limit"; then
+      rm -f "$stderr_file"
       local sleep_secs=$(( BACKOFF_BASE * (2 ** attempt) ))
       [[ $sleep_secs -gt 3600 ]] && sleep_secs=3600  # cap at 1 hour
 
@@ -387,7 +456,8 @@ run_with_retry() {
       continue
     fi
 
-    # Non-rate-limit failure
+    # Non-rate-limit failure: preserve stderr for caller's smart retry
+    LAST_STDERR_FILE="$stderr_file"
     log_error "claude -p failed with exit code $exit_code"
     if [[ -n "$stderr_content" ]]; then
       log_error "stderr: $stderr_content"
@@ -721,6 +791,8 @@ nightcrew_run() {
     task_max_time=$(yq e ".tasks[$i].max_time_minutes // \"$max_task_time\"" "$tasks_file")
     task_test_cmd=$(yq e ".tasks[$i].test_command // \"\"" "$tasks_file")
     task_custom_tools=$(yq e ".tasks[$i].allowed_tools // \"\"" "$tasks_file")
+    local task_retry_strategy
+    task_retry_strategy=$(yq e ".tasks[$i].retry_strategy // \"once\"" "$tasks_file")
     local task_depends_on
     task_depends_on=$(yq e '.tasks['"$i"'].depends_on // [] | join(" ")' "$tasks_file")
     local task_enabled
@@ -930,6 +1002,10 @@ $task_prompt"
     local impl_log
     impl_log=$(session_log_path "$task_id" "impl")
 
+    # Capture pre-impl state for clean-slate retry
+    local pre_impl_hash
+    pre_impl_hash=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)
+
     local run_exit=0
     run_with_retry "$task_prompt" "$impl_model" "$tools" "$impl_prompt_file" "$task_max_time" "$impl_log" "$worktree_dir" || run_exit=$?
     rm -f "$impl_prompt_file"
@@ -955,15 +1031,81 @@ $task_prompt"
       continue
     fi
 
-    if [[ $run_exit -ne 0 ]]; then
-      commit_changes "$worktree_dir" "WIP: $task_title (failed)"
-      mark_task "failed" "$task_id" "implementation exit code $run_exit"
-      failed=$((failed + 1))
-      log_error "Implementation failed: $task_id"
-      cleanup_worktree "$task_repo_dir" "$task_id"
-      CURRENT_TASK_ID=""
-      CURRENT_TASK_REPO_DIR=""
-      continue
+    if [[ $run_exit -ne 0 && $run_exit -ne 124 ]]; then
+      local should_retry=false
+      local stderr_file="${LAST_STDERR_FILE:-}"
+
+      if is_retryable "$run_exit" "$stderr_file"; then
+        if [[ "$task_retry_strategy" != "none" ]]; then
+          if check_cost_cap "$config_file"; then
+            should_retry=true
+          else
+            log "Skipping retry: cost cap reached"
+          fi
+        fi
+      else
+        log "Skipping retry: non-retryable failure (exit $run_exit)"
+      fi
+
+      if [[ "$should_retry" == "true" ]]; then
+        local error_context
+        error_context=$(build_error_context "$stderr_file" "$impl_log" 50)
+
+        git -C "$worktree_dir" reset --hard "$pre_impl_hash" 2>/dev/null || true
+        log "Smart retry: reset to pre-impl state, retrying with error context..."
+
+        local retry_prompt_file
+        retry_prompt_file=$(build_impl_prompt \
+          "$task_id" "$task_title" "$task_prompt" "$task_goal" \
+          "$task_branch" "$task_files" \
+          "$template_dir" "$worktree_dir" "$base_branch" "$plan_file")
+        inject_error_context "$retry_prompt_file" "$error_context" "$run_exit"
+
+        local retry_timeout=$(( task_max_time / 2 ))
+        [[ $retry_timeout -lt 10 ]] && retry_timeout=10
+
+        run_exit=0
+        run_with_retry "$task_prompt" "$impl_model" "$tools" "$retry_prompt_file" \
+          "$retry_timeout" "$impl_log" "$worktree_dir" || run_exit=$?
+        rm -f "$retry_prompt_file"
+
+        # Track retry cost
+        local retry_in_tokens=$LAST_INPUT_TOKENS
+        local retry_out_tokens=$LAST_OUTPUT_TOKENS
+        local retry_cost
+        retry_cost=$(estimate_cost_cents "$impl_model" "$retry_in_tokens" "$retry_out_tokens")
+        add_cost "$retry_cost"
+        add_tokens "$retry_in_tokens" "$retry_out_tokens"
+
+        set_task_field "$task_id" "retried" "true"
+        if [[ $run_exit -eq 0 ]]; then
+          set_task_field "$task_id" "retry_outcome" "recovered"
+        else
+          set_task_field "$task_id" "retry_outcome" "still_failed"
+        fi
+      fi
+
+      # Final failure handling (runs if no retry OR retry also failed)
+      if [[ $run_exit -ne 0 ]]; then
+        local diagnosis
+        diagnosis=$(extract_diagnosis "$stderr_file" "$impl_log")
+        # Clean up all stderr temp files (original + any retry stderr)
+        rm -f "$stderr_file" "${LAST_STDERR_FILE:-}"
+        LAST_STDERR_FILE=""
+        set_task_field "$task_id" "diagnosis" "$diagnosis"
+        commit_changes "$worktree_dir" "WIP: $task_title (failed)"
+        mark_task "failed" "$task_id" "$diagnosis"
+        failed=$((failed + 1))
+        log_error "Implementation failed: $task_id — $diagnosis"
+        cleanup_worktree "$task_repo_dir" "$task_id"
+        CURRENT_TASK_ID=""
+        CURRENT_TASK_REPO_DIR=""
+        continue
+      else
+        # Retry succeeded — clean up stderr temp files
+        rm -f "$stderr_file" "${LAST_STDERR_FILE:-}"
+        LAST_STDERR_FILE=""
+      fi
     fi
 
     # Commit implementation before review

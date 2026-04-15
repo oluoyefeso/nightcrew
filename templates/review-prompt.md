@@ -201,6 +201,12 @@ Plan completion: [N/M or "no plan file"]
 
 ---
 
+# Output Discipline
+- One-line findings only: [file:line] Problem -> Fix
+- No preamble. No summary at the end.
+- Scope check and plan completion: structured output only.
+- Suppress findings below confidence 5. No "everything looks good" commentary.
+
 # Rules
 
 1. Run `git fetch origin ${BASE_BRANCH} --quiet` before diffing.

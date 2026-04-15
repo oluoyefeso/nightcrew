@@ -1,5 +1,11 @@
 # NightCrew TODOs
 
+## Controlled Benchmark Fixture
+**Priority:** P3 | **Effort:** S (human: ~4h / CC: ~15min)
+**Depends on:** Token compression benchmark subcommand (v0.3.4)
+
+Create a frozen tasks.yaml + test repo for reproducible A/B benchmark comparisons. Currently `nightcrew benchmark` compares two arbitrary sessions, but task complexity differences make token comparisons noisy. A controlled fixture (same tasks, same codebase state) would produce trustworthy numbers for the blog post.
+
 ## Per-Project Protected Branches
 **Priority:** P3 | **Effort:** XS (human: ~30min / CC: ~5min)
 **Depends on:** Multi-project support (v0.3.2)

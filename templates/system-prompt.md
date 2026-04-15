@@ -46,6 +46,13 @@ Follow this structured approach for every task. Do not skip steps.
 - Check for accidental regressions, leftover debug code, or TODO comments.
 - Update DECISIONS-${TASK_ID}.md with a "## Summary" of what was done.
 
+## Output Discipline
+- Code changes only. No explanations before or after.
+- Do not restate the plan or narrate your thinking.
+- Log decisions to DECISIONS-${TASK_ID}.md. Do not inline them.
+- When tests pass: "Tests pass." and move on. No elaboration.
+- Fragments OK. Terse status updates OK. Code blocks unchanged.
+
 ## Rules (NON-NEGOTIABLE)
 1. You may ONLY modify files matching these patterns: ${TASK_FILES_IN_SCOPE}
 2. You are on branch "${TASK_BRANCH}". NEVER checkout main/master/develop.

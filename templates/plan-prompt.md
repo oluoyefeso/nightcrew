@@ -207,6 +207,13 @@ For each: does the plan reuse it, extend it, or replace it? If replacing, why?]
 
 ---
 
+# Output Discipline
+- Structured output only. Follow the Output Format exactly.
+- No preamble ("I'll now analyze..."). Start with the first section heading.
+- One sentence per bullet. No filler words. No hedging.
+- ASCII diagrams: keep them, they're information-dense.
+- Code examples: keep them, they're precise.
+
 # Rules
 
 1. **Be concrete.** Name the file, the function, the line number when referencing existing code.

@@ -974,6 +974,8 @@ $task_prompt"
     plan_cost=$(estimate_cost_cents "$plan_model" "$plan_in_tokens" "$plan_out_tokens")
     add_cost "$plan_cost"
     add_tokens "$plan_in_tokens" "$plan_out_tokens"
+    set_task_field "$task_id" "plan_in_tokens" "$plan_in_tokens"
+    set_task_field "$task_id" "plan_out_tokens" "$plan_out_tokens"
 
     if [[ $plan_exit -ne 0 ]]; then
       log_error "Planning phase failed (exit $plan_exit). Falling back to direct implementation."
@@ -1019,6 +1021,8 @@ $task_prompt"
     add_tokens "$impl_in_tokens" "$impl_out_tokens"
     set_task_field "$task_id" "model" "$impl_model"
     set_task_field "$task_id" "log_file" "$impl_log"
+    set_task_field "$task_id" "impl_in_tokens" "$impl_in_tokens"
+    set_task_field "$task_id" "impl_out_tokens" "$impl_out_tokens"
 
     if [[ $run_exit -eq 124 ]]; then
       commit_changes "$worktree_dir" "WIP: $task_title (timed out)"
@@ -1076,6 +1080,11 @@ $task_prompt"
         retry_cost=$(estimate_cost_cents "$impl_model" "$retry_in_tokens" "$retry_out_tokens")
         add_cost "$retry_cost"
         add_tokens "$retry_in_tokens" "$retry_out_tokens"
+        # Accumulate retry tokens into per-phase impl totals
+        impl_in_tokens=$((impl_in_tokens + retry_in_tokens))
+        impl_out_tokens=$((impl_out_tokens + retry_out_tokens))
+        set_task_field "$task_id" "impl_in_tokens" "$impl_in_tokens"
+        set_task_field "$task_id" "impl_out_tokens" "$impl_out_tokens"
 
         set_task_field "$task_id" "retried" "true"
         if [[ $run_exit -eq 0 ]]; then
@@ -1143,6 +1152,8 @@ $task_prompt"
     review_cost=$(estimate_cost_cents "$review_model" "$review_in_tokens" "$review_out_tokens")
     add_cost "$review_cost"
     add_tokens "$review_in_tokens" "$review_out_tokens"
+    set_task_field "$task_id" "review_in_tokens" "$review_in_tokens"
+    set_task_field "$task_id" "review_out_tokens" "$review_out_tokens"
 
     if [[ $review_exit -ne 0 ]]; then
       log "Warning: Review phase failed (exit $review_exit). Proceeding with unreviewed code."

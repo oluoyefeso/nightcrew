@@ -2,6 +2,15 @@
 
 All notable changes to NightCrew are documented here.
 
+## [0.3.4] - 2026-04-15
+
+### Added
+- Terse output directives: all three pipeline templates now instruct Claude to skip narration and produce structured output only (estimated 20-40% output token reduction)
+- Section-aware plan compression: `compress_plan_for_impl()` strips review-only sections (NOT In Scope, Decisions Log) before injecting the plan into the implementation prompt, reducing inter-phase token transfer
+- `nightcrew benchmark` subcommand: compares token usage between two archived sessions with a per-phase, per-task breakdown table
+- Per-phase token tracking: `plan_in_tokens`, `plan_out_tokens`, `impl_in_tokens`, `impl_out_tokens`, `review_in_tokens`, `review_out_tokens` fields in progress.json
+- 10 new bats tests covering plan compression and benchmark subcommand
+
 ## [0.3.3] - 2026-04-14
 
 ### Added

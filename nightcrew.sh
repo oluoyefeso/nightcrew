@@ -9,7 +9,7 @@
 set -euo pipefail
 
 NIGHTCREW_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NIGHTCREW_VERSION="0.3.3"
+NIGHTCREW_VERSION="0.3.4"
 
 # Source all lib modules
 for lib in "$NIGHTCREW_DIR"/lib/*.sh; do
@@ -66,10 +66,12 @@ OPEN_DASHBOARD=false
 JSON_OUTPUT=false
 SERVE_PORT=3721
 TASK_ID_ARG=""
+BENCHMARK_ARGS=()
+
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    run|review|serve|preflight|config|sessions)
+    run|review|serve|preflight|config|sessions|benchmark)
       COMMAND="$1"
       shift
       ;;
@@ -114,9 +116,14 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     *)
-      echo "Unknown option: $1"
-      usage
-      exit 1
+      if [[ "$COMMAND" == "benchmark" ]]; then
+        BENCHMARK_ARGS+=("$1")
+        shift
+      else
+        echo "Unknown option: $1"
+        usage
+        exit 1
+      fi
       ;;
   esac
 done
@@ -248,5 +255,14 @@ case "$COMMAND" in
         printf "%-28s %-8s %-10s %-10s %-10s\n" "$sid" "$task_count" "$cost_display" "$completed" "$failed_count"
       done <<< "$dirs"
     fi
+    ;;
+  benchmark)
+    if [[ ${#BENCHMARK_ARGS[@]} -lt 2 ]]; then
+      echo "Usage: nightcrew benchmark <session-a> <session-b>" >&2
+      echo "Compare token usage between two sessions." >&2
+      echo "List sessions with: nightcrew sessions" >&2
+      exit 1
+    fi
+    nightcrew_benchmark "${BENCHMARK_ARGS[0]}" "${BENCHMARK_ARGS[1]}" "$NIGHTCREW_DIR"
     ;;
 esac

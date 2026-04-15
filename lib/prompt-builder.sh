@@ -99,6 +99,38 @@ build_review_prompt() {
 }
 
 # Build the implementation prompt with plan context injected
+# Compress a plan file for implementation injection: keep sections the impl
+# agent needs, strip review-only sections.
+# Falls back to full plan if no expected headings are found.
+compress_plan_for_impl() {
+  local plan_file="$1"
+  if [[ ! -f "$plan_file" ]]; then
+    return
+  fi
+  # Check if the plan has any of the expected section headings
+  local has_headings=0
+  grep -qE '^## (Scope Decision|What Already Exists|Architecture Decisions|Implementation Steps|Test Plan|Failure Modes)' "$plan_file" 2>/dev/null && has_headings=1
+  if [[ "$has_headings" -eq 0 ]]; then
+    log "Warning: plan has no expected section headings, skipping compression"
+    cat "$plan_file"
+    return
+  fi
+  # Keep implementation-relevant sections, strip review-only sections
+  # Kept: Scope Decision, What Already Exists, Architecture Decisions,
+  #        Implementation Steps, Test Plan, Failure Modes
+  # Stripped: NOT In Scope, Decisions Log
+  awk '
+    /^## /{found=0}
+    /^## Scope Decision/{found=1}
+    /^## What Already Exists/{found=1}
+    /^## Architecture Decisions/{found=1}
+    /^## Implementation Steps/{found=1}
+    /^## Test Plan/{found=1}
+    /^## Failure Mode/{found=1}
+    found{print}
+  ' "$plan_file" | sed '/^[[:space:]]*$/N;/^\n$/d'
+}
+
 build_impl_prompt() {
   local task_id="$1"
   local task_title="$2"
@@ -121,7 +153,7 @@ build_impl_prompt() {
   # If a plan file exists, inject it into the prompt
   if [[ -n "$plan_file" && -f "$plan_file" ]]; then
     local plan_content
-    plan_content=$(cat "$plan_file")
+    plan_content=$(compress_plan_for_impl "$plan_file")
     cat >> "$prompt_file" <<PLAN_EOF
 
 ## Implementation Plan (FOLLOW THIS)

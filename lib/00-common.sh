@@ -29,13 +29,19 @@ config_get() {
 }
 
 # Check if a branch is protected
+# Usage: is_protected_branch branch [config_file] [extra_branches]
+# extra_branches is a newline-separated list of additional protected branches
+# (per-task list); it is unioned with the global list from config.yaml.
 is_protected_branch() {
   local branch="$1"
   local config_file="${2:-./config.yaml}"
-  local protected
+  local extra_branches="${3:-}"
 
-  protected=$(yq e '.protected_branches[]' "$config_file" 2>/dev/null || echo -e "main\nmaster\ndevelop")
-  echo "$protected" | grep -qx "$branch"
+  local global_protected task_protected all_protected
+  global_protected=$(yq e '.protected_branches[]' "$config_file" 2>/dev/null || echo -e "main\nmaster\ndevelop")
+  task_protected="$extra_branches"
+  all_protected=$(printf '%s\n%s\n' "$global_protected" "$task_protected" | awk 'NF' | sort -u)
+  echo "$all_protected" | grep -qx "$branch"
 }
 
 # macOS timeout fallback (GNU timeout not available by default)

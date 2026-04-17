@@ -31,6 +31,8 @@ tasks:
       - internal/api/**
     max_time_minutes: 30
     test_command: "go test ./internal/api/..."
+    # Per-task protected branches (merged with config.yaml list; never removes global protection)
+    # protected_branches: [production]
 
   - id: user-store-tests
     title: "Add tests for UserStore CRUD operations"

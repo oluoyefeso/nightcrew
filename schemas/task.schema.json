@@ -81,6 +81,11 @@
             "type": "string",
             "description": "Absolute path to the target repository. Defaults to config.yaml repo_path."
           },
+          "protected_branches": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Optional per-task list of branches NightCrew must never checkout or push to. Merged (union) with config.yaml protected_branches."
+          },
           "retry_strategy": {
             "type": "string",
             "enum": ["none", "once"],

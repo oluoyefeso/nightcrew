@@ -200,7 +200,11 @@ tasks:
     project_path: /Users/me/widget-frontend
 ```
 
-Each task creates its worktree under the specified project's `.worktrees/` directory. Tasks without `project_path` use the default `repo_path` from config.yaml. The `protected_branches` list applies to all projects.
+Each task creates its worktree under the specified project's `.worktrees/` directory. Tasks without `project_path` use the default `repo_path` from config.yaml. The `protected_branches` list applies to all projects. Each task may also declare its own `protected_branches` array to add repo-specific protections (the per-task list is merged with the global list, never replacing it):
+
+```yaml
+    protected_branches: [production]
+```
 
 ## Safety Guardrails
 

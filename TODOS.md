@@ -6,12 +6,6 @@
 
 Create a frozen tasks.yaml + test repo for reproducible A/B benchmark comparisons. Currently `nightcrew benchmark` compares two arbitrary sessions, but task complexity differences make token comparisons noisy. A controlled fixture (same tasks, same codebase state) would produce trustworthy numbers for the blog post.
 
-## Per-Project Protected Branches
-**Priority:** P3 | **Effort:** XS (human: ~30min / CC: ~5min)
-**Depends on:** Multi-project support (v0.3.2)
-
-Currently `protected_branches` from config.yaml applies uniformly to all projects. For real multi-project use, users may need per-project branch protection (e.g., repo A protects `main`, repo B protects `production`). Consider adding optional `protected_branches` to the per-task `project_path` config or a separate projects section in config.yaml.
-
 ## v2: Pipeline-First Task Format
 **Priority:** P2 | **Effort:** S (human: ~30min / CC: ~10min)
 **Depends on:** Real overnight usage data from v1
@@ -36,6 +30,10 @@ The full repair loop remains for multi-attempt diagnosis by a separate session.
 
 
 ## Completed
+
+### Per-Project Protected Branches
+**Completed:** v0.3.x (2026-04-17)
+Added optional `protected_branches` field to task schema. `is_protected_branch()` now accepts a third argument (per-task list, newline-separated); the union of global + per-task is checked. README.md and tasks.yaml.example updated with per-task examples. 6 new bats tests covering union, de-dup, empty-extra, and yaml-driven cases.
 
 ### Preflight gitignore check
 **Completed:** v0.3.x (2026-04-17)

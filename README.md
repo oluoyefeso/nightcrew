@@ -323,6 +323,10 @@ Run `./nightcrew.sh review` for a formatted summary, or `./nightcrew.sh review -
 
 See [nightcrew-architecture.md](nightcrew-architecture.md) for the full design document including the orchestrator loop, model routing matrix, prompt template system, and implementation roadmap.
 
+## Design System
+
+See [DESIGN.md](DESIGN.md) for the UI design system ("The Silent Sentinel") — color tokens, typography, surface hierarchy, and interaction patterns used across the web UI.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, project structure, and how to submit PRs.

@@ -6,12 +6,6 @@
 
 Create a frozen tasks.yaml + test repo for reproducible A/B benchmark comparisons. Currently `nightcrew benchmark` compares two arbitrary sessions, but task complexity differences make token comparisons noisy. A controlled fixture (same tasks, same codebase state) would produce trustworthy numbers for the blog post.
 
-## Per-Project Protected Branches
-**Priority:** P3 | **Effort:** XS (human: ~30min / CC: ~5min)
-**Depends on:** Multi-project support (v0.3.2)
-
-Currently `protected_branches` from config.yaml applies uniformly to all projects. For real multi-project use, users may need per-project branch protection (e.g., repo A protects `main`, repo B protects `production`). Consider adding optional `protected_branches` to the per-task `project_path` config or a separate projects section in config.yaml.
-
 ## v2: Pipeline-First Task Format
 **Priority:** P2 | **Effort:** S (human: ~30min / CC: ~10min)
 **Depends on:** Real overnight usage data from v1
@@ -50,6 +44,10 @@ A task whose prompt or `files_in_scope` references files that are gitignored (or
 Preflight should walk each task's `files_in_scope` globs (and optionally any paths parsed from the prompt), run `git check-ignore -v` on each, and refuse to queue a task that targets an ignored file. Example error: `Task promote-design-md targets design/nocturnal_command/DESIGN.md which is gitignored (.gitignore:7 "design/"). Remove the pattern, choose a different source path, or add the file to the task's own output scope.` Start simple with files_in_scope glob checking; add prompt-path parsing only if real failures keep slipping through.
 
 ## Completed
+
+### Per-Project Protected Branches
+**Completed:** v0.3.x (2026-04-17)
+Added optional `protected_branches` field to task schema. `is_protected_branch()` now accepts a third argument (per-task list, newline-separated); the union of global + per-task is checked. README.md and tasks.yaml.example updated with per-task examples. 6 new bats tests covering union, de-dup, empty-extra, and yaml-driven cases.
 
 ### Promote DESIGN.md to Project Root
 **Completed:** v0.3.x (2026-04-17)

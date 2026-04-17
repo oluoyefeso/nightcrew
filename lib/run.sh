@@ -802,6 +802,8 @@ nightcrew_run() {
     task_enabled=$(yq e ".tasks[$i].enabled // \"true\"" "$tasks_file")
     local task_project_path
     task_project_path=$(yq e ".tasks[$i].project_path // \"\"" "$tasks_file")
+    local task_protected_branches
+    task_protected_branches=$(yq e '.tasks['"$i"'].protected_branches[]?' "$tasks_file" 2>/dev/null)
 
     log "────────────────────────────────────────"
     log "Task $((i+1))/$task_count: $task_title [$task_id]"
@@ -852,7 +854,7 @@ nightcrew_run() {
     fi
 
     # Protected branch check
-    if is_protected_branch "$task_branch" "$config_file"; then
+    if is_protected_branch "$task_branch" "$config_file" "$task_protected_branches"; then
       log_error "Refusing to work on protected branch: $task_branch"
       mark_task "failed" "$task_id" "protected branch"
       failed=$((failed + 1))

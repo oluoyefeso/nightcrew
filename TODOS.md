@@ -28,6 +28,23 @@ When a task fails validation, spawn a repair Claude session that reads the valid
 The `diagnosis` field in `progress.json` builds the failure catalog this TODO was waiting for.
 The full repair loop remains for multi-attempt diagnosis by a separate session.
 
+## Rate-limit retry detection reads wrong stream
+**Priority:** P2 | **Effort:** XS (human: ~30min / CC: ~5min)
+**Depends on:** Nothing
+
+`lib/run.sh:464` greps `$stderr_content` for rate-limit keywords (`rate limit|too many requests|429|capacity|exceeded.*limit`). But when `--output-format json` is in use (the default path now), Claude CLI emits the 429 inside the JSON *stdout* as `api_error_status:429`, not stderr. The retry loop therefore never detects the rate limit and burns through all 5 attempts in under 2 seconds instead of applying the specced 5m/10m/20m/40m/60m exponential backoff.
+
+Observed during self-dogfood run #2: a burst of Opus 4.7 plan requests tripped a rate limit, Task 3 hit `api_error_status:429` on plan → fallback impl → 429 → 5 retries in 2 seconds → marked failed. A manual retry 55 minutes later succeeded on the first try.
+
+Fix: in the retry-detection block, also parse the JSON output file (when `JSON_OUTPUT_SUPPORTED == true`) and check `.api_error_status == 429` or `.is_error == true && .subtype == "error"`. Emit the same backoff path. Add a bats test that simulates a 429-in-stdout-JSON response and verifies the sleep schedule.
+
+## Opus 4.7 plan phase occasionally exits 1
+**Priority:** P3 | **Effort:** S (human: ~2h / CC: ~15min)
+**Depends on:** Reproduce the failure mode
+
+Observed during self-dogfood run #2: Opus 4.7 plan phase exited 1 twice out of four attempts. Once after 7 minutes (Task 2: preflight-gitignore-check — a long, detailed prompt) and once after 32 seconds (Task 3: per-project-protected-branches, first attempt — actually a 429 disguised as exit 1, see the rate-limit TODO). Nightcrew's fallback-to-direct-impl saved both: Task 2 shipped PR #12 via Sonnet-only, Task 3's retry succeeded on Opus a session later.
+
+The long-plan failure is the one worth investigating. Hypotheses: (a) Opus hit max-turn limit while assembling the very detailed plan, (b) a safety trip on some prompt content, (c) a transient Claude CLI / API issue. Capture the full stderr + JSON output for failed plan phases into the session archive (`state/sessions/<ts>/logs/<task>-plan.log` already captures some — verify it includes stderr on non-zero exit) and log the exit context (JSON `.is_error`, `.subtype`, any `.error` field). Enough signal to triage when this happens again.
 
 ## Completed
 

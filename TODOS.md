@@ -12,12 +12,6 @@ Create a frozen tasks.yaml + test repo for reproducible A/B benchmark comparison
 
 Currently `protected_branches` from config.yaml applies uniformly to all projects. For real multi-project use, users may need per-project branch protection (e.g., repo A protects `main`, repo B protects `production`). Consider adding optional `protected_branches` to the per-task `project_path` config or a separate projects section in config.yaml.
 
-## Promote DESIGN.md to Project Root
-**Priority:** P3 | **Effort:** XS (human: ~15min / CC: ~2min)
-**Depends on:** Nothing
-
-The design system spec ("The Silent Sentinel") lives at `design/nocturnal_command/DESIGN.md`. Move or symlink it to the project root as `DESIGN.md` so contributors can find it. The design system applies to all UI, not just the original mockup directory.
-
 ## v2: Pipeline-First Task Format
 **Priority:** P2 | **Effort:** S (human: ~30min / CC: ~10min)
 **Depends on:** Real overnight usage data from v1
@@ -56,6 +50,10 @@ A task whose prompt or `files_in_scope` references files that are gitignored (or
 Preflight should walk each task's `files_in_scope` globs (and optionally any paths parsed from the prompt), run `git check-ignore -v` on each, and refuse to queue a task that targets an ignored file. Example error: `Task promote-design-md targets design/nocturnal_command/DESIGN.md which is gitignored (.gitignore:7 "design/"). Remove the pattern, choose a different source path, or add the file to the task's own output scope.` Start simple with files_in_scope glob checking; add prompt-path parsing only if real failures keep slipping through.
 
 ## Completed
+
+### Promote DESIGN.md to Project Root
+**Completed:** v0.3.x (2026-04-17)
+Copied `design/nocturnal_command/DESIGN.md` to `DESIGN.md` at project root (design/ stays gitignored for local mockups). Added design-system pointer to README.md and CONTRIBUTING.md. Completed out-of-band because the worktree can't see gitignored source files.
 
 ### Run Lockfile
 **Completed:** v0.3.x (2026-04-17)

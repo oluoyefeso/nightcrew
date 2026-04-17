@@ -2,6 +2,23 @@
 
 All notable changes to NightCrew are documented here.
 
+## [0.4.0.0] - 2026-04-17
+
+### Added
+- **Run lockfile** at `state/.nightcrew.lock` prevents two concurrent `nightcrew run` invocations from corrupting shared state. Global scope (one run at a time), atomic `mkdir`-based acquisition (no `flock` dependency), stale-PID reclaim for dead holders, trap-based release on normal exit plus SIGINT/SIGTERM/SIGHUP.
+- **Preflight gitignore validation**: `files_in_scope` globs are checked against `git check-ignore` before a task runs. Gitignored sources fail preflight with a per-glob, per-path error that references the exact `.gitignore:<line>` pattern responsible. Prevents the "doomed plan phase burns tokens before failing validation" failure mode.
+- **Per-project protected branches**: tasks accept an optional `protected_branches: [...]` field that is merged (union) with the config-level list, never replaced. Repo A can protect `main`, repo B can protect `production`, in the same overnight queue.
+- **Design system spec at project root**: `DESIGN.md` ("The Silent Sentinel") promoted from `design/nocturnal_command/` to the project root for discoverability. README.md and CONTRIBUTING.md updated with pointers.
+
+### Changed
+- **Default tool whitelists broadened** for `implementation`, `refactor`, and `test` task types. Added `git mv`, `git rm`, `bats`, and read-side shell helpers (`test`, `grep`, `ls`, `cat`, `find`, `wc`) so realistic file-level refactors no longer require every task to hand-build a per-task `allowed_tools` override. `research` stays narrow (read-only); custom overrides still win when specified.
+
+### Tests
+- 23 new bats tests across lockfile (5), gitignore preflight (6), protected branches (6), and tool routing (6).
+
+### Notes
+- This release was produced by two self-dogfood runs in which NightCrew shipped its own features. Four draft PRs (#10, #11, #12, #13) were generated autonomously by `./nightcrew.sh run` and merged into main after human review.
+
 ## [0.3.4] - 2026-04-15
 
 ### Added

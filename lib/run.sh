@@ -733,6 +733,9 @@ nightcrew_run() {
   local config_file="$2"
   local dry_run="${3:-false}"
 
+  acquire_run_lock
+  trap release_run_lock EXIT
+
   trap cleanup_on_signal SIGINT SIGTERM SIGHUP
 
   # Pre-flight: check dependencies are installed

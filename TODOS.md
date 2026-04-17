@@ -46,6 +46,12 @@ The full repair loop remains for multi-attempt diagnosis by a separate session.
 
 Add a flock-based lockfile (e.g., `.worktrees/.nightcrew.lock`) to prevent concurrent NightCrew runs colliding on the same repo. Two runs targeting the same `.worktrees/` directory would corrupt worktree state. Check for lock at startup, fail with a clear message if another run is active.
 
+## Broaden default tool whitelist for implementation/refactor tasks
+**Priority:** P3 | **Effort:** XS (human: ~20min / CC: ~5min)
+**Depends on:** Nothing
+
+`lib/tool-router.sh` defaults for `implementation` and `refactor` tasks are missing common operations that realistic file-level refactors need: `git mv`, `git rm`, `bats`, `Bash(test*)`, `Bash(grep*)`, `Bash(ls*)`, `Bash(cat*)`. Surfaced during the first self-dogfood run where both queued tasks required per-task `allowed_tools` overrides to succeed. Options: (a) broaden the default whitelist, (b) add a new task type like `filesystem-refactor`, or (c) split the whitelist by verb (git-ops, test-runners, read-helpers) so task prompts can opt in. The override field already works, but forcing every task to hand-build a whitelist is friction the tool shouldn't impose.
+
 ## Completed
 
 ### Multi-Project Support

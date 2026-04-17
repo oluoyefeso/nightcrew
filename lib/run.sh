@@ -293,6 +293,25 @@ preflight_validate() {
   fi
   checks_passed=$((checks_passed + 1))
 
+  # 7. files_in_scope gitignore check
+  checks_total=$((checks_total + 1))
+  local gi_tmpfile
+  gi_tmpfile=$(mktemp /tmp/nightcrew-gitignore-XXXXXXXX)
+  if check_files_in_scope_gitignored "$tasks_file" "$config_file" 2>"$gi_tmpfile"; then
+    rm -f "$gi_tmpfile"
+    log "  [OK] files_in_scope paths are tracked (no gitignored targets)"
+    checks_passed=$((checks_passed + 1))
+  else
+    local gi_violation_count
+    gi_violation_count=$(grep -c "\[GITIGNORED\]" "$gi_tmpfile" 2>/dev/null || echo "0")
+    log_error "PREFLIGHT: Files-in-scope gitignore check: $gi_violation_count violation(s)"
+    while IFS= read -r gi_line; do
+      [[ -n "$gi_line" ]] && log_error "$gi_line"
+    done < "$gi_tmpfile"
+    rm -f "$gi_tmpfile"
+    return 1
+  fi
+
   log "PREFLIGHT: $checks_passed/$checks_total checks passed ($checks_warned warnings)"
   return 0
 }
@@ -666,6 +685,24 @@ nightcrew_preflight() {
       checks+=('{"name":"bats","status":"warn","detail":"not installed, tests wont run"}')
       warned=$((warned + 1))
     fi
+
+    # 8. files_in_scope gitignore check
+    local gi_json_tmp
+    gi_json_tmp=$(mktemp /tmp/nightcrew-gitignore-XXXXXXXX)
+    local gi_json_exit=0
+    if [[ -f "$tasks_file" ]]; then
+      check_files_in_scope_gitignored "$tasks_file" "$config_file" 2>"$gi_json_tmp" || gi_json_exit=$?
+    fi
+    if [[ $gi_json_exit -eq 0 ]]; then
+      checks+=('{"name":"files_in_scope_gitignore","status":"pass","detail":"no gitignored targets"}')
+      passed=$((passed + 1))
+    else
+      local gi_json_count
+      gi_json_count=$(grep -c "\[GITIGNORED\]" "$gi_json_tmp" 2>/dev/null || echo "0")
+      checks+=('{"name":"files_in_scope_gitignore","status":"fail","detail":"'"$gi_json_count"' gitignored target(s) in files_in_scope"}')
+      failed_count=$((failed_count + 1))
+    fi
+    rm -f "$gi_json_tmp"
 
     # Output JSON
     local checks_json

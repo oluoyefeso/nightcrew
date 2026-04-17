@@ -29,25 +29,19 @@ The `diagnosis` field in `progress.json` builds the failure catalog this TODO wa
 The full repair loop remains for multi-attempt diagnosis by a separate session.
 
 
-## Broaden default tool whitelist for implementation/refactor tasks
-**Priority:** P3 | **Effort:** XS (human: ~20min / CC: ~5min)
-**Depends on:** Nothing
-
-`lib/tool-router.sh` defaults for `implementation` and `refactor` tasks are missing common operations that realistic file-level refactors need: `git mv`, `git rm`, `bats`, `Bash(test*)`, `Bash(grep*)`, `Bash(ls*)`, `Bash(cat*)`. Surfaced during the first self-dogfood run where both queued tasks required per-task `allowed_tools` overrides to succeed. Options: (a) broaden the default whitelist, (b) add a new task type like `filesystem-refactor`, or (c) split the whitelist by verb (git-ops, test-runners, read-helpers) so task prompts can opt in. The override field already works, but forcing every task to hand-build a whitelist is friction the tool shouldn't impose.
-
-## Preflight gitignore + files-in-scope validation
-**Priority:** P2 | **Effort:** S (human: ~2h / CC: ~15min)
-**Depends on:** Nothing
-
-A task whose prompt or `files_in_scope` references files that are gitignored (or otherwise not tracked in git) will burn plan + impl tokens before the validator catches the no-op. Surfaced during the first self-dogfood run: "Promote DESIGN.md to project root" failed because `design/` is in `.gitignore` — the worktree had no source file for Sonnet to move. Cost: ~$0.80 of wasted tokens (plan phase alone) plus ~5 minutes of wall-clock before failure.
-
-Preflight should walk each task's `files_in_scope` globs (and optionally any paths parsed from the prompt), run `git check-ignore -v` on each, and refuse to queue a task that targets an ignored file. Example error: `Task promote-design-md targets design/nocturnal_command/DESIGN.md which is gitignored (.gitignore:7 "design/"). Remove the pattern, choose a different source path, or add the file to the task's own output scope.` Start simple with files_in_scope glob checking; add prompt-path parsing only if real failures keep slipping through.
-
 ## Completed
 
 ### Per-Project Protected Branches
 **Completed:** v0.3.x (2026-04-17)
 Added optional `protected_branches` field to task schema. `is_protected_branch()` now accepts a third argument (per-task list, newline-separated); the union of global + per-task is checked. README.md and tasks.yaml.example updated with per-task examples. 6 new bats tests covering union, de-dup, empty-extra, and yaml-driven cases.
+
+### Preflight gitignore check
+**Completed:** v0.3.x (2026-04-17)
+Added `lib/preflight-gitignore.sh` with `check_files_in_scope_gitignored()`. Wired into `preflight_check` + `preflight_json` in `lib/run.sh`. Fails fast with per-task, per-glob, gitignore-line-referenced error messages. 6 bats tests in `tests/preflight-gitignore.bats` covering literal paths, glob expansion, multi-project, and no-op cases. Prevents the token-burn-on-doomed-task failure mode from the first self-dogfood run.
+
+### Broaden default tool whitelist
+**Completed:** v0.3.x (2026-04-17)
+Expanded `implementation`, `refactor`, and `test` default tool whitelists in `lib/tool-router.sh` to include `git mv`, `git rm`, `bats`, and read-side shell helpers (`test`, `grep`, `ls`, `cat`, `find`, `wc`). `research` stays narrow. Custom overrides still take precedence. 6 new bats tests in `tests/tool-routing.bats`.
 
 ### Promote DESIGN.md to Project Root
 **Completed:** v0.3.x (2026-04-17)

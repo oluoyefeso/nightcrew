@@ -694,7 +694,7 @@ nightcrew_preflight() {
       check_files_in_scope_gitignored "$tasks_file" "$config_file" 2>"$gi_json_tmp" || gi_json_exit=$?
     fi
     if [[ $gi_json_exit -eq 0 ]]; then
-      checks+=('{"name":"files_in_scope_gitignore","status":"pass","detail":"no gitignored targets"}')
+      checks+=('{"name":"files_in_scope_gitignore","status":"ok","detail":"no gitignored targets"}')
       passed=$((passed + 1))
     else
       local gi_json_count

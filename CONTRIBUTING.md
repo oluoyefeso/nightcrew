@@ -66,6 +66,7 @@ nightcrew/
     validate.sh              # Post-task scope, secret, and test checks
     cost-tracker.sh          # Token-based and flat-rate cost estimation
     review.sh                # Morning review CLI dashboard
+    benchmark.sh             # Token usage comparison between sessions
   templates/
     plan-prompt.md           # Phase 1: Engineering planning prompt (Opus)
     system-prompt.md         # Phase 2: Implementation prompt (Sonnet)

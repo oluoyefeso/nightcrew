@@ -166,6 +166,7 @@ nightcrew.sh config [OPTIONS]     Show resolved configuration
 nightcrew.sh enable <task-id>     Enable a task
 nightcrew.sh disable <task-id>    Disable a task
 nightcrew.sh sessions [OPTIONS]   List archived sessions
+nightcrew.sh benchmark <A> <B>    Compare token usage between two sessions
 
 Options:
   --tasks FILE      Path to tasks.yaml (default: ./tasks.yaml)
@@ -220,6 +221,51 @@ If Claude hits a rate limit, NightCrew automatically:
 - Sleeps with exponential backoff (5m, 10m, 20m, 40m, 60m)
 - Retries up to 5 times
 - Resumes where it left off
+
+## Token Economics
+
+NightCrew is a machine-to-machine pipeline. Claude doesn't need to narrate what it's doing, and the review phase doesn't need to see every section of the plan. v0.3.4 added three compression layers to cut token waste:
+
+1. **Terse output directives** in all 3 templates tell Claude to skip preambles and narration
+2. **Section-aware plan compression** strips review-only sections before injecting the plan into the implementation prompt
+3. **Per-phase token tracking** in `progress.json` + a `nightcrew benchmark` subcommand for measuring the savings
+
+Compare any two archived sessions with:
+
+```bash
+./nightcrew.sh benchmark <session-a> <session-b>
+```
+
+Example output (3-task demo session, baseline vs compressed):
+
+```
+TOKEN BENCHMARK: demo-baseline vs demo-compressed
+═══════════════════════════════════════════════════════════
+Task                 | Phase    |   Baseline | Compressed |      Delta | Savings
+─────────────────────────────────────────────────────────────────
+add-user-auth        | plan     |       6300 |       5700 |       -600 |   -10%
+add-user-auth        | impl     |      21200 |      15500 |      -5700 |   -27%
+add-user-auth        | review   |       5100 |       4600 |       -500 |   -10%
+add-user-auth        | TOTAL    |      32600 |      25800 |      -6800 |   -21%
+─────────────────────────────────────────────────────────────────
+refactor-api-client  | plan     |       5700 |       5100 |       -600 |   -11%
+refactor-api-client  | impl     |      16000 |      11700 |      -4300 |   -27%
+refactor-api-client  | review   |       4000 |       3650 |       -350 |    -9%
+refactor-api-client  | TOTAL    |      25700 |      20450 |      -5250 |   -20%
+─────────────────────────────────────────────────────────────────
+add-rate-limiter     | plan     |       5000 |       4500 |       -500 |   -10%
+add-rate-limiter     | impl     |      13700 |      10000 |      -3700 |   -27%
+add-rate-limiter     | review   |       3400 |       3150 |       -250 |    -7%
+add-rate-limiter     | TOTAL    |      22100 |      17650 |      -4450 |   -20%
+─────────────────────────────────────────────────────────────────
+SESSION TOTAL        |          |      80400 |      63900 |     -16500 |   -21%
+ESTIMATED COST       |          |      $2.17 |      $1.73 |     $-0.44 |   -21%
+═══════════════════════════════════════════════════════════
+```
+
+Numbers above are from synthetic fixtures for illustration. Real savings vary by task complexity and codebase. The implementation phase sees the biggest reduction because that's where plan compression and terse output stack.
+
+Per-task `retry_strategy: none` in `tasks.yaml` disables smart retry for individual tasks if you want maximum predictability over compression.
 
 ## Running on a Schedule
 

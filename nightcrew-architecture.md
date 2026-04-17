@@ -309,6 +309,11 @@ fi
 
 This is the "pause and retry on refresh" logic.
 
+**Per-phase token tracking (v0.3.4):** `progress.json` stores `plan_in_tokens`,
+`plan_out_tokens`, `impl_in_tokens`, `impl_out_tokens`, `review_in_tokens`,
+`review_out_tokens` per task. Retry tokens accumulate into the impl phase totals.
+Compare sessions with `nightcrew benchmark <A> <B>`.
+
 ### How It Works
 
 ```
@@ -531,6 +536,12 @@ Output: `PLAN-{task-id}.md` — a structured plan with decisions locked in, no o
 The implementation prompt includes the original task PLUS the plan injected
 as a `<plan>` block. Sonnet follows the plan precisely. If it deviates, it
 documents why in `DECISIONS-{task-id}.md`.
+
+**Plan compression (v0.3.4):** Before injection, `compress_plan_for_impl()` in
+`lib/prompt-builder.sh` strips review-only sections (NOT In Scope, Decisions Log)
+from the plan. Failure Modes and Implementation Steps are kept. Full plan stays
+on disk as `PLAN-{task-id}.md` for human reference. See the Token Economics
+section in README.md.
 
 ### Phase 3: Review (`templates/review-prompt.md`) — Sonnet
 

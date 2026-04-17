@@ -40,11 +40,6 @@ When a task fails validation, spawn a repair Claude session that reads the valid
 The `diagnosis` field in `progress.json` builds the failure catalog this TODO was waiting for.
 The full repair loop remains for multi-attempt diagnosis by a separate session.
 
-## Run Lockfile
-**Priority:** P3 | **Effort:** XS (human: ~30min / CC: ~5min)
-**Depends on:** Nothing
-
-Add a flock-based lockfile (e.g., `.worktrees/.nightcrew.lock`) to prevent concurrent NightCrew runs colliding on the same repo. Two runs targeting the same `.worktrees/` directory would corrupt worktree state. Check for lock at startup, fail with a clear message if another run is active.
 
 ## Broaden default tool whitelist for implementation/refactor tasks
 **Priority:** P3 | **Effort:** XS (human: ~20min / CC: ~5min)
@@ -52,7 +47,19 @@ Add a flock-based lockfile (e.g., `.worktrees/.nightcrew.lock`) to prevent concu
 
 `lib/tool-router.sh` defaults for `implementation` and `refactor` tasks are missing common operations that realistic file-level refactors need: `git mv`, `git rm`, `bats`, `Bash(test*)`, `Bash(grep*)`, `Bash(ls*)`, `Bash(cat*)`. Surfaced during the first self-dogfood run where both queued tasks required per-task `allowed_tools` overrides to succeed. Options: (a) broaden the default whitelist, (b) add a new task type like `filesystem-refactor`, or (c) split the whitelist by verb (git-ops, test-runners, read-helpers) so task prompts can opt in. The override field already works, but forcing every task to hand-build a whitelist is friction the tool shouldn't impose.
 
+## Preflight gitignore + files-in-scope validation
+**Priority:** P2 | **Effort:** S (human: ~2h / CC: ~15min)
+**Depends on:** Nothing
+
+A task whose prompt or `files_in_scope` references files that are gitignored (or otherwise not tracked in git) will burn plan + impl tokens before the validator catches the no-op. Surfaced during the first self-dogfood run: "Promote DESIGN.md to project root" failed because `design/` is in `.gitignore` — the worktree had no source file for Sonnet to move. Cost: ~$0.80 of wasted tokens (plan phase alone) plus ~5 minutes of wall-clock before failure.
+
+Preflight should walk each task's `files_in_scope` globs (and optionally any paths parsed from the prompt), run `git check-ignore -v` on each, and refuse to queue a task that targets an ignored file. Example error: `Task promote-design-md targets design/nocturnal_command/DESIGN.md which is gitignored (.gitignore:7 "design/"). Remove the pattern, choose a different source path, or add the file to the task's own output scope.` Start simple with files_in_scope glob checking; add prompt-path parsing only if real failures keep slipping through.
+
 ## Completed
+
+### Run Lockfile
+**Completed:** v0.3.x (2026-04-17)
+Added mkdir-based lockfile at `state/.nightcrew.lock`. Global scope (one `nightcrew run` at a time). Stale-PID detection with automatic reclaim. Trap-based release on INT/TERM/EXIT. Five bats tests covering acquire, fail, release, stale reclaim, and SIGINT trap.
 
 ### Multi-Project Support
 **Completed:** v0.3.2 (2026-04-05)

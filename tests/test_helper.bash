@@ -26,6 +26,7 @@ source "$PROJECT_ROOT/lib/state.sh"
 source "$PROJECT_ROOT/lib/model-router.sh"
 source "$PROJECT_ROOT/lib/tool-router.sh"
 source "$PROJECT_ROOT/lib/validate.sh"
+source "$PROJECT_ROOT/lib/preflight-gitignore.sh"
 source "$PROJECT_ROOT/lib/run.sh"
 source "$PROJECT_ROOT/lib/run-lock.sh"
 

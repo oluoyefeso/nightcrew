@@ -32,7 +32,7 @@ jobs:
         working-directory: apps/cli
         run: |
           bun scripts/embed-web.ts
-          bun build src/main.ts --compile --minify --target=${{ matrix.target }} --outfile dist/${{ matrix.asset }}
+          bun build src/main.ts --compile --minify --external "chromium-bidi/*" --target=${{ matrix.target }} --outfile dist/${{ matrix.asset }}
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}

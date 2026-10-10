@@ -1,8 +1,8 @@
 import {
   BUCKET_LABEL,
   BUCKET_ORDER,
-  formatCost,
   formatDuration,
+  formatTokens,
   greeting,
   nightIdFor,
   type Run,
@@ -95,7 +95,7 @@ export function ReportPage({ nightId, runId }: { nightId?: string; runId?: strin
                 <b className="font-medium text-fg">{summary.prs}</b> {summary.prs === 1 ? "PR" : "PRs"}
               </span>
               <span>
-                <b className="font-medium text-fg">{formatCost(summary.costCents)}</b> spent
+                <b className="font-medium text-fg">{formatTokens(summary.tokens)}</b> tokens
               </span>
               {summary.unattendedMs > 0 && (
                 <span>

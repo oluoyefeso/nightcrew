@@ -4,7 +4,7 @@
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { nightIdFor, type Repo, type Task } from "@nightcrew/core";
+import { formatTokens, nightIdFor, type Repo, type Task } from "@nightcrew/core";
 import { matchesAny } from "@nightcrew/core/guard";
 import {
   addCar,
@@ -66,6 +66,8 @@ export interface TaskOutcome {
   runId: string;
   status: "complete" | "failed" | "timeout";
   costCents: number;
+  /** Input (including cache) plus output tokens. */
+  tokens: number;
   prUrl: string | null;
   reason: string | null;
 }
@@ -166,17 +168,18 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     state.costUsd += r.costUsd;
     state.tokensIn += r.tokensIn;
     state.tokensOut += r.tokensOut;
-    if (r.costUsd > 0)
+    if (r.tokensIn + r.tokensOut > 0)
       emit(
         "info",
-        `${PHASE_NAME[state.phase] ?? state.phase} used $${r.costUsd.toFixed(2)} over ${r.turns} ${r.turns === 1 ? "turn" : "turns"}.`,
-        { costUsd: r.costUsd, turns: r.turns, usage: r.usage },
+        `${PHASE_NAME[state.phase] ?? state.phase} used ${formatTokens(r.tokensIn + r.tokensOut)} tokens over ${r.turns} ${r.turns === 1 ? "turn" : "turns"}.`,
+        { tokens: r.tokensIn + r.tokensOut, turns: r.turns, usage: r.usage },
       );
   };
-  const remainingBudget = () => Math.max(0.05, task.budgetCents / 100 - state.costUsd);
+  const used = () => state.tokensIn + state.tokensOut;
+  const remainingTokens = () => Math.max(10_000, task.tokenBudget - used());
   // The reviewer always gets something, however hungry the build was.
-  const reviewReserve = () => Math.min(1.2, (task.budgetCents / 100) * 0.25);
-  const buildBudget = () => Math.max(0.05, remainingBudget() - reviewReserve());
+  const reviewReserve = () => Math.min(300_000, task.tokenBudget * 0.25);
+  const buildTokens = () => Math.max(10_000, remainingTokens() - reviewReserve());
   const artifact = (kind: string, name: string, content: string) => {
     if (content.trim()) artifacts.set(kind, { kind, name, content });
   };
@@ -210,7 +213,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     save();
     updateTask(db, task.id, { status: "done" });
     emit(status === "complete" ? "result" : "error", reason ?? state.summary ?? "Done.");
-    return { runId, status, costCents: Math.round(state.costUsd * 100), prUrl: state.prUrl, reason };
+    return { runId, status, costCents: Math.round(state.costUsd * 100), tokens: used(), prUrl: state.prUrl, reason };
   };
 
   try {
@@ -261,7 +264,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
           prompt: p.prompt,
           systemPrompt: p.system,
           model: deps.models.plan,
-          maxBudgetUsd: remainingBudget(),
+          maxTokens: remainingTokens(),
           maxTurns: 80,
           guard: { ...base.guard, readOnly: true },
         },
@@ -290,7 +293,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
           prompt: pp.prompt,
           systemPrompt: pp.system,
           model: deps.models.plan,
-          maxBudgetUsd: Math.min(remainingBudget() * 0.3, Math.max(0.75, remainingBudget() * 0.2)),
+          maxTokens: Math.min(remainingTokens() * 0.3, Math.max(150_000, remainingTokens() * 0.2)),
           maxTurns: 40,
           guard: { ...base.guard, readOnly: true },
         },
@@ -331,7 +334,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         prompt: session ? `${ip.prompt}\n\nYou wrote the plan above in this session. Now implement it.` : ip.prompt,
         systemPrompt: ip.system,
         model: task.model ?? deps.models.build,
-        maxBudgetUsd: buildBudget(),
+        maxTokens: buildTokens(),
         maxTurns: 150,
         resumeSession: session,
       },
@@ -357,7 +360,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
           prompt: rp.prompt,
           systemPrompt: rp.system,
           model: task.model ?? deps.models.build,
-          maxBudgetUsd: buildBudget(),
+          maxTokens: buildTokens(),
           maxTurns: 80,
           resumeSession: session,
         },
@@ -399,7 +402,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         prompt: rv.prompt,
         systemPrompt: rv.system,
         model: deps.models.review,
-        maxBudgetUsd: Math.max(0.05, remainingBudget()),
+        maxTokens: remainingTokens(),
         maxTurns: 60,
         outputSchema: REVIEW_SCHEMA as unknown as Record<string, unknown>,
       },
@@ -500,7 +503,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
             plan: ctx.plan ?? null,
             evidence: ctx.evidence ?? null,
             checks: check.log,
-            costUsd: state.costUsd,
+            tokens: used(),
             runId,
           }),
         });
@@ -584,7 +587,7 @@ function prBody(input: {
   plan: string | null;
   evidence: string | null;
   checks: string;
-  costUsd: number;
+  tokens: number;
   runId: string;
 }): string {
   const { task, verdict } = input;
@@ -615,7 +618,7 @@ ${
 ${verdict?.concerns.length ? `### Reviewer concerns\n${verdict.concerns.map((c) => `- ${c}`).join("\n")}\n` : ""}
 ${details("Plan", input.plan)}${details("Review", verdict?.report ?? null)}${details("Checks", `\`\`\`\n${input.checks.slice(-4000)}\n\`\`\``)}
 ${task.sourceRef?.match(/\/issues\/(\d+)$/) ? `Closes #${task.sourceRef.match(/\/issues\/(\d+)$/)?.[1]}\n\n` : ""}---
-Made overnight by [NightCrew](https://github.com/oluoyefeso/nightcrew) · run \`${input.runId}\` · $${input.costUsd.toFixed(2)}`;
+Made overnight by [NightCrew](https://github.com/oluoyefeso/nightcrew) · run \`${input.runId}\` · ${formatTokens(input.tokens)} tokens`;
 }
 
 function firstSentence(text: string): string | null {

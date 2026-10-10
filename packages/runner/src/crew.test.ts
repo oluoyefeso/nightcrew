@@ -32,7 +32,7 @@ function slowEngine(ms: number, log: { concurrent: number; peak: number; order: 
       await new Promise((r) => setTimeout(r, ms));
       writeFileSync(join(req.cwd, "src", `${log.order.length}.ts`), "export {};\n");
       log.concurrent--;
-      return { text: "done", costUsd: 0.5 };
+      return { text: "done", costUsd: 0.5, tokensIn: 30_000 };
     },
     review: () => ({ structured: READY, costUsd: 0.1 }),
   });
@@ -104,14 +104,14 @@ describe("dispatcher", () => {
     expect(log.order).toEqual(["First", "Second"]);
   });
 
-  test("holds work that would pass the daily budget (actual spend + caps of running agents)", async () => {
-    // One fits (500 <= 520). While it runs, Two can't start (500 + 500 > 520).
-    // After One finishes it has really spent 60¢, and 60 + 500 still passes 520.
-    updateSettings(db, { dailyBudgetCents: 520 });
+  test("holds work that would pass the daily token budget (tokens used + caps of running agents)", async () => {
+    // One fits (500k <= 520k). While it runs, Two can't start (500k + 500k > 520k).
+    // After One finishes it has really used ~30k tokens, and 30k + 500k still passes 520k.
+    updateSettings(db, { dailyTokenBudget: 520_000 });
     const a = await repo("a");
     const b = await repo("b");
-    createTask(db, { repoId: a.id, title: "One", scope: ["src/**"], status: "queued", budgetCents: 500 });
-    createTask(db, { repoId: b.id, title: "Two", scope: ["src/**"], status: "queued", budgetCents: 500 });
+    createTask(db, { repoId: a.id, title: "One", scope: ["src/**"], status: "queued", tokenBudget: 500_000 });
+    createTask(db, { repoId: b.id, title: "Two", scope: ["src/**"], status: "queued", tokenBudget: 500_000 });
     const log = { concurrent: 0, peak: 0, order: [] as string[] };
     const crew = crewWith(slowEngine(10, log));
     await crew.drain();

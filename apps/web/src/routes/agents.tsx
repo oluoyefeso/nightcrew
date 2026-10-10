@@ -1,4 +1,4 @@
-import { formatCost, type Repo, TASK_TYPE_LABEL, TASK_TYPES, type Task } from "@nightcrew/core";
+import { formatTokens, type Repo, TASK_TYPE_LABEL, TASK_TYPES, type Task } from "@nightcrew/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { clsx } from "clsx";
@@ -477,7 +477,7 @@ function QueueRow({ task, index, onDrop }: { task: Task; index: number; onDrop: 
         </span>
       </button>
       <span className="hidden font-mono text-[11.5px] text-muted tabular sm:inline">
-        ≤{formatCost(task.budgetCents)} · {task.maxMinutes}m
+        ≤{formatTokens(task.tokenBudget)} tokens · {task.maxMinutes}m
       </span>
       {!running && (
         <button

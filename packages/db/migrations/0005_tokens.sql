@@ -1,0 +1,1 @@
+ALTER TABLE `tasks` ADD `token_budget` integer DEFAULT 1000000 NOT NULL;

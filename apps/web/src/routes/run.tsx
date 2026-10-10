@@ -1,4 +1,4 @@
-import { BUCKET_LABEL, formatCost, formatDuration } from "@nightcrew/core";
+import { BUCKET_LABEL, formatDuration, formatTokens } from "@nightcrew/core";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { clsx } from "clsx";
@@ -65,7 +65,7 @@ export function RunPage({ runId }: { runId: string }) {
           <span className="font-mono text-[11.5px] text-faint">
             {r.repo} · started {fmtTime(r.startedAt)}
             {r.endedAt ? ` · took ${formatDuration(durationMs(r.startedAt, r.endedAt))}` : ""} ·{" "}
-            {formatCost(r.costCents)}
+            {formatTokens(r.tokensIn + r.tokensOut)} tokens
           </span>
         </div>
         <h1 className="t-h2">{r.title}</h1>

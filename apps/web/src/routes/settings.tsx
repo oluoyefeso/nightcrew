@@ -71,15 +71,19 @@ export function SettingsPage() {
                 className="font-mono"
               />
             </Field>
-            <Field label="Daily budget (USD)" htmlFor="budget" hint="New agents wait rather than pass it.">
+            <Field
+              label="Daily token budget (millions)"
+              htmlFor="budget"
+              hint="Tokens used today plus the caps of running agents. New agents wait rather than pass it."
+            >
               <TextInput
                 id="budget"
                 type="number"
-                min={1}
+                min={0.1}
                 step={1}
-                defaultValue={s.dailyBudgetCents / 100}
+                defaultValue={s.dailyTokenBudget / 1_000_000}
                 onBlur={(e) =>
-                  save.mutate({ dailyBudgetCents: Math.max(100, Math.round(Number(e.target.value) * 100)) })
+                  save.mutate({ dailyTokenBudget: Math.max(100_000, Math.round(Number(e.target.value) * 1_000_000)) })
                 }
                 className="font-mono"
               />

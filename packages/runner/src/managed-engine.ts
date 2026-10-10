@@ -28,6 +28,7 @@ import type {
 } from "@anthropic-ai/sdk/resources/beta/sessions/sessions";
 import {
   type AgentEngine,
+  backstopUsd,
   checkGuard,
   describeTool,
   type EngineEvent,
@@ -178,7 +179,8 @@ export class ManagedEngine implements AgentEngine {
         };
         resources.push(resource);
       }
-      const cents = Math.floor(req.maxBudgetUsd * 100);
+      // Sessions take a cost limit; derive a generous one from the token cap.
+      const cents = Math.floor(backstopUsd(req.maxTokens) * 100);
       const session = await this.client.beta.sessions.create({
         agent: agentId,
         environment_id: environmentId,
@@ -250,7 +252,7 @@ export class ManagedEngine implements AgentEngine {
               if (turnLimitHit) result.error = "Hit the turn limit before finishing.";
               else result.ok = true;
             } else if (ev.stop_reason.type === "budget_reached") {
-              result.error = "Hit the task's budget before finishing.";
+              result.error = "Hit the task's token budget before finishing.";
             } else if (ev.stop_reason.type === "refusal") {
               const why = ev.stop_details?.explanation;
               result.error = `The model declined to continue${why ? `: ${why}` : "."}`;
@@ -298,7 +300,7 @@ export class ManagedEngine implements AgentEngine {
       else if (status === 429 || /rate.?limit|429/i.test(message)) {
         result.error = "Rate limited by the API (429).";
         result.rateLimited = true;
-      } else if (/budget/i.test(message)) result.error = "Hit the task's budget before finishing.";
+      } else if (/budget/i.test(message)) result.error = "Hit the task's token budget before finishing.";
       else if (!finished) result.error = `The agent crashed: ${redact(message).slice(0, 240)}`;
       else result.error ??= redact(message).slice(0, 240);
     } finally {

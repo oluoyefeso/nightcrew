@@ -38,7 +38,7 @@ One family, Inter (variable), in the spirit of Aster: weight 500 for headings, t
 | Body and UI | none | 14px (13px secondary) | 400 / 500 | −0.011em |
 | Eyebrow | `t-eyebrow` | 12px mono, uppercase | 400 | +0.08em, in `--dawn` |
 
-Mono is the system stack (SF Mono, then Menlo and others) for anything that changes: costs, times, SHAs, PR numbers, logs. Always use `tabular-nums`, and no negative tracking.
+Mono is the system stack (SF Mono, then Menlo and others) for anything that changes: token counts, times, SHAs, PR numbers, logs. Always use `tabular-nums`, and no negative tracking.
 
 ## The Horizon
 
@@ -67,4 +67,8 @@ Keyboard-first everywhere: `J`/`K` to move, `Esc` to close, single-key triage. M
 
 ## Copy
 
-Write from the user's side. The crew "shipped", "needs you", or "stopped because…". Errors say what happened and what to do next. Use specific numbers ("$3.12 spent"), never vague ones.
+Write from the user's side. The crew "shipped", "needs you", or "stopped because…". Errors say what happened and what to do next. Use specific numbers ("98k tokens"), never vague ones.
+
+## Numbers
+
+Talk in tokens, never dollars: per run ("98k tokens"), per day ("1.2M of 20M tokens today"), and in budgets. Format with `formatTokens` (950, 98k, 2.3M).

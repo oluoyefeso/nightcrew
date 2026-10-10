@@ -8,7 +8,7 @@ Everything is set in the dashboard. This page explains what each setting does.
 |---|---|---|
 | Agents at once | 3 | Agents working at the same time, across all repos. |
 | Per repo | 1 | Agents at once in one repo. Above 1, same-repo agents use separate branches and the daily train catches conflicts. |
-| Daily budget | $25 | Counts what agents have actually spent today, plus the caps of agents still running. New agents wait rather than pass it. |
+| Daily token budget | 20M | Tokens used today plus the token caps of agents still running. New agents wait rather than pass it. |
 | Dispatch | On | Paused: running agents finish, nothing new starts. |
 | Schedule time | 22:00 | Where "Schedule" sends work, such as an off-peak window. Local time. |
 | Slack webhook | none | Agents post there when they finish or need you. |
@@ -24,7 +24,7 @@ Everything is set in the dashboard. This page explains what each setting does.
 | Type | Feature, Bug fix, UI, Tests, Refactor, Research. Decides the evidence required. |
 | Scope | Globs the crew may change. Writes elsewhere are refused as they happen and checked again afterwards. Empty means the whole repo. |
 | Acceptance criteria | The Skeptic checks each one against evidence. |
-| Budget | A hard cap for the task (default $5). Planning is capped, and the review always keeps a reserve. |
+| Token budget | A hard cap on input, cache and output tokens for the task (default 1M). Planning is capped, and the review always keeps a reserve. The agent stops when it reaches the cap. |
 | Time cap | Default 45 minutes. |
 | Workflow | `auto` (default): small, scoped tasks build directly and bigger ones plan first. Force with `quick` or `planned`. |
 

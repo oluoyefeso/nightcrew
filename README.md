@@ -28,11 +28,11 @@ Give the agents work in the dashboard, or from a terminal:
 nightcrew add "Dark mode that follows the system, and fix the crash when a widget has no title"
 ```
 
-Agents start as soon as a slot is free: up to 3 at once and 1 per repo by default, within a $25 daily budget (all adjustable). Add `--schedule` to hold work for off-peak, or `--later` to park it. Try everything without spending anything with `nightcrew --demo`.
+Agents start as soon as a slot is free: up to 3 at once and 1 per repo by default, within a 20M-token daily budget (all adjustable). Add `--schedule` to hold work for off-peak, or `--later` to park it. Try everything without spending anything with `nightcrew --demo`.
 
 ## How it works
 
-1. **Dispatch.** Describe the work. NightCrew drafts task cards with scope, acceptance criteria, the evidence it will need and a budget, and asks one question if something is unclear. Run now, schedule it, or park it in Later.
+1. **Dispatch.** Describe the work. NightCrew drafts task cards with scope, acceptance criteria, the evidence it will need and a token budget, and asks one question if something is unclear. Run now, schedule it, or park it in Later.
 2. **Agents work, in parallel.** The **Agents** page shows every agent live: its phase, its last step, and a Stop button.
    - Each task gets its own git worktree and an isolated Claude session.
    - Small tasks build directly; bigger ones plan first.
@@ -70,9 +70,9 @@ Each repo earns autonomy from its track record:
 
 `main`, the default branch and anything you protect are never touched. NightCrew suggests a promotion when the record earns it ("8 of the last 10 tasks merged without changes"). See [docs/trust-ladder.md](docs/trust-ladder.md).
 
-## Cost
+## Tokens
 
-A small task costs about **$0.08** end to end (build, check, review, commit). That figure is measured, not estimated. Each crew session runs isolated: no filesystem settings, MCP servers, skills or plugins from your machine, only the repo's own `CLAUDE.md` / `AGENTS.md`. On a typical setup that measured 48× cheaper per turn, and it keeps the agent's tools to what the task needs. Daily and per-task budgets are hard caps.
+A small task uses about **100k tokens** end to end (build, check, review, commit). That's measured, not estimated. Each agent session runs isolated: no filesystem settings, MCP servers, skills or plugins from your machine, only the repo's own `CLAUDE.md` / `AGENTS.md`. The same tasks took 2.3M–4.4M tokens in a session that loaded everything on the machine, so that's 20–40× fewer, with the agent's tools kept to what the task needs. Every task has a token budget the agent stops at, and the daily token budget holds new agents back rather than letting them pass it.
 
 ## More
 

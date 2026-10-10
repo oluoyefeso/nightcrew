@@ -25,10 +25,6 @@ export function fmtWeekday(iso: string): string {
   return weekday.format(new Date(iso));
 }
 
-export function fmtTokens(n: number): string {
-  return n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n);
-}
-
 export function fmtModel(model: string | null): string {
   if (!model) return "—";
   return model

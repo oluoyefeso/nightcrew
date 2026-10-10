@@ -11,7 +11,8 @@ export interface PhaseRequest {
   systemPrompt: string;
   model: string;
   guard: GuardContext;
-  maxBudgetUsd: number;
+  /** Most tokens (input, cache and output) this phase may use. */
+  maxTokens: number;
   maxTurns: number;
   /** Tools the phase may not use at all. */
   disallowedTools?: string[];
@@ -120,4 +121,13 @@ export class ScriptedEngine implements AgentEngine {
       ...out,
     };
   }
+}
+
+/**
+ * A dollar ceiling derived from a token cap, passed to APIs that only take a
+ * cost limit. Deliberately generous (cache reads cost far less than this);
+ * the token cap is the real limit.
+ */
+export function backstopUsd(maxTokens: number): number {
+  return Math.max(0.1, (maxTokens / 1_000_000) * 15);
 }

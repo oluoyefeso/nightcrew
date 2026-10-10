@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { type HookCallback, type Options, query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   type AgentEngine,
+  backstopUsd,
   checkGuard,
   describeTool,
   type EngineEvent,
@@ -77,7 +78,8 @@ export class SdkEngine implements AgentEngine {
       plugins: [],
       systemPrompt: { type: "preset", preset: "claude_code", append: withRepoInstructions(req.systemPrompt, req.cwd) },
       maxTurns: req.maxTurns,
-      maxBudgetUsd: req.maxBudgetUsd,
+      // The token cap below is the real limit; this is only a backstop.
+      maxBudgetUsd: backstopUsd(req.maxTokens),
       hooks: { PreToolUse: [{ hooks: [guardHook] }] },
       // Kept so later phases can resume with a warm cache. Compose never resumes.
       persistSession: req.phase !== "compose",
@@ -100,10 +102,34 @@ export class SdkEngine implements AgentEngine {
 
     let gotResult = false;
     let lastText = "";
+    // Count tokens per API call as they stream, and stop at the phase's cap.
+    const seen = new Set<string>();
+    let liveTokens = 0;
+    let overBudget = false;
     try {
       for await (const msg of query({ prompt: req.prompt, options }) as AsyncIterable<SDKMessage>) {
         if ("session_id" in msg && msg.session_id) result.sessionId = msg.session_id;
         if (msg.type === "assistant") {
+          const u = msg.message.usage as
+            | {
+                input_tokens?: number;
+                output_tokens?: number;
+                cache_read_input_tokens?: number;
+                cache_creation_input_tokens?: number;
+              }
+            | undefined;
+          if (u && msg.message.id && !seen.has(msg.message.id)) {
+            seen.add(msg.message.id);
+            liveTokens +=
+              (u.input_tokens ?? 0) +
+              (u.output_tokens ?? 0) +
+              (u.cache_read_input_tokens ?? 0) +
+              (u.cache_creation_input_tokens ?? 0);
+            if (liveTokens > req.maxTokens && !overBudget) {
+              overBudget = true;
+              abort.abort();
+            }
+          }
           for (const block of msg.message.content) {
             if (block.type === "text" && block.text.trim()) {
               lastText = block.text.trim();
@@ -148,8 +174,11 @@ export class SdkEngine implements AgentEngine {
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       result.ok = false;
-      if (req.signal.aborted) result.error = "Stopped: the task ran out of time or was cancelled.";
-      else if (/maximum budget/i.test(message)) result.error = "Hit the task's budget before finishing.";
+      if (overBudget) {
+        result.error = "Hit the task's token budget before finishing.";
+        result.tokensIn ||= liveTokens;
+      } else if (req.signal.aborted) result.error = "Stopped: the task ran out of time or was cancelled.";
+      else if (/maximum budget/i.test(message)) result.error = "Hit the task's token budget before finishing.";
       else if (/rate.?limit|429/i.test(message)) {
         result.error = "Rate limited by the API (429).";
         result.rateLimited = true;
@@ -192,7 +221,7 @@ function describeFailure(subtype: string, status: number | null | undefined, tex
     case "error_max_turns":
       return "Hit the turn limit before finishing.";
     case "error_max_budget_usd":
-      return "Hit the task's budget before finishing.";
+      return "Hit the task's token budget before finishing.";
     case "error_max_structured_output_retries":
       return "Couldn't produce a valid structured answer.";
     default:

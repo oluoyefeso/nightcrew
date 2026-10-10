@@ -3,7 +3,7 @@
 // limits and the daily budget); scheduled tasks wait for their time. Each
 // agent reports back when it finishes.
 
-import { nightIdFor, planQueue } from "@nightcrew/core";
+import { formatTokens, nightIdFor, planQueue } from "@nightcrew/core";
 import {
   type Db,
   getRepo,
@@ -12,7 +12,7 @@ import {
   listTasks,
   listTrains,
   type RunEvent,
-  spentOnDay,
+  tokensOnDay,
   updateTask,
   updateTrain,
 } from "@nightcrew/db";
@@ -41,8 +41,8 @@ export interface CrewStatus {
   scheduled: number;
   /** Next scheduled start, if any. */
   nextAt: string | null;
-  spentTodayCents: number;
-  dailyBudgetCents: number;
+  tokensToday: number;
+  dailyTokenBudget: number;
   maxAgents: number;
   message: string | null;
   engine: string;
@@ -111,8 +111,8 @@ export class Crew {
       queued: queuedTasks.length - scheduled.length,
       scheduled: scheduled.length,
       nextAt,
-      spentTodayCents: spentOnDay(db, nightIdFor(new Date().toISOString())),
-      dailyBudgetCents: s.dailyBudgetCents,
+      tokensToday: tokensOnDay(db, nightIdFor(new Date().toISOString())),
+      dailyTokenBudget: s.dailyTokenBudget,
       maxAgents: s.maxAgents,
       message: this.message,
       engine: this.deps.engine.name,
@@ -147,9 +147,9 @@ export class Crew {
         if (this.running.size >= s.maxAgents) break;
         const next = this.nextRunnable(s.maxPerRepo);
         if (!next) break;
-        const spent = spentOnDay(db, nightIdFor(new Date().toISOString())) + this.inFlightBudget();
-        if (spent + next.budgetCents > s.dailyBudgetCents) {
-          this.message = `Holding "${next.title}": it could take today past the $${(s.dailyBudgetCents / 100).toFixed(2)} budget.`;
+        const used = tokensOnDay(db, nightIdFor(new Date().toISOString())) + this.inFlightBudget();
+        if (used + next.tokenBudget > s.dailyTokenBudget) {
+          this.message = `Holding "${next.title}": it could take today past the ${formatTokens(s.dailyTokenBudget)}-token budget.`;
           break;
         }
         this.launch(next.id);
@@ -182,7 +182,7 @@ export class Crew {
 
   private inFlightBudget(): number {
     let n = 0;
-    for (const r of this.running.values()) n += getTask(this.deps.db, r.agent.taskId)?.budgetCents ?? 0;
+    for (const r of this.running.values()) n += getTask(this.deps.db, r.agent.taskId)?.tokenBudget ?? 0;
     return n;
   }
 

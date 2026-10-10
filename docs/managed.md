@@ -12,7 +12,7 @@ With the managed engine, each phase runs on **Claude Managed Agents** instead of
 2. It creates a session with:
    - the repo mounted at `/workspace/<repo>`,
    - a short-lived GitHub token from `gh auth token`, used for that one session and never stored,
-   - a budget from the task.
+   - a cost limit derived from the task's token budget (the session API only takes a cost limit).
 3. The cloud environment's networking is **limited** to GitHub and package registries. (An environment created without a networking setting gets unrestricted access, so NightCrew always sets one.)
 4. The agent works, commits, and pushes the task branch. Pushing that branch is the only push allowed. The server's `auto` permission policy decides routine calls; anything it can't judge is answered by NightCrew's guard.
 5. NightCrew fetches the branch back and fast-forwards the local worktree. The rest of the pipeline then runs as usual: checks, evidence, the Skeptic, the trust ladder.

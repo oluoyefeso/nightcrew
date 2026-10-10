@@ -100,7 +100,8 @@ export interface Task {
   status: TaskStatus;
   position: number;
   dependsOn: string[];
-  budgetCents: number;
+  /** Most tokens this task may use (input, cache and output), across every phase. */
+  tokenBudget: number;
   maxMinutes: number;
   branch: string;
   model: string | null;
@@ -130,8 +131,8 @@ export interface Settings {
   maxAgents: number;
   /** Agents working at once in a single repo. */
   maxPerRepo: number;
-  /** Spend cap per day (local time), in cents. */
-  dailyBudgetCents: number;
+  /** Most tokens the agents may use per day (local time). */
+  dailyTokenBudget: number;
   /** Dispatch queued tasks as soon as a slot is free. Off = the queue is paused. */
   dispatch: boolean;
   /** When "Schedule" sends a task, local "HH:MM" (an off-peak window, like 22:00). */
@@ -146,7 +147,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   maxAgents: 3,
   maxPerRepo: 1,
-  dailyBudgetCents: 2500,
+  dailyTokenBudget: 20_000_000,
   dispatch: true,
   scheduleAt: "22:00",
   planModel: "claude-opus-5-5",
@@ -155,7 +156,8 @@ export const DEFAULT_SETTINGS: Settings = {
   slackWebhookUrl: null,
 };
 
-export const DEFAULT_TASK_BUDGET_CENTS = 500;
+/** A small task measured ~100k tokens end to end; this leaves room for big ones. */
+export const DEFAULT_TASK_TOKENS = 1_000_000;
 export const DEFAULT_TASK_MINUTES = 45;
 
 /** Evidence each task type has to produce (M2 enforces it; M1 shows it). */

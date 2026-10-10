@@ -2,8 +2,8 @@ import {
   type AutonomyLevel,
   branchFor,
   DEFAULT_SETTINGS,
-  DEFAULT_TASK_BUDGET_CENTS,
   DEFAULT_TASK_MINUTES,
+  DEFAULT_TASK_TOKENS,
   type Repo,
   type Settings,
   type Task,
@@ -115,7 +115,7 @@ export interface NewTask {
   criteria?: string[];
   status?: TaskStatus;
   dependsOn?: string[];
-  budgetCents?: number;
+  tokenBudget?: number;
   maxMinutes?: number;
   model?: string | null;
   testCommand?: string | null;
@@ -140,7 +140,7 @@ export function createTask(db: Db, input: NewTask): Task {
     status,
     position: nextPosition(db, status),
     dependsOn: input.dependsOn ?? [],
-    budgetCents: input.budgetCents ?? DEFAULT_TASK_BUDGET_CENTS,
+    tokenBudget: input.tokenBudget ?? DEFAULT_TASK_TOKENS,
     maxMinutes: input.maxMinutes ?? DEFAULT_TASK_MINUTES,
     branch: uniqueBranch(db, input.repoId, branchFor(input.title, type)),
     model: input.model ?? null,
@@ -168,7 +168,7 @@ export type TaskPatch = Partial<
     | "criteria"
     | "status"
     | "dependsOn"
-    | "budgetCents"
+    | "tokenBudget"
     | "maxMinutes"
     | "model"
     | "testCommand"
@@ -259,11 +259,11 @@ function uniqueBranch(db: Db, repoId: string, base: string): string {
   for (let i = 2; ; i++) if (!taken.has(`${base}-${i}`)) return `${base}-${i}`;
 }
 
-/** What the crew has spent on a report day, in cents. */
-export function spentOnDay(db: Db, dayId: string): number {
+/** Tokens the agents have used on a report day (input, cache and output). */
+export function tokensOnDay(db: Db, dayId: string): number {
   return (
     db
-      .select({ n: sql<number>`coalesce(sum(${schema.runs.costCents}), 0)` })
+      .select({ n: sql<number>`coalesce(sum(${schema.runs.tokensIn} + ${schema.runs.tokensOut}), 0)` })
       .from(schema.runs)
       .where(and(eq(schema.runs.nightId, dayId), sql`${schema.runs.source} != 'classic'`))
       .get()?.n ?? 0

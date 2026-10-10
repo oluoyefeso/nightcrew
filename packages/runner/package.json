@@ -1,0 +1,15 @@
+{
+  "name": "@nightcrew/runner",
+  "version": "1.0.0-alpha.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.296",
+    "@anthropic-ai/sdk": "0.133.0",
+    "@nightcrew/core": "workspace:*",
+    "@nightcrew/db": "workspace:*"
+  }
+}

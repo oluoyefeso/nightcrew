@@ -287,14 +287,15 @@ function ThemeSwitch() {
           type="button"
           role="radio"
           aria-checked={theme === value}
+          aria-label={label}
+          title={label}
           onClick={() => choose(value)}
           className={clsx(
-            "inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 font-medium text-[13px] transition-colors sm:px-3",
+            "grid size-8 place-items-center rounded-full transition-colors",
             theme === value ? "bg-fg text-bg" : "text-muted hover:text-fg",
           )}
         >
-          <Icon className="size-3.5" />
-          <span className="hidden sm:inline">{label}</span>
+          <Icon className="size-4" />
         </button>
       ))}
     </div>

@@ -17,7 +17,7 @@ import {
 } from "@nightcrew/db";
 import { ScriptedEngine } from "./engine";
 import { git } from "./git";
-import { normalizeReview, runTask } from "./pipeline";
+import { normalizeReview, runTask, scopeCheck } from "./pipeline";
 import type { ReviewOutput } from "./prompts";
 import { workspaceDir } from "./workspace";
 
@@ -103,8 +103,38 @@ describe("runTask", () => {
     expect((await git(wt, "ls-files")).stdout).not.toContain("DECISIONS");
     // The plan phase was read-only and the implementer got the plan.
     expect(engine.calls.find((c) => c.phase === "plan")?.guard.readOnly).toBe(true);
+    // Every phase is marked as running in the task's own clone.
+    expect(engine.calls.every((c) => c.isolated === true)).toBe(true);
     expect(engine.calls.find((c) => c.phase === "implement")?.prompt).toContain("Add src/feature.ts.");
     expect(listRunEvents(db, out.runId).map((e) => e.text)).toContain("Wrote src/feature.ts");
+  });
+
+  test("a task sent back after boarding the train boards again with its new work", async () => {
+    // Value: protects=re-running a task whose earlier result already landed still lands, checked from what landed; fails_when=the base isn't re-pinned and the merge-base rule refuses the task's own landed commits; why_new=send back after a train boarding had no test; seam=none
+    const task = setupTask();
+    updateRepo(db, task.repoId, { level: "train" });
+    let attempt = 0;
+    const engine = new ScriptedEngine({
+      implement: (req) => {
+        attempt++;
+        writeFileSync(join(req.cwd, "src", "feature.ts"), "export const feature = true;\n");
+        if (attempt > 1) writeFileSync(join(req.cwd, "src", "extra.ts"), "export const extra = 1;\n");
+        return { text: "Done." };
+      },
+      review: () => ({ structured: READY }),
+    });
+    const first = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(first.status).toBe("complete");
+    expect(listRunEvents(db, first.runId).some((e) => e.text.includes("On today's train"))).toBe(true);
+
+    updateTask(db, task.id, { status: "queued" });
+    const second = await runTask(deps(engine), task.id, new AbortController().signal);
+    const texts = listRunEvents(db, second.runId).map((e) => e.text);
+    expect(second.status).toBe("complete");
+    expect(texts.some((t) => t.includes("takes in commits"))).toBe(false);
+    expect(texts.some((t) => t.includes("On today's train"))).toBe(true);
+    // Only the new work was checked the second time.
+    expect(getRun(db, second.runId)?.run.changedFiles).toBe(1);
   });
 
   test("failed checks get one repair attempt with the failure output", async () => {
@@ -607,5 +637,63 @@ describe("task clones", () => {
     expect(out.status).toBe("complete");
     expect((await git(repoPath, "rev-parse", "main")).stdout.trim()).toBe(mainBefore);
     expect((await git(repoPath, "rev-parse", "--verify", "--quiet", "refs/heads/dev")).ok).toBe(false);
+  });
+});
+
+describe("the final gate and what the task leaves behind", () => {
+  // Value: protects=committed .worktrees/ paths (where NightCrew keeps its integration checkouts) fail the gate, even for a task with no scope limit; fails_when=scopeCheck goes back to dropping .worktrees/ paths, which now hides them from the final host-side gate; why_new=G2 the filter moved onto the final gate; seam=none
+  test("a task that commits files under .worktrees fails", async () => {
+    const task = setupTask({ scope: [] });
+    const engine = new ScriptedEngine({
+      implement: (req) => {
+        writeFileSync(join(req.cwd, "src", "feature.ts"), "x\n");
+        mkdirSync(join(req.cwd, ".worktrees", "_dev"), { recursive: true });
+        writeFileSync(join(req.cwd, ".worktrees", "_dev", "planted.ts"), "x\n");
+        return { text: "Done." };
+      },
+      review: () => ({ structured: READY }),
+    });
+    const out = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(out.status).toBe("failed");
+    expect(out.reason).toContain("Changed files in .worktrees, where NightCrew keeps its own checkouts");
+    expect(scopeCheck([".worktrees/_dev/planted.ts", "src/a.ts"], { scope: [] } as never).ok).toBe(false);
+  });
+
+  // Value: protects=a repo that relies on git-lfs fails the task up front with the plain-words reason, before any clone or agent phase; fails_when=runTask stops calling repoSupport, so the agent works in a clone with LFS pointer files; why_new=G6 (D15); seam=none
+  test("a repo that uses git-lfs fails the task before anything runs", async () => {
+    const task = setupTask();
+    writeFileSync(join(repoPath, ".gitattributes"), "*.bin filter=lfs diff=lfs merge=lfs -text\n");
+    const engine = new ScriptedEngine({});
+    const out = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(out.status).toBe("failed");
+    expect(out.reason).toBe(
+      "NightCrew can't work in this repo yet: it uses git-lfs. Support is coming; see docs/security.md.",
+    );
+    expect(engine.calls).toHaveLength(0);
+    expect(existsSync(workspaceDir(join(dir, "data"), task.repoId, task.id))).toBe(false);
+  });
+
+  // Value: protects=when the local task branch can't take the work (it's checked out), the run says where the work really is and how to get it, and the no-remote message doesn't claim the branch holds it; fails_when=the pipeline ignores updateLocalBranch's result or goes back to "the branch stays local"; why_new=G7; seam=none
+  test("a checked-out task branch points you at the task ref instead", async () => {
+    const task = setupTask();
+    await git(repoPath, "checkout", "-q", "-b", task.branch);
+    const engine = new ScriptedEngine({
+      implement: (req) => {
+        writeFileSync(join(req.cwd, "src", "feature.ts"), "x\n");
+        return { text: "Done." };
+      },
+      review: () => ({ structured: READY }),
+    });
+    const out = await runTask({ ...deps(engine), publish: true }, task.id, new AbortController().signal);
+    expect(out.status).toBe("complete");
+    const ref = `refs/nightcrew/tasks/${task.id}`;
+    const texts = listRunEvents(db, out.runId).map((e) => e.text);
+    expect(texts).toContain(
+      `Couldn't update your ${task.branch} branch (${task.branch} is checked out). The work is at ${ref}; to get it, run: git checkout -b <name> ${ref}`,
+    );
+    expect(texts).toContain(`No GitHub remote, so the work stays local, at ${ref}.`);
+    expect((await git(repoPath, "rev-parse", task.branch)).stdout.trim()).toBe(
+      (await git(repoPath, "rev-parse", "main")).stdout.trim(),
+    );
   });
 });

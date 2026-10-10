@@ -43,6 +43,7 @@ import {
   detectTestCommand,
   draftTasks,
   inspectRepo,
+  repoSupport,
 } from "@nightcrew/runner";
 import type { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -69,6 +70,9 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
     if (!existsSync(expanded)) return c.json({ error: `${expanded} doesn't exist.` }, 400);
     try {
       const info = await inspectRepo(expanded);
+      // git-lfs, git-crypt and sparse checkouts don't survive a plain clone yet.
+      const unsupported = repoSupport(info.path);
+      if (unsupported) return c.json({ error: unsupported }, 400);
       const preview = detectPreview(info.path);
       const repo = addRepo(db, {
         name: info.name,

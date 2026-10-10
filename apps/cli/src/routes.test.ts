@@ -1,7 +1,18 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addRepo, createTask, type Db, getRepo, getSettings, getTask, openDb, updateTask } from "@nightcrew/db";
+import {
+  addRepo,
+  createTask,
+  type Db,
+  getRepo,
+  getSettings,
+  getTask,
+  listRepos,
+  openDb,
+  updateTask,
+} from "@nightcrew/db";
 import { Crew, ScriptedEngine } from "@nightcrew/runner";
 import { Hono } from "hono";
 import { mountTaskRoutes } from "./routes";
@@ -143,6 +154,41 @@ describe("PATCH /api/settings budgets, dispatch and models", () => {
     const res = await patch({ planModel: "  claude-opus-5-5 " });
     expect(res.status).toBe(200);
     expect(getSettings(db).planModel).toBe("claude-opus-5-5");
+  });
+});
+
+describe("POST /api/repos", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+  const repoWith = (files: Record<string, string>) => {
+    const dir = mkdtempSync(join(tmpdir(), "nc-repo-add-"));
+    dirs.push(dir);
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
+    for (const args of [
+      ["init", "-q", "-b", "main"],
+      ["add", "-A"],
+      ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"],
+    ])
+      Bun.spawnSync(["git", ...args], { cwd: dir });
+    return dir;
+  };
+
+  // Value: protects=a repo using git-lfs is refused with the reason before it's saved, and a plain repo still adds; fails_when=POST /api/repos stops calling repoSupport or saves the repo anyway; why_new=H2 (D15) refuses lfs, git-crypt and sparse repos; seam=none
+  test("a git-lfs repo → 400 with the reason, a plain repo → 201", async () => {
+    const lfs = repoWith({ ".gitattributes": "*.bin filter=lfs diff=lfs merge=lfs -text\n", "a.txt": "a\n" });
+    const res = await send("POST", "/api/repos", { path: lfs });
+    expect(res.status).toBe(400);
+    const { error } = (await res.json()) as { error: string };
+    expect(error).toStartWith("NightCrew can't work in this repo yet: it uses ");
+    expect(error).toContain("lfs");
+    expect(error).toEndWith(". Support is coming; see docs/security.md.");
+    expect(listRepos(db)).toHaveLength(0);
+
+    const plain = repoWith({ "a.txt": "a\n" });
+    expect((await send("POST", "/api/repos", { path: plain })).status).toBe(201);
+    expect(listRepos(db)).toHaveLength(1);
   });
 });
 

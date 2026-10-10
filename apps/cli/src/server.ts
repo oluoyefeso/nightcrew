@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
-import { extname, join } from "node:path";
+import { homedir } from "node:os";
+import { extname, join, sep } from "node:path";
 import type { TriageAction } from "@nightcrew/core";
 import {
   addNote,
@@ -93,6 +94,10 @@ export function createApp(opts: ServerOptions) {
   app.onError((e, c) => c.json({ error: e instanceof Error ? e.message : String(e) }, 500));
 
   app.get("/api/health", (c) => c.json({ ok: true, version: VERSION }));
+  /** Where NightCrew keeps its data; workDir (task clones) is for display, with $HOME as ~. */
+  app.get("/api/info", (c) =>
+    c.json({ version: VERSION, dataDir: opts.dataDir, workDir: tildePath(join(opts.dataDir, "work")) }),
+  );
 
   app.get("/api/nights", (c) => c.json(listNights(db)));
 
@@ -290,3 +295,10 @@ const MIME: Record<string, string> = {
   ".json": "application/json",
   ".webmanifest": "application/manifest+json",
 };
+
+/** /Users/me/.nightcrew → ~/.nightcrew. */
+export function tildePath(path: string, home = homedir()): string {
+  if (!home || home === sep) return path;
+  if (path === home) return "~";
+  return path.startsWith(home + sep) ? `~${path.slice(home.length)}` : path;
+}

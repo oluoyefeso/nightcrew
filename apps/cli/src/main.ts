@@ -19,6 +19,7 @@ import {
   inspectRepo,
   ManagedEngine,
   reflexesFromEnv,
+  repoSupport,
   SdkEngine,
   setLandingHome,
   takeCrewLock,
@@ -228,6 +229,11 @@ function openBrowser(url: string) {
 
 async function repoFor(path: string | undefined) {
   const info = await inspectRepo(path ?? cwd);
+  const unsupported = repoSupport(info.path);
+  if (unsupported) {
+    console.error(`  ${unsupported}`);
+    process.exit(1);
+  }
   const preview = detectPreview(info.path);
   return (
     getRepoByPath(db, info.path) ??

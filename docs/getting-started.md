@@ -21,6 +21,8 @@ NightCrew reads the repo and fills in what it can:
 - **install**: `bun install --frozen-lockfile`, `npm ci` and so on, run in each task's fresh clone
 - **preview**: how to start the app for UI screenshots (Vite, Next, Astro, any `dev` script, or `static` for plain HTML)
 
+Repos that use git-lfs, git-crypt or sparse checkout are refused for now. Support is coming.
+
 Check them in **Settings → Repos**. Without a test command, NightCrew can't verify the crew's work. Without a preview command, UI tasks have no screenshots and always land in Needs your eyes.
 
 ## 3. Open the dashboard
@@ -31,7 +33,7 @@ nightcrew
 
 It prints a link like `http://localhost:3721/?t=…` and opens it in your browser. The link carries a key that changes every launch, so only it opens the dashboard. With `--no-open`, or after a restart, open the link it just printed; an old tab shows a page saying so.
 
-While it runs, agents pick up work as soon as it's queued. Your data lives in `~/.nightcrew`. Each task runs in its own clone of the repo under `~/.nightcrew/work` and lands back in your repo as a commit.
+While it runs, agents pick up work as soon as it's queued. Your data lives in `~/.nightcrew` (or `NIGHTCREW_HOME`, or `--data`). Each task runs in its own clone at `<data>/work/<repo id>/<task id>` and lands back in your repo as a commit. Delete a clone and the task starts a new one from its last saved work.
 
 ## 4. Give the agents work
 

@@ -168,6 +168,8 @@ async function startPreview(
   dir: string,
   signal: AbortSignal,
   warn: (text: string) => void,
+  /** `dir` is the task's clone, not a checkout NightCrew owns. */
+  clone: boolean,
 ): Promise<Preview> {
   const port = await freePort();
   const url = (repo.previewUrl ?? "http://localhost:{port}").replace("{port}", String(port));
@@ -187,7 +189,7 @@ async function startPreview(
     return { url, stop: async () => server.stop(true) };
   }
 
-  const proc = Bun.spawn(sandboxed(repo.previewCommand, dir, warn), {
+  const proc = Bun.spawn(sandboxed(repo.previewCommand, dir, warn, { clone }), {
     cwd: dir,
     env: checkEnv({ PORT: String(port), BROWSER: "none", CI: "1" }),
     stdout: "ignore",
@@ -225,7 +227,7 @@ async function screenshots(o: EvidenceOptions, baseDir: string, ev: Evidence) {
 
   const capture = async (dir: string, label: "before" | "after") => {
     o.log(`Starting the app (${label === "before" ? o.repo.defaultBranch : "this branch"}) for screenshots`);
-    const preview = await startPreview(o.repo, dir, o.signal, o.log);
+    const preview = await startPreview(o.repo, dir, o.signal, o.log, label === "after");
     const results: { key: string; file: string; a11y: Map<string, A11yIssue>; errors: string[] }[] = [];
     try {
       for (const path of paths) {

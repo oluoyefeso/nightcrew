@@ -5,7 +5,16 @@ import { join } from "node:path";
 import { addRepo, createTask, type Db, getRepo, getRun, listTrains, openDb, updateRepo } from "@nightcrew/db";
 import { ScriptedEngine } from "./engine";
 import { baseWorktree, git } from "./git";
-import { boardTrain, canShip, landingFile, pullCar, setLandingHome, shipTask, undoShip } from "./landing";
+import {
+  type Approved,
+  boardTrain,
+  canShip,
+  landingFile,
+  pullCar,
+  setLandingHome,
+  shipTask,
+  undoShip,
+} from "./landing";
 import { runTask } from "./pipeline";
 import type { ReviewOutput } from "./prompts";
 import { JevReflexes, ruleConfidence, ruleWorkflow } from "./reflexes";
@@ -215,6 +224,7 @@ describe("reflexes", () => {
 });
 
 describe("landing against a real origin", () => {
+  const ID = ["-c", "user.name=t", "-c", "user.email=t@t"];
   const commit = (cwd: string, msg: string) =>
     git(cwd, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", msg);
   const sha = async (ref: string, cwd = repoPath) => (await git(cwd, "rev-parse", ref)).stdout.trim();
@@ -227,6 +237,9 @@ describe("landing against a real origin", () => {
     await git(repoPath, "push", "-q", "origin", "main", "dev");
     return origin;
   }
+  /** What the final gate approved for each task sha: its base and files. */
+  const approvals = new Map<string, Approved>();
+  const ap = (taskSha: string): Approved => approvals.get(taskSha) ?? { base: "", files: [] };
   /** A task branch off main with one file written. Returns its sha: landing goes by sha. */
   async function taskBranch(name: string, file: string) {
     const wt = join(dir, `wt-${name.replace(/\//g, "-")}`);
@@ -235,6 +248,7 @@ describe("landing against a real origin", () => {
     await git(wt, "add", "-A");
     await commit(wt, name);
     const out = await sha("HEAD", wt);
+    approvals.set(out, { base: await sha("main"), files: [file] });
     await git(repoPath, "worktree", "remove", "--force", wt);
     return out;
   }
@@ -258,7 +272,7 @@ describe("landing against a real origin", () => {
     await git(repoPath, "worktree", "remove", "--force", wt);
     return out;
   }
-  /** Pushes fail while fetches still work. (A pre-receive hook wouldn't run: NightCrew's git turns hooks off, even in a local receive-pack.) */
+  /** Pushes fail while fetches still work. (Simpler than a pre-receive hook in the test origin.) */
   async function rejectPushes(_origin: string, on = true) {
     if (on) await git(repoPath, "config", "remote.origin.pushurl", join(dir, "closed.git"));
     else await git(repoPath, "config", "--unset", "remote.origin.pushurl");
@@ -276,10 +290,10 @@ describe("landing against a real origin", () => {
     const origin = await withOrigin();
     const repo = shipRepo();
     const a = await taskBranch("crew/a", "src/a.ts");
-    expect((await shipTask(repo, a, "A", true)).ok).toBe(true);
+    expect((await shipTask(repo, a, "A", true, ap(a))).ok).toBe(true);
     await otherPush(origin, "src/theirs.ts");
     const bSha = await taskBranch("crew/b", "src/b.ts");
-    const b = await shipTask(repo, bSha, "B", true);
+    const b = await shipTask(repo, bSha, "B", true, ap(bSha));
     expect(b).toMatchObject({ ok: true });
     const files = await tree("dev", origin);
     for (const f of ["src/a.ts", "src/theirs.ts", "src/b.ts"]) expect(files).toContain(f);
@@ -290,11 +304,11 @@ describe("landing against a real origin", () => {
     const origin = await withOrigin();
     const repo = shipRepo();
     const a = await taskBranch("crew/a", "src/a.ts");
-    expect((await shipTask(repo, a, "A", false)).ok).toBe(true); // local only
+    expect((await shipTask(repo, a, "A", false, ap(a))).ok).toBe(true); // local only
     await otherPush(origin, "src/theirs.ts");
     const before = await sha("dev");
     const bSha = await taskBranch("crew/b", "src/b.ts");
-    const b = await shipTask(repo, bSha, "B", true);
+    const b = await shipTask(repo, bSha, "B", true, ap(bSha));
     expect(b.ok).toBe(false);
     if (!b.ok) expect(b.error).toContain("aren't on origin");
     expect(await sha("dev")).toBe(before);
@@ -304,15 +318,15 @@ describe("landing against a real origin", () => {
     // Value: protects=a no-op merge is refused instead of recording someone else's sha, and rollbacks never drop an unrelated commit; fails_when=mergeInto returns HEAD after "Already up to date" or rollbacks go back to HEAD~1; why_new=L2 no-op merge and re-ship after undo; seam=none
     const repo = shipRepo();
     const a = await taskBranch("crew/a", "src/a.ts");
-    const shipped = await shipTask(repo, a, "A", false);
+    const shipped = await shipTask(repo, a, "A", false, ap(a));
     if (!shipped.ok) throw new Error(shipped.error);
-    const again = await shipTask(repo, a, "A", false);
+    const again = await shipTask(repo, a, "A", false, ap(a));
     expect(again).toEqual({ ok: false, error: "Already on dev; nothing new to merge." });
     expect(await sha("dev")).toBe(shipped.sha);
 
     expect((await undoShip(repo, "dev", shipped.sha, false)).ok).toBe(true);
     const undone = await sha("dev");
-    const reship = await shipTask(repo, a, "A", false);
+    const reship = await shipTask(repo, a, "A", false, ap(a));
     expect(reship.ok).toBe(false);
     expect(await sha("dev")).toBe(undone);
     expect(await tree("dev")).not.toContain("src/a.ts");
@@ -324,7 +338,7 @@ describe("landing against a real origin", () => {
     const repo = shipRepo();
     const train = { branch: "crew/train-2026-10-10", cars: [] } as never;
     const a = await taskBranch("crew/a", "src/a.ts");
-    const boarded = await boardTrain(repo, train, a, "A", true);
+    const boarded = await boardTrain(repo, train, a, "A", true, ap(a));
     if (!boarded.ok) throw new Error(boarded.error);
     await rejectPushes(origin);
     const pulled = await pullCar(repo, train, boarded.sha, true);
@@ -338,7 +352,7 @@ describe("landing against a real origin", () => {
     const origin = await withOrigin();
     const repo = shipRepo();
     const a = await taskBranch("crew/a", "src/a.ts");
-    const shipped = await shipTask(repo, a, "A", true);
+    const shipped = await shipTask(repo, a, "A", true, ap(a));
     if (!shipped.ok) throw new Error(shipped.error);
     await rejectPushes(origin);
     const undone = await undoShip(repo, "dev", shipped.sha, true);
@@ -348,7 +362,7 @@ describe("landing against a real origin", () => {
 
     await rejectPushes(origin, false);
     const b = await taskBranch("crew/b", "src/b.ts");
-    expect((await shipTask(repo, b, "B", true)).ok).toBe(true);
+    expect((await shipTask(repo, b, "B", true, ap(b))).ok).toBe(true);
     const files = await tree("dev", origin);
     expect(files).toContain("src/a.ts");
     expect(files).toContain("src/b.ts");
@@ -360,13 +374,13 @@ describe("landing against a real origin", () => {
     const repo = shipRepo({ setupCommand: `mkdir -p node_modules && echo run >> '${log}'` });
     const runs = () => readFileSync(log, "utf8").trim().split("\n").length;
     const a = await taskBranch("crew/a", "src/a.ts");
-    expect((await shipTask(repo, a, "A", false)).ok).toBe(true);
+    expect((await shipTask(repo, a, "A", false, ap(a))).ok).toBe(true);
     expect(runs()).toBe(1); // fresh worktree, no node_modules
     const b = await taskBranch("crew/b", "package.json");
-    expect((await shipTask(repo, b, "B", false)).ok).toBe(true);
+    expect((await shipTask(repo, b, "B", false, ap(b))).ok).toBe(true);
     expect(runs()).toBe(2); // manifest changed
     const c = await taskBranch("crew/c", "src/c.ts");
-    expect((await shipTask(repo, c, "C", false)).ok).toBe(true);
+    expect((await shipTask(repo, c, "C", false, ap(c))).ok).toBe(true);
     expect(runs()).toBe(2); // nothing to reinstall
   });
 
@@ -375,10 +389,10 @@ describe("landing against a real origin", () => {
     const origin = await withOrigin();
     const repo = shipRepo();
     const a = await taskBranch("crew/a", "src/a.ts");
-    expect((await shipTask(repo, a, "A", true)).ok).toBe(true);
+    expect((await shipTask(repo, a, "A", true, ap(a))).ok).toBe(true);
     await git(repoPath, "update-ref", "refs/heads/dev", await commitOnto("dev", "evil.txt"));
     const bSha = await taskBranch("crew/b", "src/b.ts");
-    const b = await shipTask(repo, bSha, "B", true);
+    const b = await shipTask(repo, bSha, "B", true, ap(bSha));
     expect(b.ok).toBe(false);
     if (!b.ok) expect(b.error).toContain("NightCrew didn't make");
     expect(await tree("dev", origin)).not.toContain("evil.txt");
@@ -390,7 +404,7 @@ describe("landing against a real origin", () => {
     const repo = shipRepo();
     const train = { branch: "crew/train-2026-10-10", cars: [] } as never;
     const a = await taskBranch("crew/a", "src/a.ts");
-    expect((await boardTrain(repo, train, a, "A", false)).ok).toBe(true);
+    expect((await boardTrain(repo, train, a, "A", false, ap(a))).ok).toBe(true);
     const wt = join(repoPath, ".worktrees", "_crew-train-2026-10-10");
     // The marker lives in NightCrew's data folder, not the worktree's git dir.
     const marker = landingFile(repo, "crew/train-2026-10-10", "landing");
@@ -399,7 +413,7 @@ describe("landing against a real origin", () => {
     writeFileSync(marker, `${await sha("HEAD", wt)} merge ${x}\n`);
     await git(wt, "-c", "user.name=t", "-c", "user.email=t@t", "merge", "--no-ff", "--no-edit", x);
     const b = await taskBranch("crew/b", "src/b.ts");
-    expect((await boardTrain(repo, train, b, "B", false)).ok).toBe(true);
+    expect((await boardTrain(repo, train, b, "B", false, ap(b))).ok).toBe(true);
     const files = await tree("crew/train-2026-10-10");
     expect(files).toContain("src/a.ts");
     expect(files).toContain("src/b.ts");
@@ -414,7 +428,7 @@ describe("landing against a real origin", () => {
     const tracked = await sha("refs/remotes/origin/dev");
     await otherPush(origin, "src/theirs.ts");
     const a = await taskBranch("crew/a", "src/a.ts");
-    expect((await shipTask(repo, a, "A", false)).ok).toBe(true);
+    expect((await shipTask(repo, a, "A", false, ap(a))).ok).toBe(true);
     expect(await sha("refs/remotes/origin/dev")).toBe(tracked);
     expect(await tree("dev")).not.toContain("src/theirs.ts");
   });
@@ -426,11 +440,11 @@ describe("landing against a real origin", () => {
     const repo = shipRepo({ setupCommand: `mkdir -p node_modules && echo run >> '${log}'` });
     const runs = () => readFileSync(log, "utf8").trim().split("\n").length;
     const a = await taskBranch("crew/a", "src/a.ts");
-    expect((await shipTask(repo, a, "A", true)).ok).toBe(true);
+    expect((await shipTask(repo, a, "A", true, ap(a))).ok).toBe(true);
     expect(runs()).toBe(1);
     await otherPush(origin, "package.json");
     const b = await taskBranch("crew/b", "src/b.ts");
-    expect((await shipTask(repo, b, "B", true)).ok).toBe(true);
+    expect((await shipTask(repo, b, "B", true, ap(b))).ok).toBe(true);
     expect(runs()).toBe(2);
   });
   test("lands the task's sha, whatever planted refs with the same short names say", async () => {
@@ -441,11 +455,11 @@ describe("landing against a real origin", () => {
     const evil = await commitOnto("main", "src/evil.ts");
     await git(repoPath, "update-ref", "refs/crew/a", evil);
     await git(repoPath, "update-ref", "refs/heads/origin/dev", evil);
-    expect(await shipTask(repo, "crew/a", "A", true)).toEqual({
+    expect(await shipTask(repo, "crew/a", "A", true, ap(a))).toEqual({
       ok: false,
       error: "NightCrew lands a task by its commit sha only.",
     });
-    const shipped = await shipTask(repo, a, "A", true);
+    const shipped = await shipTask(repo, a, "A", true, ap(a));
     expect(shipped.ok).toBe(true);
     for (const ref of ["dev", "refs/heads/dev"]) {
       const files = await tree(ref, ref === "dev" ? origin : repoPath);
@@ -515,11 +529,69 @@ describe("landing against a real origin", () => {
     await base.remove();
     expect(existsSync(marker) ? readFileSync(marker, "utf8") : "").toBe("");
   });
+  test("a task whose history takes in the ship branch's tip can't undo that branch's changes", async () => {
+    // Value: protects=the merge base git uses for a ship can't be moved by the agent: a task tip made a merge with dev's tip (the clone sees your repo's objects) is refused, so the merge can't revert dev changes the gate never diffed; fails_when=mergeInto merges without checking that every merge base sits at or under the pinned base; why_new=G1 probed merge-base manipulation; seam=none
+    const repo = shipRepo();
+    const base = await sha("main");
+    // dev hardens a file after the task's base.
+    const hardened = "export const x = 1;\nexport const strict = true;\n";
+    const wt = join(dir, "wt-dev");
+    await git(repoPath, "worktree", "add", "-q", wt, "dev");
+    writeFileSync(join(wt, "src", "index.ts"), hardened);
+    await git(wt, "add", "-A");
+    await commit(wt, "harden");
+    await git(repoPath, "worktree", "remove", "--force", wt);
+    const devTip = await sha("dev");
+    // The agent edits the same file from the base, then makes its tip a merge with dev's tip.
+    const agent = await commitOnto(base, "src/index.ts");
+    const tree = await sha(`${agent}^{tree}`);
+    const evil = (
+      await git(repoPath, ...ID, "commit-tree", tree, "-p", agent, "-p", devTip, "-m", "merge dev")
+    ).stdout.trim();
+    // The gate diffs base..evil and sees only src/index.ts, inside the ship list.
+    const files = (await git(repoPath, "diff", "--name-only", base, evil)).stdout.trim().split("\n");
+    expect(files).toEqual(["src/index.ts"]);
+    const shipped = await shipTask(repo, evil, "Evil", false, { base, files });
+    expect(shipped.ok).toBe(false);
+    if (!shipped.ok) expect(shipped.error).toContain("checks didn't cover");
+    expect(await sha("dev")).toBe(devTip);
+    expect((await git(repoPath, "show", "dev:src/index.ts")).stdout).toBe(hardened);
+  });
+
+  test("a merge that lands files the gate didn't approve is taken back off", async () => {
+    // Value: protects=after merging, the files that actually changed on the ship branch must be ones the gate approved (or ones the default branch brought in), and the re-run checks must pass, else the branch is reset; fails_when=mergeInto trusts the merge without diffing what landed, or ignores the recheck; why_new=G1 post-merge check; seam=none
+    const repo = shipRepo();
+    const before = await sha("dev");
+    const a = await taskBranch("crew/a", "src/a.ts");
+    const unapproved = await shipTask(repo, a, "A", false, { base: ap(a).base, files: ["src/other.ts"] });
+    expect(unapproved.ok).toBe(false);
+    if (!unapproved.ok) expect(unapproved.error).toContain("never saw (src/a.ts)");
+    expect(await sha("dev")).toBe(before);
+    const rechecked = await shipTask(repo, a, "A", false, { ...ap(a), recheck: () => "Scope changed." });
+    expect(rechecked.ok).toBe(false);
+    if (!rechecked.ok) expect(rechecked.error).toContain("Scope changed.");
+    expect(await sha("dev")).toBe(before);
+  });
+
+  test("a ship branch behind the default branch still ships, with the default branch's changes", async () => {
+    // Value: protects=the post-merge file check allows changes the default branch made between the ship branch and the task's base, so a lagging dev doesn't block every ship; fails_when=checkLanded requires every landed file to be in the gate's list; why_new=G1 post-merge check could refuse legitimate ships; seam=none
+    const repo = shipRepo();
+    writeFileSync(join(repoPath, "README.md"), "moved on\n");
+    await git(repoPath, "add", "-A");
+    await commit(repoPath, "main moves");
+    const a = await taskBranch("crew/a", "src/a.ts");
+    const shipped = await shipTask(repo, a, "A", false, ap(a));
+    expect(shipped).toMatchObject({ ok: true });
+    const files = await tree("dev");
+    expect(files).toContain("README.md");
+    expect(files).toContain("src/a.ts");
+  });
+
   test("a setup that fails on the ship branch says so, with its output", async () => {
     // Value: protects=a failing dependency install on the integration branch is reported as a setup failure with a tail of its output, not as the task breaking the tests; fails_when=testsPass ignores the setup result and blames the task; why_new=cycle-3 review: setup failures read as test failures; seam=none
     const repo = shipRepo({ setupCommand: "echo 'registry unreachable' >&2; exit 3" });
     const a = await taskBranch("crew/a", "src/a.ts");
-    const shipped = await shipTask(repo, a, "A", false);
+    const shipped = await shipTask(repo, a, "A", false, ap(a));
     expect(shipped.ok).toBe(false);
     if (!shipped.ok) {
       expect(shipped.error).toContain("Setup failed on dev");

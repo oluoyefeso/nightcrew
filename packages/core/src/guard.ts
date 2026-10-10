@@ -35,6 +35,13 @@ export const ALWAYS_PROTECTED = [
   "**/.git",
   "**/*.pem",
   "**/id_rsa*",
+  // Host git acts on these after landing: filters, LFS endpoints, submodule URLs.
+  ".gitattributes",
+  "**/.gitattributes",
+  ".lfsconfig",
+  ".gitmodules",
+  // Legacy in-repo worktrees; nothing under it belongs in a task.
+  ".worktrees/**",
 ];
 
 /** Secret file names: .env, .env.local, key.pem, id_rsa. Not .envrc, environment or a template like .env.example. */
@@ -237,7 +244,7 @@ function guardWrite(path: string, ctx: GuardContext): GuardDecision {
   if (ctx.readOnly) return deny("Research tasks don't change the code. Write the report to the artifacts folder.");
 
   const rel = relative(ctx.worktree, abs);
-  if (matchesAny(rel, ALWAYS_PROTECTED)) return deny(`${rel} is protected (workflows, secrets and git internals).`);
+  if (matchesAny(rel, ALWAYS_PROTECTED)) return deny(`${rel} is protected (workflows, secrets and git config).`);
   if (ctx.scope.length && !matchesAny(rel, ctx.scope)) {
     return deny(`${rel} is outside this task's scope (${ctx.scope.join(", ")}).`);
   }

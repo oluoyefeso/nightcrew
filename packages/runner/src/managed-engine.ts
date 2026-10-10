@@ -39,7 +39,7 @@ import {
   STOPPED,
   stoppedResult,
 } from "./engine";
-import { git, gitRun, pushTo, resolveSha } from "./git";
+import { FETCH_FSCK, git, gitRun, pushTo, resolveSha } from "./git";
 import { withRepoInstructions } from "./sdk-engine";
 import { fetchTask, pullIntoClone, taskRef, type Workspace, workspaceFor } from "./workspace";
 
@@ -145,7 +145,7 @@ export class ManagedEngine implements AgentEngine {
         return fail(result, `Branch "${branch}" is protected. The cloud engine only works on task branches.`);
       if (ws) {
         try {
-          startSha = await fetchTask(ws);
+          startSha = await fetchTask(ws, req.signal);
         } catch (e) {
           return fail(
             result,
@@ -588,7 +588,15 @@ async function pullCloudWork(ws: Workspace, branch: string, startSha: string | n
   const ref = taskRef(ws.taskId);
   const fetched = await gitRun(
     ws.repoPath,
-    ["fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "origin", `+refs/heads/${branch}:${ref}`],
+    [
+      ...FETCH_FSCK,
+      "fetch",
+      "--quiet",
+      "--no-tags",
+      "--no-recurse-submodules",
+      "origin",
+      `+refs/heads/${branch}:${ref}`,
+    ],
     { timeoutMs: GIT_TIMEOUT_MS },
   );
   if (!fetched.ok) return false;
@@ -604,9 +612,11 @@ async function pullCloudWork(ws: Workspace, branch: string, startSha: string | n
 /** The same for a plain checkout NightCrew didn't set up: fetch and fast-forward in place. */
 async function pullCloudWorkHere(cwd: string, branch: string): Promise<boolean> {
   const tracking = `refs/remotes/origin/${branch}`;
-  const fetched = await gitRun(cwd, ["fetch", "--quiet", "--no-tags", "origin", `+refs/heads/${branch}:${tracking}`], {
-    timeoutMs: GIT_TIMEOUT_MS,
-  });
+  const fetched = await gitRun(
+    cwd,
+    [...FETCH_FSCK, "fetch", "--quiet", "--no-tags", "origin", `+refs/heads/${branch}:${tracking}`],
+    { timeoutMs: GIT_TIMEOUT_MS },
+  );
   return fetched.ok && (await git(cwd, "merge", "--ff-only", "--quiet", tracking)).ok;
 }
 

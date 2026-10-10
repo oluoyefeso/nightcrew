@@ -18,8 +18,8 @@ import {
   updateRepo,
   upsertRuns,
 } from "@nightcrew/db";
-// The lock pullCar waits on; holding it lets a test board a car mid-pull.
-import { withRepoLock } from "@nightcrew/runner";
+// withRepoLock: the lock pullCar waits on; holding it lets a test board a car mid-pull.
+import { setLandingHome, withRepoLock } from "@nightcrew/runner";
 import { Hono } from "hono";
 import { mountTrustRoutes } from "./trust-routes";
 
@@ -28,6 +28,10 @@ let app: Hono;
 const dirs: string[] = [];
 
 beforeEach(() => {
+  // Landing markers go to a temp dir, never the developer's ~/.nightcrew/landing.
+  const home = mkdtempSync(join(tmpdir(), "nc-trust-home-"));
+  dirs.push(home);
+  setLandingHome(home);
   db = openDb(":memory:");
   app = new Hono();
   mountTrustRoutes(app, { db, publish: false });

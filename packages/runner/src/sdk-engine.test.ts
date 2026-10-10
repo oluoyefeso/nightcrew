@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as realSdk from "@anthropic-ai/claude-agent-sdk";
 import { type PhaseRequest, STOPPED } from "./engine";
 import { cacheDirs } from "./env";
 import { git, run } from "./git";
-import { agentEnv, SdkEngine, sandboxFor } from "./sdk-engine";
+import { agentEnv, SdkEngine, sandboxFor, TAMPERED } from "./sdk-engine";
 
 // query() can be swapped for a scripted stream. Unset, it is the real SDK, so
 // other test files sharing this process are unaffected. mock.module patches
@@ -157,94 +157,51 @@ describe("SdkEngine", () => {
     expect(env.ANTHROPIC_API_KEY).toBe("sk-ant");
   });
 
-  test("the sandbox limits Bash writes to the worktree, its git data, artifacts, temp and caches", async () => {
-    const wt = join(repo, ".worktrees", "task");
-    await git(repo, "worktree", "add", "-q", "-b", "nc/task", wt);
-    const artifacts = join(root, "artifacts");
-    const s = sandboxFor(
-      request({ cwd: wt, guard: { ...request().guard, worktree: wt, writableDirs: [artifacts] } }),
-      "/home/me",
-    );
-    expect(s.enabled).toBe(true);
-    expect(s.allowUnsandboxedCommands).toBe(false);
-    expect(s.failIfUnavailable).toBe(false);
-    const allow = s.filesystem?.allowWrite ?? [];
-    expect(allow).toContain(wt);
-    expect(allow).toContain(artifacts);
-    expect(allow).toContain(tmpdir());
-    expect(allow).toContain("/home/me/.npm");
-    expect(allow).not.toContain(repo);
-    expect(allow).not.toContain("/home/me");
-    expect(s.network?.allowedDomains).toEqual(["*"]);
-  });
-
-  // Value: protects=main, the ship branch and the repo's git plumbing from the agent's shell; fails_when=the sandbox leaves other refs, pointer files, hooks or config writable; why_new=refs, logs and objects were all writable before; seam=none
-  test("the sandbox lets a worktree commit on its own branch and denies the rest of git", async () => {
-    const wt = join(repo, ".worktrees", "crew-x");
-    await git(repo, "worktree", "add", "-q", "-b", "crew/x", wt);
-    await git(repo, "worktree", "add", "-q", "-b", "crew/y", join(repo, ".worktrees", "crew-y"));
-    // A packed branch has no folder of its own; the sandbox can't create one.
-    await git(repo, "pack-refs", "--all");
-    const common = join(repo, ".git");
-    const own = join(common, "worktrees", "crew-x");
-    const guard = { ...request().guard, worktree: wt, protectedBranches: ["main", "nc/ship"] };
-    const s = sandboxFor(request({ cwd: wt, guard }), "/home/me");
-    const allow = (s.filesystem?.allowWrite ?? []).filter((p) => p.startsWith(common));
-    expect(allow.sort()).toEqual(
-      [
-        own,
-        join(common, "objects"),
-        join(common, "refs/heads/crew/x"),
-        join(common, "refs/heads/crew/x.lock"),
-        join(common, "logs/refs/heads/crew/x"),
-        join(common, "refs/stash"),
-        join(common, "refs/stash.lock"),
-        join(common, "logs/refs/stash"),
-      ].sort(),
-    );
-    const deny = s.filesystem?.denyWrite ?? [];
-    for (const p of [
-      join(wt, ".git"),
-      join(own, "HEAD"),
-      join(own, "commondir"),
-      join(own, "gitdir"),
-      join(own, "config.worktree"),
-      join(common, "worktrees", "crew-y"),
-      join(common, "refs/heads/main"),
-      join(common, "refs/heads/main.lock"),
-      join(common, "refs/heads/crew/y"),
-      join(common, "refs/heads/nc/ship"),
-      join(common, "refs/tags"),
-      join(common, "HEAD"),
-      join(common, "commondir"),
-      join(common, "packed-refs"),
-      join(common, "hooks"),
-      join(common, "config"),
-      join(common, "info"),
-      join(common, "remotes"),
-      join(common, "objects/info/alternates"),
-    ])
-      expect(deny).toContain(p);
-    expect(deny.filter((p) => p.includes("crew/x"))).toEqual([]);
-    expect(existsSync(join(common, "refs/heads/crew"))).toBe(true);
-  });
-
-  // Value: protects=git in a task's standalone clone (commit, stash, submodules, lfs), which shares nothing writable with the host repo; fails_when=a clone still gets the linked-worktree deny list, or the host repo it borrows objects from becomes writable; why_new=design point 9, clones replace linked worktrees; seam=none
-  test("in a standalone clone the sandbox allows all of it, with no git denies", async () => {
+  // Value: protects=git in a task's clone (commit, stash, submodules, lfs), which shares nothing writable with the host repo; fails_when=an isolated phase gets git denies, extra allows, or the host repo it borrows objects from; why_new=design point 9, clones replace linked worktrees; seam=none
+  test("in a task's clone the sandbox allows only the clone, artifacts, temp and caches", async () => {
     const clone = join(root, "work", "task-1");
     await git(root, "clone", "-q", "--shared", repo, clone);
     const artifacts = join(root, "artifacts");
     const guard = { ...request().guard, worktree: clone, writableDirs: [artifacts] };
-    const s = sandboxFor(request({ cwd: clone, guard }), "/home/me");
-    const allow = s.filesystem?.allowWrite ?? [];
-    expect(allow).toEqual([clone, artifacts, tmpdir(), ...cacheDirs("/home/me")]);
+    const s = sandboxFor(request({ cwd: clone, guard, isolated: true }), "/home/me");
+    expect(s.enabled).toBe(true);
+    expect(s.allowUnsandboxedCommands).toBe(false);
+    expect(s.failIfUnavailable).toBe(false);
+    expect(s.filesystem?.allowWrite).toEqual([clone, artifacts, tmpdir(), ...cacheDirs("/home/me")]);
     expect(s.filesystem?.denyWrite).toBeUndefined();
-    expect(allow.some((p) => p.startsWith(join(repo, ".git")))).toBe(false);
+    expect(s.network?.allowedDomains).toEqual(["*"]);
+  });
+
+  // Value: protects=the host repo's .git from an agent that swaps its clone's .git for a `gitdir:` pointer between phases; fails_when=the next phase reads the pointer and allows host git paths, or runs at all; why_new=F1, clone mode was read from the clone's own .git; seam=none
+  test("a clone whose .git became a pointer gets no host paths and the phase refuses to run", async () => {
+    const clone = join(root, "work", "task-2");
+    await git(root, "clone", "-q", "--shared", repo, clone);
+    rmSync(join(clone, ".git"), { recursive: true, force: true });
+    writeFileSync(join(clone, ".git"), `gitdir: ${join(repo, ".git")}\n`);
+    const guard = { ...request().guard, worktree: clone };
+    const req = request({ cwd: clone, guard, isolated: true });
+    const allow = sandboxFor(req, "/home/me").filesystem?.allowWrite ?? [];
+    expect(allow.some((p) => p.startsWith(repo))).toBe(false);
+    let called = false;
+    scripted = async function* () {
+      called = true;
+      yield { type: "system" };
+    };
+    const r = await new SdkEngine().runPhase(req, () => {});
+    expect(called).toBe(false);
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe(TAMPERED);
+    // A symlinked .git is refused too.
+    rmSync(join(clone, ".git"));
+    symlinkSync(join(repo, ".git"), join(clone, ".git"));
+    expect((await new SdkEngine().runPhase(req, () => {})).error).toBe(TAMPERED);
+    expect(called).toBe(false);
   });
 
   // Value: protects=the repo's own refs when a phase runs in the main checkout; fails_when=the main checkout's .git is left writable under cwd; why_new=only hooks and config were denied there before; seam=none
   test("in the main checkout the sandbox denies every ref", () => {
     const s = sandboxFor(request(), "/home/me");
+    expect(s.filesystem?.allowWrite).toContain(repo);
     const deny = s.filesystem?.denyWrite ?? [];
     expect(deny).toContain(join(repo, ".git", "refs"));
     expect(deny).toContain(join(repo, ".git", "HEAD"));

@@ -46,6 +46,19 @@ describe("writes", () => {
     expect(allowed("Edit", { file_path: "/repo/.worktrees/t/vendor/lib/.git" }, open)).toBe(false);
     expect(allowed("Write", { file_path: ".gitignore" }, open)).toBe(true);
   });
+  test("git attributes, LFS config, submodules and .worktrees are protected", () => {
+    // Value: protects=an agent can't plant a filter driver, LFS endpoint or submodule URL that host git runs or fetches after landing; fails_when=any of .gitattributes, **/.gitattributes, .lfsconfig, .gitmodules or .worktrees/** leaves ALWAYS_PROTECTED; why_new=H1 review finding; seam=none
+    const open = { ...ctx, scope: [] };
+    for (const file_path of [
+      ".gitattributes",
+      "vendor/lib/.gitattributes",
+      ".lfsconfig",
+      ".gitmodules",
+      ".worktrees/other/src/a.ts",
+    ])
+      expect(allowed("Write", { file_path }, open)).toBe(false);
+    expect(allowed("Write", { file_path: "docs/gitattributes.md" }, open)).toBe(true);
+  });
   test("every write tool is checked, and a write with no path is refused", () => {
     // Value: protects=MultiEdit/NotebookEdit go through the scope check and empty paths deny; fails_when=WRITE_TOOLS loses an entry or notebook_path is ignored; why_new=only Write/Edit were tested; seam=none
     expect(allowed("MultiEdit", { file_path: "src/billing/pay.ts" })).toBe(false);

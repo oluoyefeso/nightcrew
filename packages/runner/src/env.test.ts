@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { childEnv } from "./env";
+import { childEnv, isSecretVar } from "./env";
 import { git, run } from "./git";
 import { checkEnv } from "./sandbox";
 import { agentEnv } from "./sdk-engine";
@@ -59,6 +59,33 @@ describe("one environment policy", () => {
     expect(check.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
     // An inherited GIT_DIR would aim the child's git at another repo.
     expect(childEnv({ GIT_DIR: "/x/.git", GIT_WORK_TREE: "/x" }, { agent: true }).GIT_DIR).toBeUndefined();
+  });
+
+  // Value: protects=DSNs, signing keys, PATs, database passwords and connection URLs from children; fails_when=a name ending _KEY, _DSN, _PAT or _PWD, a CONNECTION_STRING or a database or queue URL gets through, or PWD, PATH and config like AWS_REGION are stripped; why_new=F4, the pattern missed these; seam=none
+  test("strips keys, DSNs, PATs, database passwords and connection URLs, keeps config", () => {
+    for (const k of [
+      "SENTRY_DSN",
+      "REDIS_URL",
+      "SIGNING_KEY",
+      "STRIPE_KEY",
+      "MYSQL_PWD",
+      "GITHUB_PAT",
+      "DATABASE_URL",
+      "DB_URI",
+      "MONGODB_URI",
+      "AMQP_URL",
+      "AZURE_STORAGE_CONNECTION_STRING",
+    ])
+      expect(isSecretVar(k)).toBe(true);
+    for (const k of ["AWS_REGION", "AWS_DEFAULT_REGION", "NODE_ENV", "PATH", "PWD", "OLDPWD", "NODE_PATH", "API_URL"])
+      expect(isSecretVar(k)).toBe(false);
+    const env = childEnv(
+      { SENTRY_DSN: "https://k@sentry.io/1", REDIS_URL: "redis://:p@h", NODE_ENV: "test" },
+      { agent: true },
+    );
+    expect(env.SENTRY_DSN).toBeUndefined();
+    expect(env.REDIS_URL).toBeUndefined();
+    expect(env.NODE_ENV).toBe("test");
   });
 
   // Value: protects=pushes and keychain or gh credential helpers from the agent and from checks; fails_when=either env lacks the push block or the credential.helper reset, or the reset doesn't outrank a repo's own helper; why_new=checks had no push block and neither side reset credential helpers; seam=none

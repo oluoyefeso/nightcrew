@@ -142,18 +142,51 @@ async function branchWorktree(
 
 const identity = ["-c", "user.name=NightCrew", "-c", "user.email=crew@nightcrew.dev"];
 
-/** Merge a task's fetched commit, by sha. `before` is where to reset to if the merge has to come back off. */
+/** What the final gate approved: the diff from `base` to the task's sha touches exactly `files`. */
+export interface Approved {
+  /** The commit the task started from, pinned in your repo. */
+  base: string;
+  /** The files the gate checked. */
+  files: string[];
+  /** Checks to run again on the files the merge actually changed; a reason to refuse, or null. */
+  recheck?: (files: string[]) => string | null;
+}
+
+const lines = (out: string) => out.split("\0").filter(Boolean);
+
+/**
+ * Merge a task's fetched commit, by sha, only when what lands is what the
+ * gate saw. `before` is where to reset to if the merge has to come back off.
+ */
 async function mergeInto(
   lane: Lane,
   sha: string,
   message: string,
+  approved: Approved,
 ): Promise<{ ok: true; sha: string; before: string } | { ok: false; error: string }> {
-  if (!SHA.test(sha)) return { ok: false, error: "NightCrew lands a task by its commit sha only." };
+  if (!SHA.test(sha) || !SHA.test(approved.base))
+    return { ok: false, error: "NightCrew lands a task by its commit sha only." };
   const { dir } = lane;
   // Already merged (or shipped and undone): merging again would change nothing.
   // The only place that says so; --no-ff never makes a no-op merge after this.
   if ((await git(dir, "merge-base", "--is-ancestor", sha, "HEAD")).ok)
     return { ok: false, error: `Already on ${lane.branch}; nothing new to merge.` };
+  // git merges against the merge base of the branch and the task. The gate
+  // diffed from the pinned base, so the merge base must sit at or under it.
+  // A task whose history takes in the branch's own tip (a merge commit made
+  // in the clone, which can see your repo's objects) would otherwise move it,
+  // and the merge would undo branch changes the gate never saw.
+  const bases = await git(dir, "merge-base", "--all", "HEAD", sha);
+  const mergeBases = bases.ok ? bases.stdout.split("\n").filter(Boolean) : [];
+  if (!mergeBases.length)
+    return { ok: false, error: `The task's work shares no history with ${lane.branch}, so it wasn't merged.` };
+  for (const mb of mergeBases) {
+    if (!(await git(dir, "merge-base", "--is-ancestor", mb, approved.base)).ok)
+      return {
+        ok: false,
+        error: `The task's history takes in commits from ${lane.branch} that its checks didn't cover, so it wasn't merged.`,
+      };
+  }
   const before = await startLanding(lane, `merge ${sha}`);
   const m = await git(dir, ...identity, "merge", "--no-ff", "--no-edit", "-m", message, sha);
   if (!m.ok) {
@@ -166,7 +199,37 @@ async function mergeInto(
         : m.stderr.trim() || "git merge failed.",
     };
   }
+  const refused = await checkLanded(lane, before, approved);
+  if (refused) {
+    await git(dir, "reset", "--hard", before);
+    return { ok: false, error: refused };
+  }
   return { ok: true, sha: await head(dir), before };
+}
+
+/**
+ * Every file the merge changed on the branch is one the gate approved, or
+ * one the default branch changed between the branch and the pinned base
+ * (worked out from your repo's commits only). A reason to refuse, or null.
+ */
+async function checkLanded(lane: Lane, before: string, approved: Approved): Promise<string | null> {
+  const landed = await git(lane.dir, "diff", "--name-only", "-z", "--no-renames", before, "HEAD");
+  if (!landed.ok) return `Couldn't list what the merge changed: ${lastLine(landed.stderr)}`;
+  const files = [...new Set(lines(landed.stdout))].sort();
+  const allowed = new Set(approved.files);
+  const fromBase = new Set<string>();
+  const bases = await git(lane.dir, "merge-base", "--all", before, approved.base);
+  for (const mb of bases.ok ? bases.stdout.split("\n").filter(Boolean) : []) {
+    const d = await git(lane.dir, "diff", "--name-only", "-z", "--no-renames", mb, approved.base);
+    if (!d.ok) return `Couldn't list what the default branch changed: ${lastLine(d.stderr)}`;
+    for (const f of lines(d.stdout)) fromBase.add(f);
+  }
+  const unapproved = files.filter((f) => !allowed.has(f) && !fromBase.has(f));
+  if (unapproved.length)
+    return `The merge changed files the task's checks never saw (${unapproved.slice(0, 4).join(", ")}), so it was taken back off.`;
+  const fromTask = files.filter((f) => allowed.has(f));
+  const again = approved.recheck?.(fromTask) ?? null;
+  return again ? `${again} It was taken back off.` : null;
 }
 
 /** Revert a merge commit. `before` is where to reset to if the revert has to come back off. */
@@ -258,11 +321,12 @@ async function shipTaskUnlocked(
   sha: string,
   title: string,
   publish: boolean,
+  approved: Approved,
 ): Promise<{ ok: true; sha: string } | { ok: false; error: string }> {
   if (!repo.shipBranch) return { ok: false, error: "No ship branch." };
   const lane = await branchWorktree(repo, repo.shipBranch, { publish, ship: true });
   try {
-    const merged = await mergeInto(lane, sha, `Ship: ${title} (NightCrew)`);
+    const merged = await mergeInto(lane, sha, `Ship: ${title} (NightCrew)`, approved);
     if (!merged.ok) return merged;
     const tests = await testsPass(repo, lane.dir, lane.start);
     if (!tests.ok) {
@@ -323,6 +387,7 @@ async function boardTrainUnlocked(
   sha: string,
   title: string,
   publish: boolean,
+  approved: Approved,
 ): Promise<{ ok: true; sha: string } | { ok: false; error: string }> {
   const lane = await branchWorktree(repo, train.branch, {
     publish,
@@ -330,7 +395,7 @@ async function boardTrainUnlocked(
     createFrom: repo.defaultBranch,
   });
   try {
-    const merged = await mergeInto(lane, sha, `${title} (NightCrew)`);
+    const merged = await mergeInto(lane, sha, `${title} (NightCrew)`, approved);
     if (!merged.ok) return merged;
     const tests = await testsPass(repo, lane.dir, lane.start);
     if (!tests.ok) {

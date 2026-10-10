@@ -10,4 +10,4 @@ export * from "./pipeline";
 export { JevReflexes, NoReflexes, type Reflexes, reflexesFromEnv } from "./reflexes";
 export { materializeRoutines } from "./routines";
 export { SdkEngine } from "./sdk-engine";
-export { taskRef, workspaceDir } from "./workspace";
+export { repoSupport, taskRef, workspaceDir } from "./workspace";

@@ -87,6 +87,23 @@ export function describeTool(tool: string, input: Record<string, unknown>, cwd: 
   }
 }
 
+export const STOPPED = "Stopped: the task ran out of time or was cancelled.";
+
+/** The result for a phase that was stopped before it did anything. */
+export function stoppedResult(): PhaseResult {
+  return {
+    ok: false,
+    text: "",
+    structured: null,
+    costUsd: 0,
+    tokensIn: 0,
+    tokensOut: 0,
+    turns: 0,
+    error: STOPPED,
+    rateLimited: false,
+  };
+}
+
 /** Shared guard check used by every engine. */
 export function checkGuard(req: PhaseRequest, tool: string, input: Record<string, unknown>) {
   return guardToolCall(tool, input, req.guard);

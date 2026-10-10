@@ -37,6 +37,27 @@ export function createApp(opts: ServerOptions) {
   const { db } = opts;
   const app = new Hono();
 
+  // The API is for this machine only: refuse DNS-rebound hosts and cross-site writes.
+  app.use("/api/*", async (c, next) => {
+    if (!isLocalHost(c.req.header("host") ?? new URL(c.req.url).host)) {
+      return c.json({ error: "NightCrew only answers to localhost." }, 403);
+    }
+    if (MUTATING.has(c.req.method)) {
+      const origin = c.req.header("origin");
+      if (origin !== undefined && !isLocalHost(originHost(origin))) {
+        return c.json({ error: "Cross-site requests are refused." }, 403);
+      }
+      const type = c.req.header("content-type");
+      const hasBody =
+        Number(c.req.header("content-length") ?? 0) > 0 || c.req.header("transfer-encoding") !== undefined;
+      if ((type !== undefined || hasBody) && !/^application\/json\b/i.test(type ?? "")) {
+        return c.json({ error: "Send JSON with content-type application/json." }, 415);
+      }
+    }
+    await next();
+  });
+  app.onError((e, c) => c.json({ error: e instanceof Error ? e.message : String(e) }, 500));
+
   app.get("/api/health", (c) => c.json({ ok: true, version: VERSION }));
 
   app.get("/api/nights", (c) => c.json(listNights(db)));
@@ -107,6 +128,23 @@ export function createApp(opts: ServerOptions) {
   });
 
   return app;
+}
+
+const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/** "localhost:3721" or "[::1]" is local; anything else, including junk, is not. */
+function isLocalHost(host: string): boolean {
+  const name = host.match(/^(\[[^\]]*\]|[^:[\]]+)(?::\d+)?$/)?.[1];
+  return name !== undefined && LOCAL_HOSTS.has(name.toLowerCase());
+}
+
+function originHost(origin: string): string {
+  try {
+    return new URL(origin).host;
+  } catch {
+    return "";
+  }
 }
 
 export const VERSION = "1.0.0-alpha.2";

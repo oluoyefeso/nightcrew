@@ -3,25 +3,27 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { AgentEngine, EngineEvent, PhaseRequest, PhaseResult } from "./engine";
+import { type AgentEngine, type EngineEvent, type PhaseRequest, type PhaseResult, stoppedResult } from "./engine";
 
 const wait = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve) => {
     const t = setTimeout(resolve, ms);
-    signal.addEventListener("abort", () => {
-      clearTimeout(t);
-      resolve();
-    });
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(t);
+        resolve();
+      },
+      { once: true },
+    );
   });
 
 export class DemoEngine implements AgentEngine {
   readonly name = "demo";
   constructor(private readonly stepMs = 900) {}
 
-  private lastPhase: PhaseRequest["phase"] = "plan";
-
   async runPhase(req: PhaseRequest, onEvent: (e: EngineEvent) => void): Promise<PhaseResult> {
-    this.lastPhase = req.phase;
+    if (req.signal.aborted) return stoppedResult();
     const script: Record<PhaseRequest["phase"], EngineEvent[]> = {
       plan: [
         { kind: "tool", tool: "Glob", input: {}, text: "Looked for **/*.ts" },
@@ -48,20 +50,21 @@ export class DemoEngine implements AgentEngine {
     const steps = script[req.phase];
 
     for (const s of steps) {
-      if (req.signal.aborted) break;
       await wait(this.stepMs, req.signal);
+      if (req.signal.aborted) return stoppedResult();
       onEvent(s);
     }
-    if (req.signal.aborted) return this.result({ ok: false, error: "Stopped." });
+    if (req.signal.aborted) return stoppedResult();
+    const result = (over: Partial<PhaseResult>) => this.result(req.phase, over);
 
     if (req.phase === "implement" || req.phase === "repair") {
       const file = join(req.cwd, this.target(req));
       mkdirSync(dirname(file), { recursive: true });
       writeFileSync(file, `# NightCrew demo\n\nWritten at ${new Date().toISOString()} for a demo run.\n`);
-      return this.result({ text: `Added ${this.target(req)} as a demo change; checks pass.` });
+      return result({ text: `Added ${this.target(req)} as a demo change; checks pass.` });
     }
     if (req.phase === "review") {
-      return this.result({
+      return result({
         structured: {
           verdict: "ready",
           summary: "Demo change looks fine.",
@@ -80,7 +83,7 @@ export class DemoEngine implements AgentEngine {
         .map((p) => p.trim())
         .filter((p) => p.length > 3)
         .slice(0, 5);
-      return this.result({
+      return result({
         structured: {
           tasks: parts.map((p, i) => ({
             repo,
@@ -107,9 +110,9 @@ export class DemoEngine implements AgentEngine {
     }
     if (req.phase === "research") {
       writeFileSync(join(req.guard.writableDirs[0] ?? req.cwd, "REPORT.md"), "# Demo report\n\nThis was a demo run.");
-      return this.result({ text: "Demo answer: nothing real was researched." });
+      return result({ text: "Demo answer: nothing real was researched." });
     }
-    return this.result({ text: "## Demo plan\n\n1. Add one small file.\n2. Run the tests." });
+    return result({ text: "## Demo plan\n\n1. Add one small file.\n2. Run the tests." });
   }
 
   private target(req: PhaseRequest): string {
@@ -123,7 +126,7 @@ export class DemoEngine implements AgentEngine {
     return join(dir, "NIGHTCREW_DEMO.md");
   }
 
-  private result(over: Partial<PhaseResult>): PhaseResult {
+  private result(phase: PhaseRequest["phase"], over: Partial<PhaseResult>): PhaseResult {
     // Pretend usage in line with measured real runs (a small task is ~100k tokens).
     const usage: Record<string, [number, number]> = {
       plan: [18_000, 900],
@@ -133,7 +136,7 @@ export class DemoEngine implements AgentEngine {
       research: [36_000, 1_600],
       compose: [6_000, 400],
     };
-    const [tokensIn, tokensOut] = usage[this.lastPhase] ?? [0, 0];
+    const [tokensIn, tokensOut] = usage[phase] ?? [0, 0];
     return {
       ok: true,
       text: "",

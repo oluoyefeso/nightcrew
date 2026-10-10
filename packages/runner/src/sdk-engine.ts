@@ -1,9 +1,16 @@
 // Runs a phase through the Claude Agent SDK on this machine. Uses
 // ANTHROPIC_API_KEY when it's set, otherwise the local Claude Code login.
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { type HookCallback, type Options, query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import {
+  type HookCallback,
+  type Options,
+  query,
+  type SandboxSettings,
+  type SDKMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import {
   type AgentEngine,
   backstopUsd,
@@ -12,6 +19,8 @@ import {
   type EngineEvent,
   type PhaseRequest,
   type PhaseResult,
+  STOPPED,
+  stoppedResult,
 } from "./engine";
 
 const TOOLS = ["Read", "Write", "Edit", "MultiEdit", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "TodoWrite"];
@@ -21,6 +30,8 @@ export class SdkEngine implements AgentEngine {
   constructor(private readonly opts: { claudePath?: string } = {}) {}
 
   async runPhase(req: PhaseRequest, onEvent: (e: EngineEvent) => void): Promise<PhaseResult> {
+    // Stopped before it started: don't spend anything.
+    if (req.signal.aborted) return stoppedResult();
     const abort = new AbortController();
     const onAbort = () => abort.abort();
     req.signal.addEventListener("abort", onAbort, { once: true });
@@ -86,6 +97,11 @@ export class SdkEngine implements AgentEngine {
       ...(req.resumeSession ? { resume: req.resumeSession } : {}),
       ...(req.outputSchema ? { outputFormat: { type: "json_schema", schema: req.outputSchema } } : {}),
       ...(this.opts.claudePath ? { pathToClaudeCodeExecutable: this.opts.claudePath } : {}),
+      // Bash runs in the OS sandbox: it can only write to the worktree, the
+      // artifact folder, temp and package caches. Network stays open.
+      sandbox: sandboxFor(req),
+      // The agent's process (not this one) can't push to a real remote.
+      env: agentEnv(process.env),
     };
 
     const result: PhaseResult = {
@@ -103,8 +119,12 @@ export class SdkEngine implements AgentEngine {
     let gotResult = false;
     let lastText = "";
     // Count tokens per API call as they stream, and stop at the phase's cap.
-    const seen = new Set<string>();
-    let liveTokens = 0;
+    // One call can stream as several messages with the same id; keep the
+    // largest usage seen for each. The live counts also stand in for the
+    // totals when no result arrives.
+    const calls = new Map<string, { in: number; out: number }>();
+    let liveIn = 0;
+    let liveOut = 0;
     let overBudget = false;
     try {
       for await (const msg of query({ prompt: req.prompt, options }) as AsyncIterable<SDKMessage>) {
@@ -118,14 +138,19 @@ export class SdkEngine implements AgentEngine {
                 cache_creation_input_tokens?: number;
               }
             | undefined;
-          if (u && msg.message.id && !seen.has(msg.message.id)) {
-            seen.add(msg.message.id);
-            liveTokens +=
-              (u.input_tokens ?? 0) +
-              (u.output_tokens ?? 0) +
-              (u.cache_read_input_tokens ?? 0) +
-              (u.cache_creation_input_tokens ?? 0);
-            if (liveTokens > req.maxTokens && !overBudget) {
+          if (u && msg.message.id) {
+            const prev = calls.get(msg.message.id) ?? { in: 0, out: 0 };
+            const next = {
+              in: Math.max(
+                prev.in,
+                (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0),
+              ),
+              out: Math.max(prev.out, u.output_tokens ?? 0),
+            };
+            calls.set(msg.message.id, next);
+            liveIn += next.in - prev.in;
+            liveOut += next.out - prev.out;
+            if (liveIn + liveOut > req.maxTokens && !overBudget) {
               overBudget = true;
               abort.abort();
             }
@@ -174,10 +199,8 @@ export class SdkEngine implements AgentEngine {
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       result.ok = false;
-      if (overBudget) {
-        result.error = "Hit the task's token budget before finishing.";
-        result.tokensIn ||= liveTokens;
-      } else if (req.signal.aborted) result.error = "Stopped: the task ran out of time or was cancelled.";
+      if (overBudget) result.error = "Hit the task's token budget before finishing.";
+      else if (req.signal.aborted) result.error = STOPPED;
       else if (/maximum budget/i.test(message)) result.error = "Hit the task's token budget before finishing.";
       else if (/rate.?limit|429/i.test(message)) {
         result.error = "Rate limited by the API (429).";
@@ -187,9 +210,103 @@ export class SdkEngine implements AgentEngine {
     } finally {
       req.signal.removeEventListener("abort", onAbort);
     }
+    // The stream can also just end on an abort, without a result or an error.
+    if (!gotResult && !result.error)
+      result.error = overBudget
+        ? "Hit the task's token budget before finishing."
+        : req.signal.aborted
+          ? STOPPED
+          : "The agent stopped without a result.";
+    // Stopped, timed out, rate limited or crashed before the result: count
+    // what streamed, so the task and daily budgets still see the spend.
+    if (result.tokensIn + result.tokensOut < liveIn + liveOut) {
+      result.tokensIn = Math.max(result.tokensIn, liveIn);
+      result.tokensOut = Math.max(result.tokensOut, liveOut);
+    }
     // Whatever it said last is still useful (a plan cut short by the budget).
     if (!result.text && lastText) result.text = lastText;
     return result;
+  }
+}
+
+/** Prefixes of real remote URLs. Pushes to them are rewritten to a scheme git can't speak. */
+const PUSH_PREFIXES = ["https://", "http://", "ssh://", "git://", "git@"];
+
+/**
+ * The agent's environment: this process's, plus git config that makes any
+ * `git push` to a real remote fail. Only the agent's subprocess gets it; this
+ * process still pushes task branches itself. The SDK's `env` replaces the
+ * child's environment, so the base is copied in.
+ */
+export function agentEnv(base: NodeJS.ProcessEnv): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...base, GIT_TERMINAL_PROMPT: "0" };
+  // Append after any GIT_CONFIG_* entries already set, rather than clobber them.
+  const start = Number.parseInt(base.GIT_CONFIG_COUNT ?? "0", 10) || 0;
+  PUSH_PREFIXES.forEach((prefix, i) => {
+    env[`GIT_CONFIG_KEY_${start + i}`] = "url.nightcrew-blocked://.pushInsteadOf";
+    env[`GIT_CONFIG_VALUE_${start + i}`] = prefix;
+  });
+  env.GIT_CONFIG_COUNT = String(start + PUSH_PREFIXES.length);
+  return env;
+}
+
+/** Shared package caches, so installs work inside the sandbox. */
+const CACHE_DIRS = [
+  ".bun/install/cache",
+  ".npm",
+  ".cache",
+  ".pnpm-store",
+  ".yarn",
+  "Library/Caches",
+  ".cargo/registry",
+];
+
+/**
+ * OS sandbox for Bash (Seatbelt on macOS, bubblewrap on Linux). Writes are
+ * limited to the worktree, its git data (not hooks or config), the artifact
+ * folder, temp and package caches. The model can't opt out of it. Network is
+ * left open: tests and installs need it, and the guard handles network writes.
+ * Where the sandbox can't start (Linux without bubblewrap), Bash runs
+ * unsandboxed with the guard only.
+ */
+export function sandboxFor(req: PhaseRequest, home = homedir()): SandboxSettings {
+  const git = gitDirs(req.cwd);
+  const allowWrite = [
+    req.cwd,
+    ...req.guard.writableDirs,
+    tmpdir(),
+    ...(git ? [git.dir, join(git.common, "objects"), join(git.common, "refs"), join(git.common, "logs")] : []),
+    ...CACHE_DIRS.map((d) => join(home, d)),
+  ];
+  return {
+    enabled: true,
+    failIfUnavailable: false,
+    autoAllowBashIfSandboxed: true,
+    allowUnsandboxedCommands: false,
+    filesystem: {
+      allowWrite: [...new Set(allowWrite)],
+      // Hooks and config would run code on this machine at NightCrew's next git command.
+      ...(git ? { denyWrite: [join(git.common, "hooks"), join(git.common, "config")] } : {}),
+    },
+    network: { allowedDomains: ["*"], allowLocalBinding: true },
+  };
+}
+
+/** The worktree's own git dir and the repo's shared one. Null if cwd isn't a repo root. */
+function gitDirs(cwd: string): { dir: string; common: string } | null {
+  const dotGit = join(cwd, ".git");
+  try {
+    if (statSync(dotGit).isDirectory()) return { dir: dotGit, common: dotGit };
+    const pointer = readFileSync(dotGit, "utf8")
+      .match(/^gitdir:\s*(.+)$/m)?.[1]
+      ?.trim();
+    if (!pointer) return null;
+    const dir = resolve(cwd, pointer);
+    const commondir = join(dir, "commondir");
+    const common = existsSync(commondir) ? resolve(dir, readFileSync(commondir, "utf8").trim()) : dir;
+    return { dir, common };
+  } catch {
+    return null;
   }
 }
 

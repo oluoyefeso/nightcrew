@@ -3,6 +3,8 @@
 // limits and the daily budget); scheduled tasks wait for their time. Each
 // agent reports back when it finishes.
 
+import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
+import { join } from "node:path";
 import { formatTokens, nightIdFor, planQueue } from "@nightcrew/core";
 import {
   type Db,
@@ -71,6 +73,7 @@ export class Crew {
   private retriedToday = new Map<string, string>();
   private message: string | null = null;
   private pumping = false;
+  private halted = false;
 
   constructor(
     private readonly deps: {
@@ -80,9 +83,17 @@ export class Crew {
       publish: boolean;
       reflexes?: Reflexes;
     },
-  ) {
-    // A task left "running" by a crash goes back to the queue.
-    for (const t of listTasks(deps.db, ["running"])) updateTask(deps.db, t.id, { status: "queued" });
+  ) {}
+
+  /**
+   * Put tasks left "running" by a crash back in the queue. Only the process
+   * that dispatches (holding the crew lock) may call this; any other process
+   * would steal tasks a live dispatcher is running.
+   */
+  recover(): number {
+    const orphans = listTasks(this.deps.db, ["running"]);
+    for (const t of orphans) updateTask(this.deps.db, t.id, { status: "queued" });
+    return orphans.length;
   }
 
   subscribe(fn: (e: CrewEvent) => void): () => void {
@@ -141,7 +152,7 @@ export class Crew {
       const { db } = this.deps;
       materializeRoutines(db);
       const s = getSettings(db);
-      if (!s.dispatch || this.pausedUntil > Date.now()) return this.emitStatus();
+      if (this.halted || !s.dispatch || this.pausedUntil > Date.now()) return this.emitStatus();
 
       for (;;) {
         if (this.running.size >= s.maxAgents) break;
@@ -240,7 +251,7 @@ export class Crew {
     const { db } = this.deps;
     this.emit({ type: "report", outcome: { ...outcome, title, taskId } });
 
-    if (outcome.reason?.includes("429")) {
+    if (outcome.rateLimited) {
       // Rate limited: put it back and pause dispatch for a while.
       const wait = RATE_LIMIT_WAITS_MS[Math.min(this.rateLimitStrikes++, RATE_LIMIT_WAITS_MS.length - 1)] as number;
       updateTask(db, taskId, { status: "queued" });
@@ -254,7 +265,11 @@ export class Crew {
     if (outcome.status === "failed" && outcome.reason) {
       const today = nightIdFor(new Date().toISOString());
       if (this.retriedToday.get(taskId) !== today) {
-        const kind = await classifyFailure(this.deps.reflexes ?? new NoReflexes(), outcome.reason, outcome.reason);
+        const kind = await classifyFailure(
+          this.deps.reflexes ?? new NoReflexes(),
+          outcome.reason,
+          outcome.log ?? outcome.reason,
+        );
         if (kind === "flaky") {
           this.retriedToday.set(taskId, today);
           updateTask(db, taskId, { status: "queued" });
@@ -301,6 +316,13 @@ export class Crew {
     for (const r of this.running.values()) r.abort.abort();
   }
 
+  /** Stop every agent and start nothing new, for quitting. */
+  shutdown() {
+    this.halted = true;
+    this.stopSchedule();
+    this.stopAll();
+  }
+
   /** Resolves when no agent is working and nothing runnable is left (for `nightcrew run` and tests). */
   async drain(): Promise<void> {
     await this.pump();
@@ -320,5 +342,63 @@ export class Crew {
         fn(e);
       } catch {}
     }
+  }
+}
+
+// ── One dispatcher at a time ────────────────────────────────────────────────
+
+export type CrewLock = { ok: true; release: () => void } | { ok: false; pid: number };
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    // EPERM: it exists, it just isn't ours.
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Only one process may dispatch the queue (the dashboard or `nightcrew run`).
+ * The lock is <dataDir>/crew.lock holding the owner's pid; a lock whose
+ * process is gone is stale and taken over.
+ */
+export function takeCrewLock(dataDir: string): CrewLock {
+  const file = join(dataDir, "crew.lock");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = openSync(file, "wx");
+      writeSync(fd, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
+      closeSync(fd);
+      let released = false;
+      return {
+        ok: true,
+        release: () => {
+          if (released) return;
+          released = true;
+          try {
+            if (lockPid(file) === process.pid) unlinkSync(file);
+          } catch {}
+        },
+      };
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      const pid = lockPid(file);
+      if (pid && pid !== process.pid && alive(pid)) return { ok: false, pid };
+      try {
+        unlinkSync(file);
+      } catch {}
+    }
+  }
+  throw new Error(`Couldn't take the crew lock at ${file}.`);
+}
+
+function lockPid(file: string): number | null {
+  try {
+    const pid = Number((JSON.parse(readFileSync(file, "utf8")) as { pid?: unknown }).pid);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
   }
 }

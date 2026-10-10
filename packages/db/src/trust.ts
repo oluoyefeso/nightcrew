@@ -60,6 +60,15 @@ export function addCar(db: Db, trainId: string, car: TrainCar) {
   return updateTrain(db, trainId, { cars: [...t.cars.filter((c) => c.runId !== car.runId), car] });
 }
 
+/** Change one car's state on a fresh read, so cars that boarded meanwhile stay on. */
+export function setCarState(db: Db, trainId: string, runId: string, state: TrainCar["state"]) {
+  return db.transaction(() => {
+    const t = getTrain(db, trainId);
+    if (!t) return null;
+    return updateTrain(db, trainId, { cars: t.cars.map((c) => (c.runId === runId ? { ...c, state } : c)) });
+  });
+}
+
 function toTrain(r: { train: typeof schema.trains.$inferSelect; repoName: string }): Train {
   return { ...r.train, repoName: r.repoName, status: r.train.status as Train["status"] };
 }
@@ -178,13 +187,22 @@ export function createRoutine(
   return listRoutines(db).find((r) => r.id === id) as Routine;
 }
 
+export function getRoutine(db: Db, id: string): Routine | null {
+  return listRoutines(db).find((r) => r.id === id) ?? null;
+}
+
 export function updateRoutine(
   db: Db,
   id: string,
-  patch: Partial<Pick<Routine, "title" | "brief" | "days" | "enabled" | "scope" | "criteria" | "lastNight">>,
+  patch: Partial<Pick<Routine, "title" | "brief" | "type" | "days" | "enabled" | "scope" | "criteria" | "lastNight">>,
 ) {
-  db.update(schema.routines).set(patch).where(eq(schema.routines.id, id)).run();
-  return listRoutines(db).find((r) => r.id === id) ?? null;
+  const set = { ...patch };
+  if (set.title !== undefined) set.title = set.title.trim();
+  if (set.days) set.days = [...new Set(set.days)].filter((d) => d >= 0 && d <= 6).sort();
+  // Drizzle refuses an update with nothing to set.
+  if (Object.values(set).some((v) => v !== undefined))
+    db.update(schema.routines).set(set).where(eq(schema.routines.id, id)).run();
+  return getRoutine(db, id);
 }
 
 export function deleteRoutine(db: Db, id: string) {

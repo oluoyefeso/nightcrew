@@ -69,14 +69,20 @@ function migrate(client: Database) {
 export type RunRow = typeof schema.runs.$inferInsert;
 export type ArtifactRow = typeof schema.artifacts.$inferInsert;
 
-/** Insert or refresh imported runs. Triage decisions are left untouched. */
-export function upsertRuns(db: Db, rows: { run: RunRow; artifacts: Omit<ArtifactRow, "runId">[] }[]) {
+/**
+ * Insert or refresh imported runs. Triage decisions are left untouched, and so
+ * are the `keep` fields of a run that's already stored (say, a PR state this
+ * import couldn't refresh).
+ */
+export function upsertRuns(
+  db: Db,
+  rows: { run: RunRow; artifacts: Omit<ArtifactRow, "runId">[]; keep?: (keyof RunRow)[] }[],
+) {
   db.transaction((tx) => {
-    for (const { run, artifacts } of rows) {
-      tx.insert(schema.runs)
-        .values(run)
-        .onConflictDoUpdate({ target: schema.runs.id, set: { ...run, id: undefined } })
-        .run();
+    for (const { run, artifacts, keep } of rows) {
+      const set: Partial<RunRow> = { ...run, id: undefined };
+      for (const k of keep ?? []) delete set[k];
+      tx.insert(schema.runs).values(run).onConflictDoUpdate({ target: schema.runs.id, set }).run();
       for (const a of artifacts) {
         tx.insert(schema.artifacts)
           .values({ ...a, runId: run.id })

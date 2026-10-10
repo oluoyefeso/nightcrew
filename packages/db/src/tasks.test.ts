@@ -11,8 +11,10 @@ import {
   openDb,
   reorderTasks,
   schema,
+  tokensOnDay,
   updateSettings,
   updateTask,
+  upsertRuns,
 } from "./index";
 
 function setup() {
@@ -89,4 +91,32 @@ test("night-era settings carry over", () => {
   const { db } = setup();
   db.insert(schema.settings).values({ key: "startAt", value: "21:00" }).run();
   expect(getSettings(db).scheduleAt).toBe("21:00");
+});
+
+test("the daily token count includes crew runs of that day only, never imported classic runs", () => {
+  // Value: protects=the daily budget counts only this crew's runs on that day; fails_when=the classic-source or day filter in tokensOnDay is dropped and imported history eats the budget; why_new=tokensOnDay untested; seam=none
+  const { db } = setup();
+  const run = (id: string, nightId: string, source: string, tokensIn: number, tokensOut: number) => ({
+    run: {
+      id,
+      nightId,
+      sessionId: "s",
+      taskId: id,
+      title: id,
+      repo: "acme",
+      status: "complete",
+      source,
+      tokensIn,
+      tokensOut,
+    },
+    artifacts: [],
+  });
+  upsertRuns(db, [
+    run("local-1", "2026-10-10", "local", 100_000, 20_000),
+    run("local-2", "2026-10-10", "local", 5_000, 0),
+    run("classic", "2026-10-10", "classic", 900_000, 90_000),
+    run("yesterday", "2026-10-09", "local", 400_000, 0),
+  ]);
+  expect(tokensOnDay(db, "2026-10-10")).toBe(125_000);
+  expect(tokensOnDay(db, "2026-10-08")).toBe(0);
 });

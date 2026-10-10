@@ -59,15 +59,25 @@ function TaskEditor({
     },
   });
 
-  // Autosave edits after a short pause.
+  // Autosave edits after a short pause. Edits within the pause merge, so a
+  // quick title-then-brief change saves both; leaving the page saves the rest.
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const pending = useRef<Partial<Task>>({});
+  const flush = useRef(() => {});
+  flush.current = () => {
+    clearTimeout(timer.current);
+    const patch = pending.current;
+    pending.current = {};
+    if (Object.keys(patch).length) save.mutate(patch);
+  };
   const edit = (patch: Partial<Task>) => {
     setT((prev) => ({ ...prev, ...patch }));
     setSaved(false);
+    pending.current = { ...pending.current, ...patch };
     clearTimeout(timer.current);
-    timer.current = setTimeout(() => save.mutate(patch), 600);
+    timer.current = setTimeout(() => flush.current(), 600);
   };
-  useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(() => () => flush.current(), []);
 
   const status = STATUS_COPY[t.status];
 
@@ -105,11 +115,11 @@ function TaskEditor({
           disabled={locked}
           onChange={(e) => edit({ title: e.target.value })}
           aria-label="Title"
-          className="t-h2 w-full bg-transparent outline-none"
+          className="t-h2 -mx-2 w-[calc(100%+1rem)] rounded-lg bg-transparent px-2 outline-none transition-[background-color,box-shadow] duration-150 ease-out enabled:hover:bg-raised/50 focus-visible:bg-transparent focus-visible:ring-1 focus-visible:ring-[color-mix(in_srgb,var(--dawn)_45%,transparent)]"
         />
         <div className="flex flex-wrap gap-2">
           {t.status !== "queued" && t.status !== "running" && (
-            <Button variant="primary" size="sm" onClick={() => save.mutate({ status: "queued" })}>
+            <Button variant="primary" size="sm" onClick={() => save.mutate({ status: "queued", runAt: null })}>
               Run now
             </Button>
           )}

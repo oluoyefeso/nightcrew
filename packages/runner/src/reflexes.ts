@@ -95,7 +95,10 @@ export async function scoreConfidence(
       challenges?: { challenge?: string; held: boolean; detail?: string }[];
       concerns: string[];
     } | null;
+    /** Rendered evidence, for the model's prompt only. */
     evidence: string | null;
+    /** How many required pieces of evidence couldn't be gathered. */
+    evidenceMissing: number;
     checksPassed: boolean;
   },
 ): Promise<number> {
@@ -118,11 +121,11 @@ export function ruleConfidence(input: {
     challenges?: { challenge?: string; held: boolean; detail?: string }[];
     concerns: string[];
   } | null;
-  evidence: string | null;
+  evidenceMissing: number;
   checksPassed: boolean;
 }): number {
   if (!input.checksPassed || !input.review) return 0.2;
-  if (input.evidence?.includes("MISSING")) return 0.45;
+  if (input.evidenceMissing > 0) return 0.45;
   const held = input.review.challenges?.filter((c) => c.held).length ?? 0;
   if (input.review.verdict !== "ready") return 0.5;
   return Math.max(0.5, 0.95 - held * 0.15 - input.review.concerns.length * 0.05);

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import journal from "../migrations/meta/_journal.json";
 import { getReport, getRun, listNights, openDb, type RunRow, recordTriage, upsertRuns } from "./index";
 
 function row(over: Partial<RunRow>): RunRow {
@@ -64,4 +65,26 @@ describe("db", () => {
     expect(r?.costCents).toBe(120);
     expect(r?.bucket).toBe("failed");
   });
+
+  // Value: protects=a re-sync that couldn't reach GitHub keeps the PR state and title an earlier sync recorded; fails_when=upsertRuns overwrites kept fields and a merged PR falls back to draft; why_new=offline re-syncs regressed PR state; seam=none
+  test("re-importing without fresh PR info keeps the stored PR state and title", () => {
+    const db = openDb(":memory:");
+    upsertRuns(db, [{ run: row({ title: "Task a" }), artifacts: [] }]);
+    upsertRuns(db, [{ run: row({ prState: "merged", title: "Add pagination", costCents: 90 }), artifacts: [] }]);
+    upsertRuns(db, [{ run: row({ title: "Task a", costCents: 120 }), artifacts: [], keep: ["prState", "title"] }]);
+    const r = getRun(db, "s1:task-a")?.run;
+    expect(r?.prState).toBe("merged");
+    expect(r?.title).toBe("Add pagination");
+    expect(r?.costCents).toBe(120);
+  });
+});
+
+// Value: protects=the migrations embedded in the binary are exactly drizzle-kit's journal, in order; fails_when=a new migration is generated but not appended to MIGRATIONS (or out of order) and fresh installs miss a table or column; why_new=nothing tied the two lists together; seam=none
+test("embedded migrations match the drizzle journal", () => {
+  const db = openDb(":memory:");
+  const applied = db.$client
+    .query<{ name: string }, []>("SELECT name FROM __migrations ORDER BY rowid")
+    .all()
+    .map((r) => r.name);
+  expect(applied).toEqual(journal.entries.map((e) => e.tag));
 });

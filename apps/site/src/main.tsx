@@ -168,7 +168,7 @@ function Replay() {
               />
             ))}
           </div>
-          <div className="mt-1.5 flex justify-between font-mono text-[10px] text-faint">
+          <div className="mt-1.5 flex justify-between font-mono text-[11px] text-muted tabular">
             <span>09:00</span>
             <span>12:00</span>
             <span>15:00</span>
@@ -518,8 +518,8 @@ function Site() {
                   key={name as string}
                   className={clsx(
                     "grid content-start gap-2 rounded-2xl p-5",
-                    i === 4 ? "ring-1 ring-line ring-dashed" : "bg-surface ring-1 ring-line",
-                    i === 3 && "ring-[color-mix(in_srgb,var(--dawn)_55%,transparent)]",
+                    i === 4 ? "border border-line border-dashed" : "bg-surface ring-1",
+                    i === 3 ? "ring-[color-mix(in_srgb,var(--dawn)_55%,transparent)]" : i < 4 && "ring-line",
                   )}
                   style={{ minHeight: `${120 + (h as number) * 36}px` }}
                 >

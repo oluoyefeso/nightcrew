@@ -11,11 +11,12 @@ import {
   getTask,
   listRunEvents,
   openDb,
+  updateRepo,
   updateTask,
 } from "@nightcrew/db";
 import { ScriptedEngine } from "./engine";
 import { git } from "./git";
-import { runTask } from "./pipeline";
+import { normalizeReview, runTask } from "./pipeline";
 import type { ReviewOutput } from "./prompts";
 
 let dir: string;
@@ -222,4 +223,144 @@ test("files written by NightCrew's dependency install don't count against scope 
   expect(out.status).toBe("complete");
   const wt = join(repoPath, ".worktrees", "crew-add-the-feature");
   expect((await git(wt, "show", "--stat", "--name-only", "HEAD")).stdout).not.toContain("package-lock.json");
+});
+
+describe("token budget split", () => {
+  // Value: protects=plan gets a capped slice, build leaves the reviewer its reserve, and caps used in full never pass the task's tokenBudget; fails_when=a cap formula or the review reserve changes; why_new=no test asserted per-phase maxTokens; seam=none
+  test.each([
+    // budget, plan cap, build cap, review cap (each phase burns its whole cap)
+    [1_000_000, 200_000, 550_000, 250_000],
+    [4_000_000, 800_000, 2_900_000, 300_000],
+    [200_000, 60_000, 90_000, 50_000],
+  ])("budget %d → plan %d, build %d, review %d", async (budget, plan, build, review) => {
+    const task = setupTask({ tokenBudget: budget });
+    const burn = (req: { maxTokens: number }) => ({ tokensIn: req.maxTokens, tokensOut: 0 });
+    const engine = new ScriptedEngine({
+      plan: (req) => ({ text: "Add src/feature.ts.", ...burn(req) }),
+      implement: (req) => {
+        writeFileSync(join(req.cwd, "src", "feature.ts"), "x\n");
+        return { text: "Done.", ...burn(req) };
+      },
+      review: () => ({ structured: READY, tokensIn: 0, tokensOut: 0 }),
+    });
+    const out = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(out.status).toBe("complete");
+    const cap = (phase: string) => engine.calls.find((c) => c.phase === phase)?.maxTokens;
+    expect(engine.calls.map((c) => c.phase)).toEqual(["plan", "implement", "review"]);
+    expect(cap("plan")).toBe(plan);
+    expect(cap("implement")).toBe(build);
+    expect(cap("review")).toBe(review);
+    expect(plan + build + review).toBe(budget);
+  });
+});
+
+describe("stopping", () => {
+  test("a plan cut short by a stop doesn't go on to build", async () => {
+    // Value: protects=a stop during planning ends the run, even when the planner left partial text; fails_when=the pipeline builds from a half plan after you pressed Stop; why_new=R1 only checked abort when the plan was empty; seam=none
+    const task = setupTask();
+    const stop = new AbortController();
+    const engine = new ScriptedEngine({
+      plan: () => {
+        stop.abort();
+        return { ok: false, text: "1. Add src/feature.ts\n2. Wire it", error: "Stopped." };
+      },
+    });
+    const out = await runTask(deps(engine), task.id, stop.signal);
+    expect(out.status).toBe("timeout");
+    expect(out.reason).toBe("Stopped while planning.");
+    expect(engine.calls.map((c) => c.phase)).toEqual(["plan"]);
+  });
+
+  test("at the propose level a stopped plan is not a finished proposal", async () => {
+    // Value: protects=propose-level runs stopped mid-plan end stopped, not complete; fails_when=a partial plan from a stopped planner is reported as done; why_new=R1 propose path finished "complete" on any plan text; seam=none
+    const task = setupTask();
+    updateRepo(db, task.repoId, { level: "propose" });
+    const stop = new AbortController();
+    const engine = new ScriptedEngine({
+      plan: () => {
+        stop.abort();
+        return { ok: true, text: "A partial plan." };
+      },
+    });
+    const out = await runTask(deps(engine), task.id, stop.signal);
+    expect(out.status).toBe("timeout");
+  });
+
+  test("a stop during checks kills the test command and skips review and commit", async () => {
+    // Value: protects=a stop kills the running test command and nothing after it runs; fails_when=run() ignores the signal (the stop waits out the tests) or review/publish still run after a stop; why_new=R1 validate got no signal and nothing checked abort before review; seam=none
+    const task = setupTask({ testCommand: "sleep 30" });
+    const stop = new AbortController();
+    const engine = new ScriptedEngine({
+      implement: (req) => {
+        writeFileSync(join(req.cwd, "src", "feature.ts"), "x\n");
+        setTimeout(() => stop.abort(), 300);
+        return { text: "Done." };
+      },
+      review: () => ({ structured: READY }),
+    });
+    const started = Date.now();
+    const out = await runTask(deps(engine), task.id, stop.signal);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(out.status).toBe("timeout");
+    expect(out.reason).toBe("Stopped while checking the work.");
+    expect(engine.calls.map((c) => c.phase)).toEqual(["plan", "implement"]);
+    // The work is kept as WIP on the branch, not committed as finished.
+    const wt = join(repoPath, ".worktrees", "crew-add-the-feature");
+    expect((await git(wt, "log", "-1", "--format=%s")).stdout).toContain("WIP: Add the feature");
+  });
+});
+
+describe("review output", () => {
+  test("a partial review doesn't crash and doesn't count as ready", async () => {
+    // Value: protects=a reviewer answer missing fields is shape-checked, and "ready" without any criteria checked needs a person; fails_when=renderReview crashes on missing arrays or a bare {verdict:"ready"} ships as ready; why_new=O1 trusted review.structured as ReviewOutput; seam=none
+    const task = setupTask();
+    const engine = new ScriptedEngine({
+      implement: (req) => {
+        writeFileSync(join(req.cwd, "src", "feature.ts"), "x\n");
+        return { text: "Done." };
+      },
+      review: () => ({ structured: { verdict: "ready" } }),
+    });
+    const out = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(out.status).toBe("complete");
+    const run = getRun(db, out.runId);
+    expect(run?.run.verdict).toBe("needs_eyes");
+    expect(run?.artifacts.find((a) => a.kind === "review")?.content).toContain("Review: Ready");
+  });
+
+  test("garbage from the reviewer lands in Needs your eyes", async () => {
+    // Value: protects=a review that isn't a known verdict is treated as no review; fails_when=any JSON object (managed mode's lastJsonObject) is cast to ReviewOutput; why_new=O1 had no shape check; seam=none
+    const task = setupTask();
+    const engine = new ScriptedEngine({
+      implement: (req) => {
+        writeFileSync(join(req.cwd, "src", "feature.ts"), "x\n");
+        return { text: "Done." };
+      },
+      review: () => ({ structured: { verdict: "lgtm", criteria: "all", concerns: 3 }, text: "lgtm" }),
+    });
+    const out = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(getRun(db, out.runId)?.run.verdict).toBe("needs_eyes");
+  });
+
+  test("normalizeReview keeps well-formed entries and drops the rest", () => {
+    // Value: protects=malformed criteria, concerns and challenges are dropped, strings default to empty; fails_when=a bad entry reaches renderReview or prBody; why_new=O1 normalizer is new; seam=none
+    expect(normalizeReview(null)).toBeNull();
+    expect(normalizeReview({ verdict: "maybe" })).toBeNull();
+    expect(
+      normalizeReview({
+        verdict: "not_done",
+        summary: 4,
+        criteria: [{ criterion: "a", met: true, evidence: "e" }, { criterion: "b" }, "c"],
+        concerns: ["x", 2],
+        challenges: [{ challenge: "edge", held: true }, { held: false }],
+      }),
+    ).toEqual({
+      verdict: "not_done",
+      summary: "",
+      criteria: [{ criterion: "a", met: true, evidence: "e" }],
+      concerns: ["x"],
+      challenges: [{ challenge: "edge", held: true, detail: "" }],
+      report: "",
+    });
+  });
 });

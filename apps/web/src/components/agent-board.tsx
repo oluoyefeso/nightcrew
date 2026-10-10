@@ -162,7 +162,10 @@ export function CrewSummary() {
           </span>
         </p>
         <div className="h-1 w-56 max-w-full overflow-hidden rounded-full bg-raised">
-          <div className="h-full rounded-full bg-dawn transition-[width] duration-300" style={{ width: `${pct}%` }} />
+          <div
+            className="h-full w-full origin-left rounded-full bg-dawn transition-transform duration-200 ease-out motion-reduce:transition-none"
+            style={{ transform: `scaleX(${pct / 100})` }}
+          />
         </div>
       </div>
       <div className="flex items-center gap-2">

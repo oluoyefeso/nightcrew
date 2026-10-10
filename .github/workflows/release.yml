@@ -49,5 +49,9 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+        # install.sh downloads from /releases/latest, which never points at a
+        # prerelease, so only tags like v1.0.0-rc.1 publish as one.
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "NightCrew $GITHUB_REF_NAME" --generate-notes --prerelease
+          pre=""
+          case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "NightCrew $GITHUB_REF_NAME" --generate-notes $pre

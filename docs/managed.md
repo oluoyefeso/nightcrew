@@ -14,13 +14,14 @@ With the managed engine, each phase runs on **Claude Managed Agents** instead of
    - a short-lived GitHub token from `gh auth token`, used for that one session and never stored,
    - a cost limit derived from the task's token budget (the session API only takes a cost limit).
 3. The cloud environment's networking is **limited** to GitHub and package registries. (An environment created without a networking setting gets unrestricted access, so NightCrew always sets one.)
-4. The agent works, commits, and pushes the task branch. Pushing that branch is the only push allowed. The server's `auto` permission policy decides routine calls; anything it can't judge is answered by NightCrew's guard.
+4. The agent works, commits, and pushes the task branch. Pushing that branch is the only push allowed. Every shell, write and edit call is held for confirmation (`always_ask`) and NightCrew's guard decides it, the same guard the local engine uses. Read-only tools (read, glob, grep, web) run on the server's `auto` policy. Each guarded call costs a short round trip; if NightCrew goes away mid-session, the session waits and spends nothing.
 5. NightCrew fetches the branch back and fast-forwards the local worktree. The rest of the pipeline then runs as usual: checks, evidence, the Skeptic, the trust ladder.
 
 ## Requirements and limits
 
 - An Anthropic org with Managed Agents enabled, and `ANTHROPIC_API_KEY`.
 - The repo needs a GitHub remote, and `gh auth login`.
+- The token can do whatever your GitHub account can. Prefer a fine-grained token limited to the repos NightCrew works on (contents and pull requests only), and turn on branch protection for your default branch and your ship branch. See [Security](security.md).
 - NightCrew still orchestrates from a machine that's on. To close the laptop, run `nightcrew` on any always-on box. With the managed engine that box needs no language toolchains.
 - Managed Agents is in beta and not eligible for zero data retention. Use the local engine for repos that must stay on your machine.
 - Structured output is requested in the prompt and parsed from the reply.
@@ -29,4 +30,4 @@ With the managed engine, each phase runs on **Claude Managed Agents** instead of
 
 The engine is tested against the SDK's types and a fake client, not live sessions.
 - **Authenticated push.** The docs don't say whether `git push` from the sandbox is authenticated by the mounted repo's token. If it isn't, write phases end without changes to pull, and the run fails with a clear message.
-- **The `auto` policy.** It might deny the branch push.
+- **Confirmations.** Shell, write and edit calls should arrive as `ask` and wait for NightCrew's answer. The tests use a fake client, so the round trip hasn't been timed on a real session.

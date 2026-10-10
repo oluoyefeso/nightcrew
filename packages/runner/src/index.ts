@@ -5,6 +5,7 @@ export * from "./engine";
 export { type Evidence, type Shot, summarizeEvidence } from "./evidence";
 export { detectPreview, detectSetupCommand, detectTestCommand, inspectRepo, type RepoInfo } from "./git";
 export { canShip, publishTrain, pullCar, shipTask, undoShip } from "./landing";
+export { ManagedEngine, type ManagedEngineOptions } from "./managed-engine";
 export * from "./pipeline";
 export { JevReflexes, NoReflexes, type Reflexes, reflexesFromEnv } from "./reflexes";
 export { materializeRoutines } from "./routines";

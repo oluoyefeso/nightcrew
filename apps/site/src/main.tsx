@@ -1,0 +1,577 @@
+import "../../web/src/styles.css";
+import "./site.css";
+import { clsx } from "clsx";
+import { Check, Copy, Moon, Sun } from "lucide-react";
+import { StrictMode, useEffect, useState } from "react";
+import { createRoot } from "react-dom/client";
+
+const REPO = "https://github.com/oluoyefeso/nightcrew";
+const INSTALL = "curl -fsSL https://raw.githubusercontent.com/oluoyefeso/nightcrew/main/install.sh | sh";
+
+// ── The replay ──────────────────────────────────────────────────────────────
+// An example night in the real Morning Report design. The first three tasks
+// and their costs are real runs from building NightCrew (October 2026); the
+// last two are illustrative, priced inside the range those runs measured.
+
+type Bucket = "shipped" | "ready" | "eyes" | "failed";
+const NIGHT: { at: number; title: string; note: string; bucket: Bucket; cost: string; diff: string }[] = [
+  {
+    at: 0.09,
+    title: "Add widgetCount helper",
+    note: "Counts widgets with a non-blank title; 2 new tests pass.",
+    bucket: "ready",
+    cost: "$0.08",
+    diff: "+17 −1",
+  },
+  {
+    at: 0.21,
+    title: "Add widgetTitles helper with test",
+    note: "Maps each widget through widgetLabel; empty list returns [].",
+    bucket: "shipped",
+    cost: "$0.10",
+    diff: "+18 −1",
+  },
+  {
+    at: 0.38,
+    title: "Dark mode that follows the system",
+    note: "CSS variables with a prefers-color-scheme override. 4 screenshots, no new a11y issues.",
+    bucket: "ready",
+    cost: "$0.16",
+    diff: "+5 −2",
+  },
+  {
+    at: 0.57,
+    title: "Fix the crash when a widget has no title",
+    note: "New test fails on main and passes on the fix.",
+    bucket: "eyes",
+    cost: "$0.12",
+    diff: "+12 −3",
+  },
+  {
+    at: 0.78,
+    title: "Detect 429s in JSON output, not just stderr",
+    note: "Backoff now uses the 5/10/20 minute schedule. Skeptic: 6 challenges, 0 held.",
+    bucket: "shipped",
+    cost: "$0.14",
+    diff: "+41 −6",
+  },
+];
+const COLOR: Record<Bucket, string> = {
+  shipped: "var(--ok)",
+  ready: "var(--sky)",
+  eyes: "var(--dawn)",
+  failed: "var(--bad)",
+};
+const LABEL: Record<Bucket, string> = {
+  shipped: "Shipped",
+  ready: "Ready to merge",
+  eyes: "Needs your eyes",
+  failed: "Failed",
+};
+
+function useReplay(durationMs = 7000) {
+  const [t, setT] = useState(0);
+  useEffect(() => {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setT(1);
+      return;
+    }
+    let raf = 0;
+    let start = 0;
+    let hold: ReturnType<typeof setTimeout> | undefined;
+    const loop = (now: number) => {
+      if (!start) start = now;
+      const p = Math.min(1, (now - start) / durationMs);
+      setT(p);
+      if (p < 1) raf = requestAnimationFrame(loop);
+      else
+        hold = setTimeout(() => {
+          start = 0;
+          raf = requestAnimationFrame(loop);
+        }, 6000);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(hold);
+    };
+  }, [durationMs]);
+  return t;
+}
+
+function Replay() {
+  const t = useReplay();
+  const done = NIGHT.filter((n) => n.at <= t);
+  const shipped = done.filter((n) => n.bucket === "shipped").length;
+  const needYou = done.filter((n) => n.bucket === "ready" || n.bucket === "eyes").length;
+  const spent = done.reduce((s, n) => s + Number(n.cost.slice(1)), 0);
+  const clock = 22 * 60 + Math.round(t * 9 * 60);
+  const hh = String(Math.floor(clock / 60) % 24).padStart(2, "0");
+  const mm = String(clock % 60).padStart(2, "0");
+  const morning = t >= 1;
+
+  return (
+    <div className="overflow-hidden rounded-[18px] bg-surface text-left shadow-[var(--shadow)] ring-1 ring-line">
+      <div className="flex items-center justify-between gap-3 border-line border-b px-4 py-2.5">
+        <div className="flex gap-1 text-[12px]">
+          <span className="rounded-md bg-raised px-2 py-1">Morning Report</span>
+          <span className="px-2 py-1 text-muted">Tonight</span>
+          <span className="hidden px-2 py-1 text-muted sm:inline">Later</span>
+        </div>
+        <span className="flex items-center gap-2 font-mono text-[11px] text-muted tabular">
+          <span className={clsx("size-1.5 rounded-full", morning ? "bg-ok" : "animate-pulse bg-dawn")} />
+          {morning ? "07:00 · night complete" : `${hh}:${mm} · crew working`}
+        </span>
+      </div>
+      <div className="grid gap-4 px-5 pt-6 pb-5 sm:px-7">
+        <div className="min-h-[2.4em] font-serif text-[26px] leading-[1.1] tracking-[-0.01em] sm:text-[34px]">
+          {morning ? (
+            <>
+              Good morning. {shipped === 2 ? "Two" : shipped} shipped and {needYou === 3 ? "three" : needYou} need you.
+            </>
+          ) : (
+            <span className="text-muted">The crew is working…</span>
+          )}
+        </div>
+        <p className="flex flex-wrap gap-x-5 gap-y-1 font-mono text-[11.5px] text-muted tabular">
+          <span>
+            <b className="font-medium text-fg">{done.length}</b> tasks
+          </span>
+          <span>
+            <b className="font-medium text-fg">${spent.toFixed(2)}</b> spent
+          </span>
+          <span>
+            <b className="font-medium text-fg">0</b> files outside scope
+          </span>
+        </p>
+        <div className="relative pt-2 pb-1">
+          <div className="relative h-6">
+            <div
+              className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full"
+              style={{
+                background:
+                  "linear-gradient(90deg, var(--horizon-from) 0%, var(--horizon-from) 34%, var(--dawn-soft) 86%, var(--dawn) 100%)",
+              }}
+            />
+            <div
+              className="absolute top-1/2 h-1 -translate-y-1/2 rounded-full bg-bg/70"
+              style={{ left: `${t * 100}%`, right: 0 }}
+            />
+            {done.map((n) => (
+              <span
+                key={n.title}
+                className="nc-tick absolute top-0 h-6 w-[3px] -translate-x-1/2 rounded-full"
+                style={{ left: `${n.at * 100}%`, background: COLOR[n.bucket], boxShadow: "0 0 0 2px var(--surface)" }}
+              />
+            ))}
+          </div>
+          <div className="mt-1.5 flex justify-between font-mono text-[10px] text-faint">
+            <span>22:00</span>
+            <span>01:00</span>
+            <span>04:00</span>
+            <span>07:00</span>
+          </div>
+        </div>
+        <div className="divide-y divide-line overflow-hidden rounded-xl ring-1 ring-line">
+          {NIGHT.map((n) => {
+            const visible = n.at <= t;
+            return (
+              <div
+                key={n.title}
+                className={clsx(
+                  "grid grid-cols-[3px_minmax(0,1fr)_auto] items-center gap-3 py-2.5 pr-3.5 transition-[opacity,transform] duration-500",
+                  visible ? "opacity-100" : "translate-y-1 opacity-0",
+                )}
+              >
+                <span className="h-full rounded-r-full" style={{ background: COLOR[n.bucket] }} />
+                <span className="grid min-w-0 gap-0.5">
+                  <span className="truncate font-medium text-[13px]">{n.title}</span>
+                  <span className="truncate text-[11.5px] text-muted">{n.note}</span>
+                </span>
+                <span className="flex items-center gap-3 font-mono text-[11px] text-muted tabular">
+                  <span className="hidden sm:inline" style={{ color: COLOR[n.bucket] }}>
+                    {LABEL[n.bucket]}
+                  </span>
+                  <span>{n.cost}</span>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Pieces ──────────────────────────────────────────────────────────────────
+
+function InstallButton({ large }: { large?: boolean }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(INSTALL);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {}
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      className={clsx(
+        "group inline-flex max-w-full items-center gap-3 rounded-full bg-fg font-mono text-bg transition-transform active:scale-[0.99]",
+        large ? "px-6 py-3.5 text-[13px]" : "px-5 py-3 text-[12px]",
+      )}
+      aria-label="Copy the install command"
+    >
+      <span className="text-bg/50">$</span>
+      <span className="truncate">{copied ? "Copied. Paste it into a terminal." : "curl -fsSL …/install.sh | sh"}</span>
+      {copied ? (
+        <Check className="size-3.5 shrink-0" />
+      ) : (
+        <Copy className="size-3.5 shrink-0 opacity-60 group-hover:opacity-100" />
+      )}
+    </button>
+  );
+}
+
+function ThemeSwitch() {
+  const [dark, setDark] = useState(() => {
+    const set = document.documentElement.dataset.theme;
+    return set ? set === "dark" : !matchMedia("(prefers-color-scheme: light)").matches;
+  });
+  useEffect(() => {
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+  }, [dark]);
+  return (
+    <button
+      type="button"
+      onClick={() => setDark(!dark)}
+      aria-label={dark ? "Switch to the Morning theme" : "Switch to the Night theme"}
+      className="grid size-8 place-items-center rounded-full text-muted ring-1 ring-line hover:text-fg"
+    >
+      {dark ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
+    </button>
+  );
+}
+
+function H2({ claim, rest }: { claim: string; rest: string }) {
+  return (
+    <h2 className="max-w-[860px] text-balance font-serif text-[34px] leading-[1.08] tracking-[-0.015em] sm:text-[48px]">
+      {claim} <span className="text-faint">{rest}</span>
+    </h2>
+  );
+}
+
+function Eyebrow({ children }: { children: string }) {
+  return <p className="font-mono text-[12px] text-dawn uppercase tracking-[0.08em]">{children}</p>;
+}
+
+/** Section wrapper. Content is always visible: no scroll-triggered hiding, so screenshots, link previews and crawlers see the whole page. */
+function Reveal({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <div className={className}>{children}</div>;
+}
+
+// ── Page ────────────────────────────────────────────────────────────────────
+
+function Site() {
+  return (
+    <div className="min-h-full">
+      <header className="sticky top-0 z-30 border-line border-b bg-[color-mix(in_srgb,var(--bg)_80%,transparent)] backdrop-blur-xl">
+        <nav className="mx-auto flex h-14 max-w-[1120px] items-center gap-6 px-5">
+          <a href="#top" className="flex items-center gap-2.5 font-semibold tracking-[-0.01em]">
+            <svg viewBox="0 0 32 32" className="size-[22px]" aria-hidden="true">
+              <clipPath id="m">
+                <circle cx="16" cy="16" r="15" />
+              </clipPath>
+              <g clipPath="url(#m)">
+                <rect width="32" height="32" fill="var(--horizon-from)" />
+                <rect y="17" width="32" height="15" fill="var(--dawn)" />
+              </g>
+            </svg>
+            NightCrew
+          </a>
+          <div className="hidden items-center gap-5 text-[13.5px] text-muted md:flex">
+            <a href="#how" className="hover:text-fg">
+              How it works
+            </a>
+            <a href="#evidence" className="hover:text-fg">
+              Evidence
+            </a>
+            <a href="#trust" className="hover:text-fg">
+              Trust
+            </a>
+            <a href="#cost" className="hover:text-fg">
+              Cost
+            </a>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <a href={REPO} className="hidden rounded-full px-3 py-1.5 text-[13.5px] text-muted hover:text-fg sm:inline">
+              GitHub
+            </a>
+            <ThemeSwitch />
+            <a href="#start" className="rounded-full bg-dawn px-4 py-1.5 font-medium text-[13.5px] text-on-dawn">
+              Get started
+            </a>
+          </div>
+        </nav>
+      </header>
+
+      <main id="top">
+        <section className="nc-hero relative overflow-hidden">
+          <div className="mx-auto grid max-w-[1120px] gap-12 px-5 pt-16 pb-20 lg:grid-cols-[minmax(0,1fr)_minmax(0,560px)] lg:items-center lg:pt-24">
+            <div className="grid gap-6">
+              <Eyebrow>Open source · runs on your machine</Eyebrow>
+              <h1 className="text-balance font-serif text-[48px] leading-[1.0] tracking-[-0.025em] sm:text-[72px]">
+                Queue it at night. <em className="text-dawn">Merge it with coffee.</em>
+              </h1>
+              <p className="max-w-[520px] text-[17px] text-muted leading-relaxed">
+                NightCrew runs your coding tasks overnight with Claude, across all your repos. Every task comes back
+                with a plan, evidence it actually works, and a review by an agent whose only job is to prove it doesn't.
+              </p>
+              <div className="flex flex-wrap items-center gap-3" id="start">
+                <InstallButton />
+                <a
+                  href={REPO}
+                  className="rounded-full px-4 py-3 text-[13.5px] text-muted ring-1 ring-line hover:text-fg"
+                >
+                  Read the code
+                </a>
+              </div>
+              <p className="font-mono text-[12px] text-faint">
+                A small task, end to end: <span className="text-fg">$0.08</span> · measured, not estimated
+              </p>
+            </div>
+            <div className="grid gap-2">
+              <Replay />
+              <p className="text-center font-mono text-[11px] text-faint">
+                An example night, replayed in the real Morning Report
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section id="how" className="mx-auto grid max-w-[1120px] gap-10 px-5 py-24 [&>*]:min-w-0">
+          <Reveal className="grid gap-4">
+            <Eyebrow>How it works</Eyebrow>
+            <H2 claim="One loop, three moments." rest="Hand off at night, sleep, clear the report in the morning." />
+          </Reveal>
+          <Reveal>
+            <div className="grid gap-px overflow-hidden rounded-[18px] bg-line ring-1 ring-line md:grid-cols-3">
+              {[
+                [
+                  "21:30 · Tonight",
+                  "Tell the crew",
+                  "Describe the work in plain English, or pull in GitHub issues. NightCrew drafts task cards with scope, acceptance criteria and a budget, and asks if something's unclear. You edit, then queue.",
+                ],
+                [
+                  "22:00 → 06:00 · Overnight",
+                  "The crew works",
+                  "Each task gets its own git worktree and an isolated Claude session. Small tasks build directly; bigger ones plan first. Every tool call passes a guard: no pushes, no secrets, nothing outside scope.",
+                ],
+                [
+                  "07:00 · Morning",
+                  "Clear the report",
+                  "Shipped, Ready to merge, Needs your eyes, Failed. One key per decision. Anything you send back with a note runs again tonight, on the same branch, with your note.",
+                ],
+              ].map(([time, title, body]) => (
+                <div key={title} className="grid content-start gap-3 bg-surface p-7">
+                  <span className="font-mono text-[12px] text-dawn">{time}</span>
+                  <h3 className="font-serif text-[28px] leading-tight tracking-[-0.01em]">{title}</h3>
+                  <p className="text-[14.5px] text-muted leading-relaxed">{body}</p>
+                </div>
+              ))}
+            </div>
+          </Reveal>
+        </section>
+
+        <section id="evidence" className="mx-auto grid max-w-[1120px] gap-10 px-5 py-24 [&>*]:min-w-0">
+          <Reveal className="grid gap-4">
+            <Eyebrow>Evidence, not claims</Eyebrow>
+            <H2
+              claim="It has to prove it."
+              rest="NightCrew gathers the evidence itself, then a Skeptic tries to tear it down."
+            />
+          </Reveal>
+          <Reveal>
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+              <figure className="grid gap-3 rounded-[18px] bg-surface p-5 ring-1 ring-line">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="grid gap-1.5">
+                    <img
+                      src="/evidence/before-dark.png"
+                      alt="Before: the site ignores dark mode"
+                      className="aspect-[16/10] w-full rounded-lg object-cover object-top ring-1 ring-line"
+                    />
+                    <span className="font-mono text-[11px] text-faint">Before · desktop · dark</span>
+                  </div>
+                  <div className="grid gap-1.5">
+                    <img
+                      src="/evidence/after-dark.png"
+                      alt="After: dark background with readable cards"
+                      className="aspect-[16/10] w-full rounded-lg object-cover object-top ring-1 ring-line"
+                    />
+                    <span className="font-mono text-[11px] text-dawn">After · 99.8% changed</span>
+                  </div>
+                </div>
+                <figcaption className="text-[13px] text-muted">
+                  A real UI task from testing NightCrew: the crew added system dark mode for $0.16. NightCrew started
+                  the site on both branches and took these itself.
+                </figcaption>
+              </figure>
+              <ul className="grid content-start gap-0 overflow-hidden rounded-[18px] ring-1 ring-line">
+                {[
+                  [
+                    "UI changes",
+                    "Before and after screenshots at desktop and mobile, light and dark, with a pixel diff, an accessibility scan and console errors.",
+                  ],
+                  [
+                    "Bug fixes",
+                    "A new test that fails on the base branch and passes on the fix. A test that passes either way is called out.",
+                  ],
+                  ["Every task", "Its own checks, independent of what the agent says: scope, tests, protected paths."],
+                  [
+                    "The Skeptic",
+                    "A separate reviewer gets the evidence and has to make concrete challenges. Missing evidence always means a person looks.",
+                  ],
+                ].map(([k, v]) => (
+                  <li key={k} className="grid gap-1 border-line border-b bg-surface px-5 py-4 last:border-b-0">
+                    <b className="font-semibold text-[14.5px]">{k}</b>
+                    <span className="text-[14px] text-muted leading-relaxed">{v}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </Reveal>
+        </section>
+
+        <section id="trust" className="mx-auto grid max-w-[1120px] gap-10 px-5 py-24 [&>*]:min-w-0">
+          <Reveal className="grid gap-4">
+            <Eyebrow>The trust ladder</Eyebrow>
+            <H2
+              claim="Trust is earned per repo."
+              rest="The record decides how far the work goes, and a revert moves it back."
+            />
+          </Reveal>
+          <Reveal>
+            <div className="grid items-end gap-2 md:grid-cols-5">
+              {[
+                ["Propose", "Plans only. No code.", 0],
+                ["Draft PR", "One PR per task. You merge.", 1],
+                ["Nightly train", "Tonight's tasks merge into one branch, tested together. You merge one PR.", 2],
+                [
+                  "Ship to dev",
+                  "The crew merges to dev itself when evidence, the Skeptic and your rules agree. Undo is one key.",
+                  3,
+                ],
+                ["Never", "main, release branches, workflows, secrets. Always yours.", 3],
+              ].map(([name, body, h], i) => (
+                <div
+                  key={name as string}
+                  className={clsx(
+                    "grid content-start gap-2 rounded-2xl p-5",
+                    i === 4 ? "ring-1 ring-line ring-dashed" : "bg-surface ring-1 ring-line",
+                    i === 3 && "ring-[color-mix(in_srgb,var(--dawn)_55%,transparent)]",
+                  )}
+                  style={{ minHeight: `${120 + (h as number) * 36}px` }}
+                >
+                  <span className="font-mono text-[11px] text-faint uppercase tracking-[0.08em]">
+                    {i === 4 ? "Never" : `Level ${i}`}
+                  </span>
+                  <b className="font-semibold text-[15px]">{name}</b>
+                  <span className="text-[13px] text-muted leading-relaxed">{body}</span>
+                </div>
+              ))}
+            </div>
+          </Reveal>
+          <Reveal>
+            <pre className="overflow-x-auto rounded-2xl bg-surface p-5 font-mono text-[13px] leading-[1.8] text-muted ring-1 ring-line">
+              <span className="text-fg">ship_to:</span> dev{"\n"}
+              <span className="text-ok">allow_ship:</span> [src/components/**, docs/**]{"\n"}
+              <span className="text-dawn">always_ask:</span> [migrations/**, src/auth/**, package.json]{"\n"}
+              <span className="text-faint"># "8 of the last 10 tasks merged unchanged. Promote to Ship to dev?"</span>
+            </pre>
+          </Reveal>
+        </section>
+
+        <section id="cost" className="mx-auto grid max-w-[1120px] gap-10 px-5 py-24 [&>*]:min-w-0">
+          <Reveal className="grid gap-4">
+            <Eyebrow>Cost</Eyebrow>
+            <H2
+              claim="Cents, not dollars."
+              rest="Each agent runs in a clean, isolated harness with only the tools its task needs."
+            />
+          </Reveal>
+          <Reveal>
+            <div className="grid gap-px overflow-hidden rounded-[18px] bg-line ring-1 ring-line sm:grid-cols-3">
+              {[
+                ["$0.08", "a small task, end to end: build, check, review, commit"],
+                [
+                  "48×",
+                  "lower cost per turn, measured against a session that loads every skill, plugin and connector installed on the machine",
+                ],
+                ["$25", "default nightly budget. The crew stops before it, and every task has its own cap."],
+              ].map(([n, l]) => (
+                <div key={n} className="grid gap-2 bg-surface p-7">
+                  <span className="font-serif text-[52px] leading-none tracking-[-0.02em]">{n}</span>
+                  <span className="text-[14px] text-muted leading-relaxed">{l}</span>
+                </div>
+              ))}
+            </div>
+          </Reveal>
+          <Reveal>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid gap-2 rounded-2xl bg-surface p-6 ring-1 ring-line">
+                <b className="font-semibold text-[15px]">Self-managed, free</b>
+                <p className="text-[14px] text-muted leading-relaxed">
+                  One binary on your machine. The dashboard runs at localhost, the crew uses the Claude Agent SDK with
+                  your own key or Claude Code login. Your code never leaves your machine except to Claude.
+                </p>
+              </div>
+              <div className="grid gap-2 rounded-2xl bg-surface p-6 ring-1 ring-line">
+                <b className="font-semibold text-[15px]">Managed, experimental</b>
+                <p className="text-[14px] text-muted leading-relaxed">
+                  Close the laptop. The same crew runs on Claude Managed Agents in Anthropic's sandboxes, with
+                  locked-down networking and a budget per session.
+                </p>
+              </div>
+            </div>
+          </Reveal>
+        </section>
+
+        <section className="mx-auto grid max-w-[1120px] justify-items-center gap-6 px-5 pt-16 pb-28 text-center">
+          <h2 className="text-balance font-serif text-[40px] leading-[1.05] tracking-[-0.02em] sm:text-[60px]">
+            Give the crew tonight's work. <span className="text-faint">Wake up to proof.</span>
+          </h2>
+          <InstallButton large />
+          <p className="font-mono text-[12px] text-faint">macOS and Linux · needs git, gh and Claude Code</p>
+        </section>
+      </main>
+
+      <footer className="border-line border-t">
+        <div className="mx-auto flex max-w-[1120px] flex-wrap items-center justify-between gap-4 px-5 py-8 text-[13px] text-muted">
+          <span>NightCrew · MIT licensed · powered by Claude</span>
+          <div className="flex gap-5">
+            <a href={REPO} className="hover:text-fg">
+              GitHub
+            </a>
+            <a href={`${REPO}/blob/main/DESIGN.md`} className="hover:text-fg">
+              Design
+            </a>
+            <a href={`${REPO}/blob/main/CHANGELOG.md`} className="hover:text-fg">
+              Changelog
+            </a>
+          </div>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+const root = document.getElementById("root");
+if (root)
+  createRoot(root).render(
+    <StrictMode>
+      <Site />
+    </StrictMode>,
+  );

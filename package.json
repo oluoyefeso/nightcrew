@@ -1,16 +1,20 @@
 {
   "name": "nightcrew",
-  "version": "1.0.0-alpha.0",
+  "version": "1.0.0-alpha.1",
   "private": true,
   "type": "module",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "bun run --filter '@nightcrew/web' dev & bun run --filter '@nightcrew/cli' dev",
     "build": "bun run --filter '@nightcrew/web' build && bun run --filter '@nightcrew/cli' build",
     "test": "bun test packages apps/cli",
-    "typecheck": "tsc -p packages/core && tsc -p packages/db && tsc -p packages/runner && tsc -p apps/cli && tsc -p apps/web",
+    "typecheck": "tsc -p packages/core && tsc -p packages/db && tsc -p packages/runner && tsc -p apps/cli && tsc -p apps/web && tsc -p apps/site",
     "lint": "biome check .",
-    "classic:test": "cd classic && SHELL=/opt/homebrew/bin/bash bats tests/"
+    "classic:test": "cd classic && SHELL=/opt/homebrew/bin/bash bats tests/",
+    "build:site": "bun run --filter '@nightcrew/site' build"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

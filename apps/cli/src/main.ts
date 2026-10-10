@@ -15,6 +15,7 @@ import {
   detectTestCommand,
   draftTasks,
   inspectRepo,
+  ManagedEngine,
   reflexesFromEnv,
   SdkEngine,
 } from "@nightcrew/runner";
@@ -36,6 +37,7 @@ Options
   --repo <path>       Repo for \`add\` (default: current folder if it's a known repo)
   --later             With \`add\`: park the tasks in Later instead of tonight
   --demo              Use a pretend crew that spends nothing (for trying things out)
+  --engine managed    Run tasks on Claude Managed Agents (needs ANTHROPIC_API_KEY; experimental)
   --no-publish        Keep branches local: don't push or open PRs
   --classic <dir>     Classic NightCrew directory (default: auto-detect)
   --data <dir>        Where NightCrew keeps its data (default ~/.nightcrew)
@@ -51,6 +53,7 @@ const { values, positionals } = parseArgs({
     repo: { type: "string" },
     later: { type: "boolean", default: false },
     demo: { type: "boolean", default: process.env.NIGHTCREW_DEMO === "1" },
+    engine: { type: "string", default: process.env.NIGHTCREW_ENGINE ?? "local" },
     "no-publish": { type: "boolean", default: false },
     classic: { type: "string" },
     data: { type: "string", default: process.env.NIGHTCREW_HOME ?? join(homedir(), ".nightcrew") },
@@ -75,7 +78,28 @@ const cwd = process.cwd();
 mkdirSync(values.data, { recursive: true });
 const db = openDb(join(values.data, "nightcrew.db"));
 const classicRoot = values.classic ? resolve(values.classic) : undefined;
-const engine: AgentEngine = values.demo ? new DemoEngine() : new SdkEngine({ claudePath: claudeOnPath() });
+const engine: AgentEngine = values.demo
+  ? new DemoEngine()
+  : values.engine === "managed"
+    ? managedEngine()
+    : new SdkEngine({ claudePath: claudeOnPath() });
+
+/** Claude Managed Agents: tasks run in Anthropic's cloud sandboxes. Needs an API key and a GitHub remote. */
+function managedEngine(): AgentEngine {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.error("The managed engine needs ANTHROPIC_API_KEY (with Managed Agents enabled on your Anthropic org).");
+    process.exit(1);
+  }
+  return new ManagedEngine({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    githubToken: async () => {
+      const proc = Bun.spawn(["gh", "auth", "token"], { stdout: "pipe", stderr: "ignore" });
+      const token = (await new Response(proc.stdout).text()).trim();
+      if (!token) throw new Error("No GitHub token: run gh auth login.");
+      return token;
+    },
+  });
+}
 const publish = !values["no-publish"] && !values.demo;
 const reflexes = reflexesFromEnv();
 const crew = new Crew({ db, engine, dataDir: values.data, publish, reflexes });

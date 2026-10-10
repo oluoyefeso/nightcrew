@@ -2,19 +2,34 @@
 
 All notable changes to NightCrew are documented here.
 
-## [1.0.0-alpha.0] - 2026-10-10
+## [1.0.0-alpha.1] - 2026-10-10
+
+NightCrew 1.0: a rebuild of the product around a calm Morning Report, an
+evidence pipeline and a per-repo trust ladder.
 
 ### Added
-- **NightCrew 1.0 foundation**: a Bun + TypeScript monorepo (`apps/web`, `apps/cli`, `packages/core`, `packages/db`) on the `v1` branch.
-- **Morning Report dashboard**: a greeting and summary line, the Horizon timeline, and runs grouped into Shipped / Ready to merge / Needs your eyes / Sent back / Failed. A detail pane shows plan, decisions, review and phase logs, plus attempt history across nights.
-- **One-key triage**: `1` merge (two presses, marks draft PRs ready and squash-merges via `gh`), `2` send back with a note, `3` dismiss, `H` try again tonight, `U` undo, `J`/`K` to move.
-- **Light and dark themes** ("Morning" and "Night"), following the system setting by default.
-- **`nightcrew` single binary** (`bun build --compile`) that serves the dashboard locally on port 3721, so self-managed users don't need the terminal.
-- **Classic importer**: reads `state/sessions/*/progress.json`, dedupes attempts copied forward between sessions, attaches PLAN / DECISIONS / REVIEW files and phase logs, turns raw CLI errors into sentences, and refreshes PR state and diff stats from GitHub.
+- **Dashboard and single binary.** `nightcrew` serves the dashboard at localhost:3721 and keeps the nightly schedule. One file (`bun build --compile`), installable with `curl | sh`. Light ("Morning") and dark ("Night") themes.
+- **Morning Report.** A greeting, the Horizon timeline, and five buckets: Shipped, Ready to merge, Needs your eyes, Sent back and Failed. A detail pane covers plan, decisions, review, checks, evidence and attempts. One-key triage: `1` merge, `2` send back with a note, `3` dismiss or take off the train, `H` try again tonight, `U` undo.
+- **Tonight.** A plain-English composer drafts typed task cards (scope, criteria, questions). There's also a drag-to-reorder queue, a budget meter, a live crew strip, Later, a task editor with notes and attempts, a live run view, settings, and a `⌘K` command bar. CLI: `nightcrew add`, `repo add`, `run`.
+- **Agent SDK runner.** Plan → build → check (with one repair attempt) → Skeptic review → commit, push and draft PR, each task in its own worktree.
+  - Every tool call passes a PreToolUse guard (scope, protected paths and branches, no push, publish, sudo, network writes or secrets).
+  - Artifacts stay in `~/.nightcrew/runs`, never in your repo.
+  - Unfinished work is kept on the branch, and sent-back tasks resume it with your note.
+- **Isolated crew sessions.** No filesystem settings, MCP servers, skills or plugins; the repo's CLAUDE.md and AGENTS.md are passed in. Measured 48× cheaper per turn: a small task costs about $0.08 end to end.
+- **Evidence pipeline.**
+  - UI tasks: before and after screenshots (desktop and mobile, light and dark) from previews of both branches, pixel diffs, axe accessibility scans and console errors.
+  - Bug fixes: fail-then-pass proof.
+  - Missing evidence always means Needs your eyes. Evidence and Skeptic results go into the PR.
+- **Trust ladder.** Propose, Draft PR, Nightly train (tested together, one PR, take tasks off) and Ship to dev (gated on verdict, evidence, 80% confidence and allow and always-ask rules, with Undo that also demotes the repo). Promotion suggestions come from each repo's track record.
+- **Reflexes.** Jev (TypeSafe System One) chooses the workflow, scores confidence and classifies failures when `TYPESAFE_API_KEY` is set; rules decide otherwise. Small tasks skip planning, and flaky failures get one retry.
+- **Routines** (recurring tasks on chosen weekdays) and **GitHub intake** (issues labelled `crew` import into Later, and their PRs close them).
+- **Demo crew** (`--demo`) for trying everything without spending anything.
+- **Classic import.** 0.x history appears in the Morning Report, with PR state from GitHub.
+- **Landing page** (`apps/site`), release builds for macOS and Linux, CI.
 
 ### Changed
-- The bash runner moved to `classic/`. Its 141 bats tests pass unchanged.
-- `DESIGN.md` replaced: "The Silent Sentinel" console look is retired in favour of "The hour before sunrise" (blue-black ink, one dawn accent, Instrument Serif + Geist).
+- The bash runner moved to `classic/`; its 141 bats tests pass unchanged.
+- `DESIGN.md` now describes "The hour before sunrise" (blue-black ink, one dawn accent, Instrument Serif + Geist).
 
 ## [0.4.0.0] - 2026-04-17
 

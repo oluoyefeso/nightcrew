@@ -244,6 +244,17 @@ function currentTheme(): "light" | "dark" {
   return matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
 }
 
+const NAV = [
+  ["#how", "How it works"],
+  ["#evidence", "Evidence"],
+  ["#trust", "Trust"],
+  ["#tokens", "Tokens"],
+] as const;
+
+/** Nav links and ghost buttons: Aster's 38px pill, ink at 72%, a faint tint on hover. */
+const NAV_LINK =
+  "h-[38px] items-center rounded-full px-[13px] font-medium text-[14px] text-[color-mix(in_srgb,var(--fg)_72%,transparent)] transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--fg)_6%,transparent)] hover:text-fg";
+
 /** Always-visible Light / Dark switch. Stays in sync if a host frame changes the theme. */
 function ThemeSwitch() {
   const [theme, setTheme] = useState(currentTheme);
@@ -264,7 +275,7 @@ function ThemeSwitch() {
     setTheme(t);
   };
   return (
-    <div role="radiogroup" aria-label="Theme" className="flex rounded-full bg-bg p-0.5 ring-1 ring-line">
+    <div role="radiogroup" aria-label="Theme" className="flex rounded-full bg-bg p-[3px] ring-1 ring-line">
       {(
         [
           ["light", "Light", Sun],
@@ -278,7 +289,7 @@ function ThemeSwitch() {
           aria-checked={theme === value}
           onClick={() => choose(value)}
           className={clsx(
-            "inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[12.5px] font-medium transition-colors",
+            "inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 font-medium text-[13px] transition-colors sm:px-3",
             theme === value ? "bg-fg text-bg" : "text-muted hover:text-fg",
           )}
         >
@@ -315,9 +326,9 @@ function Site() {
       <main id="top">
         <section className="nc-hero relative mx-2 mt-2 overflow-hidden rounded-[28px] bg-surface ring-1 ring-line sm:mx-3 sm:mt-3 sm:rounded-[32px]">
           <header className="z-10">
-            <nav className="mx-auto flex h-16 max-w-[1120px] items-center gap-6 px-5 sm:h-[76px] sm:pt-2">
-              <a href="#top" className="flex items-center gap-2.5 font-medium text-[15px] tracking-[-0.02em]">
-                <svg viewBox="0 0 32 32" className="size-[22px]" aria-hidden="true">
+            <nav className="mx-auto flex max-w-[1120px] items-center px-5 py-[22px]">
+              <a href="#top" className="flex items-center gap-2.5 font-semibold text-[16px] tracking-[-0.02em]">
+                <svg viewBox="0 0 32 32" className="size-6" aria-hidden="true">
                   <clipPath id="m">
                     <circle cx="16" cy="16" r="15" />
                   </clipPath>
@@ -328,29 +339,22 @@ function Site() {
                 </svg>
                 NightCrew
               </a>
-              <div className="hidden items-center gap-5 text-[13.5px] text-muted md:flex">
-                <a href="#how" className="hover:text-fg">
-                  How it works
-                </a>
-                <a href="#evidence" className="hover:text-fg">
-                  Evidence
-                </a>
-                <a href="#trust" className="hover:text-fg">
-                  Trust
-                </a>
-                <a href="#tokens" className="hover:text-fg">
-                  Tokens
-                </a>
+              <div className="ml-[34px] hidden items-center gap-1 md:flex">
+                {NAV.map(([href, label]) => (
+                  <a key={href} href={href} className={clsx(NAV_LINK, "inline-flex")}>
+                    {label}
+                  </a>
+                ))}
               </div>
               <div className="ml-auto flex items-center gap-2">
-                <a
-                  href={REPO}
-                  className="hidden rounded-full px-3 py-1.5 text-[13.5px] text-muted hover:text-fg sm:inline"
-                >
+                <a href={REPO} className={clsx(NAV_LINK, "hidden sm:inline-flex")}>
                   GitHub
                 </a>
                 <ThemeSwitch />
-                <a href="#start" className="rounded-full bg-dawn px-4 py-1.5 font-medium text-[13.5px] text-on-dawn">
+                <a
+                  href="#start"
+                  className="inline-flex h-10 items-center whitespace-nowrap rounded-full bg-dawn px-4 sm:px-[18px] font-medium text-[14px] text-on-dawn transition-transform duration-150 hover:brightness-[1.06] active:scale-[0.96]"
+                >
                   Get started
                 </a>
               </div>

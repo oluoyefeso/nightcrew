@@ -4,8 +4,8 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { clsx } from "clsx";
 import { ArrowLeft, Check, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { api, reposQuery, taskQuery, useInvalidateTasks } from "../api";
-import { ChipsEditor, Field, ListEditor, Select, TextArea, TextInput } from "../components/form";
+import { api, reposQuery, settingsQuery, taskQuery, useInvalidateTasks } from "../api";
+import { ChipsEditor, Field, inlineEdit, ListEditor, Select, TextArea, TextInput } from "../components/form";
 import { Button, Pill } from "../components/ui";
 import { fmtDay, fmtTime } from "../lib";
 
@@ -37,6 +37,9 @@ function TaskEditor({
   const [t, setT] = useState(initial);
   const [saved, setSaved] = useState(false);
   const repos = useQuery(reposQuery);
+  const settings = useQuery(settingsQuery);
+  // The API refuses a task budget above the daily budget, so the field stops there too.
+  const maxTokens = settings.data?.dailyTokenBudget ?? Number.POSITIVE_INFINITY;
   const invalidate = useInvalidateTasks();
   const navigate = useNavigate();
   const locked = initial.status === "running";
@@ -46,9 +49,16 @@ function TaskEditor({
   const save = useMutation({
     mutationFn: (patch: Partial<Task>) => api.patch<Task>(`/api/tasks/${t.id}`, patch),
     onSuccess: (next) => {
-      setT(next);
+      // Keep anything typed while this save was in flight.
+      setT({ ...next, ...pending.current });
       invalidate();
-      setSaved(true);
+      setSaved(Object.keys(pending.current).length === 0);
+    },
+    // A refused save goes back into the queue so its edits aren't lost; newer edits
+    // win, and the next save (or leaving the page) sends it again with them.
+    onError: (_err, patch) => {
+      pending.current = { ...patch, ...pending.current };
+      setSaved(false);
     },
   });
   const remove = useMutation({
@@ -63,10 +73,11 @@ function TaskEditor({
   // quick title-then-brief change saves both; leaving the page saves the rest.
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const pending = useRef<Partial<Task>>({});
-  const flush = useRef(() => {});
-  flush.current = () => {
+  const flush = useRef((_extra?: Partial<Task>) => {});
+  // Run now and Move to Later go through here too, so the agent gets the latest text.
+  flush.current = (extra = {}) => {
     clearTimeout(timer.current);
-    const patch = pending.current;
+    const patch = { ...pending.current, ...extra };
     pending.current = {};
     if (Object.keys(patch).length) save.mutate(patch);
   };
@@ -115,16 +126,19 @@ function TaskEditor({
           disabled={locked}
           onChange={(e) => edit({ title: e.target.value })}
           aria-label="Title"
-          className="t-h2 -mx-2 w-[calc(100%+1rem)] rounded-lg bg-transparent px-2 outline-none transition-[background-color,box-shadow] duration-150 ease-out enabled:hover:bg-raised/50 focus-visible:bg-transparent focus-visible:ring-1 focus-visible:ring-[color-mix(in_srgb,var(--dawn)_45%,transparent)]"
+          className={clsx(
+            "t-h2 -mx-2 w-[calc(100%+1rem)] rounded-lg bg-transparent px-2 outline-none transition-[background-color,box-shadow] duration-150 ease-out enabled:hover:bg-raised/50 focus:bg-transparent",
+            inlineEdit,
+          )}
         />
         <div className="flex flex-wrap gap-2">
           {t.status !== "queued" && t.status !== "running" && (
-            <Button variant="primary" size="sm" onClick={() => save.mutate({ status: "queued", runAt: null })}>
+            <Button variant="primary" size="sm" onClick={() => flush.current({ status: "queued", runAt: null })}>
               Run now
             </Button>
           )}
           {t.status === "queued" && (
-            <Button size="sm" onClick={() => save.mutate({ status: "later" })}>
+            <Button size="sm" onClick={() => flush.current({ status: "later" })}>
               Move to Later
             </Button>
           )}
@@ -224,9 +238,14 @@ function TaskEditor({
               id="budget"
               type="number"
               min={50}
+              max={Number.isFinite(maxTokens) ? maxTokens / 1000 : undefined}
               step={100}
               value={Math.round(t.tokenBudget / 1000).toString()}
-              onChange={(e) => edit({ tokenBudget: Math.max(50_000, Math.round(Number(e.target.value) * 1000) || 0) })}
+              onChange={(e) =>
+                edit({
+                  tokenBudget: Math.min(maxTokens, Math.max(50_000, Math.round(Number(e.target.value) * 1000) || 0)),
+                })
+              }
               className="font-mono"
             />
           </Field>
@@ -235,9 +254,12 @@ function TaskEditor({
               id="minutes"
               type="number"
               min={5}
+              max={600}
               step={5}
               value={t.maxMinutes}
-              onChange={(e) => edit({ maxMinutes: Math.max(5, Number(e.target.value) || 45) })}
+              onChange={(e) =>
+                edit({ maxMinutes: Math.min(600, Math.max(5, Math.round(Number(e.target.value)) || 45)) })
+              }
               className="font-mono"
             />
           </Field>

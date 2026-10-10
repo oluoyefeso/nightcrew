@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // nightcrew: the local dashboard, the overnight scheduler and a few commands.
 
+import { randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -149,7 +150,7 @@ function claudeOnPath(): string | undefined {
 function takeQueue(busy: (pid: number) => string): () => void {
   const lock = takeCrewLock(values.data);
   if (!lock.ok) {
-    console.error(busy(lock.pid));
+    console.error(`${busy(lock.pid)} If that's wrong, delete ${lock.file}.`);
     process.exit(1);
   }
   process.on("exit", lock.release);
@@ -159,22 +160,30 @@ function takeQueue(busy: (pid: number) => string): () => void {
   return lock.release;
 }
 
-/** First Ctrl-C stops the agents and lets them save their work; a second one (or 20s) quits. */
-function quitOnSignals() {
+/**
+ * Ctrl-C or SIGTERM stops the agents, lets them save their work and puts
+ * their tasks back in the queue; a second signal (or 20s) quits at once.
+ */
+function quitOnSignals(release: () => void) {
   let stopping = false;
-  const quit = () => process.exit(130);
-  process.on("SIGINT", () => {
-    if (stopping || !crew.getStatus().active.length) quit();
-    stopping = true;
-    crew.shutdown();
-    console.log("\n  Stopping agents... press Ctrl-C again to quit now.");
-    void crew.drain().then(quit);
-    setTimeout(quit, 20_000).unref();
-  });
-  process.on("SIGTERM", () => {
-    crew.shutdown();
-    process.exit(143);
-  });
+  const stopOn = (signal: "SIGINT" | "SIGTERM", code: number) => {
+    const quit = () => {
+      release();
+      process.exit(code);
+    };
+    process.on(signal, () => {
+      if (stopping || !crew.getStatus().active.length) quit();
+      stopping = true;
+      crew.shutdown();
+      console.log(
+        `\n  Stopping agents and putting their tasks back in the queue...${signal === "SIGINT" ? " press Ctrl-C again to quit now." : ""}`,
+      );
+      void crew.drain().then(quit);
+      setTimeout(quit, 20_000).unref();
+    });
+  };
+  stopOn("SIGINT", 130);
+  stopOn("SIGTERM", 143);
 }
 
 async function sync() {
@@ -187,15 +196,18 @@ async function sync() {
 }
 
 async function serve() {
-  takeQueue(
+  const release = takeQueue(
     (pid) => `Another NightCrew is already running the queue (pid ${pid}). Use its dashboard, or stop it first.`,
   );
-  quitOnSignals();
+  quitOnSignals(release);
   const port = Number(values.port);
   const webDir = resolve(import.meta.dir, "../../web/dist");
-  const app = createApp({ db, cwd, classicRoot, webDir, crew, engine, dataDir: values.data, publish });
+  // A fresh key per launch: only the link printed below opens the dashboard and
+  // its API. It lives in memory only. Development (the Vite server) goes without.
+  const token = values.dev || process.env.NIGHTCREW_DEV === "1" ? undefined : randomBytes(32).toString("hex");
+  const app = createApp({ db, cwd, classicRoot, webDir, crew, engine, dataDir: values.data, publish, token });
   const server = Bun.serve({ port, hostname: "127.0.0.1", fetch: app.fetch, idleTimeout: 0 });
-  const url = `http://localhost:${server.port}`;
+  const url = `http://localhost:${server.port}/${token ? `?t=${token}` : ""}`;
   crew.startSchedule();
   const s = getSettings(db);
   console.log(`\n  NightCrew is running at ${url}`);
@@ -339,7 +351,7 @@ switch (command) {
     console.log(
       `  ${queued.length} task${queued.length === 1 ? "" : "s"} queued · up to ${st.maxAgents} agents at once (${engine.name}). Ctrl-C stops them.\n`,
     );
-    quitOnSignals();
+    quitOnSignals(release);
     const titles = new Map<string, string>();
     crew.subscribe((e) => {
       if (e.type === "status") for (const a of e.status.active) if (a.runId) titles.set(a.runId, a.title);

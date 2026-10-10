@@ -29,6 +29,8 @@ describe("PATCH /api/settings", () => {
   test.each([
     [{ scheduleAt: "25:00" }, 400, "24-hour time"],
     [{ scheduleAt: "9pm" }, 400, "24-hour time"],
+    [{ scheduleAt: "" }, 400, "24-hour time"],
+    [{ scheduleAt: null }, 400, "24-hour time"],
     [{ maxAgents: 0 }, 400, "between 1 and 12"],
     [{ maxAgents: 13 }, 400, "between 1 and 12"],
     [{ maxAgents: 2.5 }, 400, "between 1 and 12"],
@@ -117,6 +119,22 @@ describe("PATCH /api/settings budgets, dispatch and models", () => {
     } else {
       expect(getSettings(db)).toMatchObject(body);
     }
+  });
+
+  // Value: protects=the daily budget can't drop below a waiting task's budget, and the refusal names how many tasks are in the way; fails_when=the waiting-task check is dropped and those tasks are held forever; why_new=lowering the daily budget silently stranded tasks; seam=none
+  test("a daily budget below a waiting task's budget is refused", async () => {
+    const repo = addRepo(db, { name: "acme", path: "/code/acme", defaultBranch: "main" });
+    createTask(db, { repoId: repo.id, title: "A", status: "queued", tokenBudget: 1_000_000 });
+    createTask(db, { repoId: repo.id, title: "B", status: "later", tokenBudget: 800_000 });
+    createTask(db, { repoId: repo.id, title: "C", status: "done", tokenBudget: 5_000_000 });
+    const before = getSettings(db);
+    const res = await patch({ dailyTokenBudget: 500_000 });
+    expect(res.status).toBe(400);
+    expect(await errorOf(res)).toBe(
+      "2 waiting tasks have a budget above 500k tokens. Lower them first, or keep the daily budget at 1M or more.",
+    );
+    expect(getSettings(db)).toEqual(before);
+    expect((await patch({ dailyTokenBudget: 1_000_000 })).status).toBe(200);
   });
 
   test("model names are saved trimmed", async () => {

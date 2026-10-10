@@ -9,7 +9,8 @@ import { dirname, extname, join, normalize } from "node:path";
 import { EVIDENCE_FOR, type Repo, slugify, type Task } from "@nightcrew/core";
 import { matchesAny } from "@nightcrew/core/guard";
 import axeSource from "axe-core/axe.min.js" with { type: "text" };
-import { baseWorktree, changedFiles, run } from "./git";
+import { baseWorktree, changedFiles } from "./git";
+import { checkEnv, runCheck, sandboxed } from "./sandbox";
 
 interface A11yIssue {
   id: string;
@@ -58,6 +59,8 @@ export interface EvidenceOptions {
   task: Task;
   repo: Repo;
   worktree: string;
+  /** The commit the task forked from. Defaults to the default branch. */
+  base?: string;
   artifactsDir: string;
   /** Results of the branch's own test run, already done by validate(). */
   branchTestsPassed: boolean;
@@ -81,10 +84,10 @@ export async function gatherEvidence(o: EvidenceOptions): Promise<Evidence> {
 
   let base: Awaited<ReturnType<typeof baseWorktree>> | null = null;
   try {
-    base = await baseWorktree(o.repo.path, o.repo.defaultBranch, `${o.task.id}`);
+    base = await baseWorktree(o.repo.path, o.base ?? o.repo.defaultBranch, `${o.task.id}`);
     if (o.repo.setupCommand) {
       o.log(`Installing dependencies on ${o.repo.defaultBranch} for comparison`);
-      await run(["sh", "-c", o.repo.setupCommand], base.dir, { timeoutMs: 10 * 60_000, signal: o.signal });
+      await runCheck(o.repo.setupCommand, base.dir, { timeoutMs: 10 * 60_000, signal: o.signal, warn: o.log });
     }
     if (needsProof) ev.testProof = await failThenPass(o, base.dir);
     if (needsShots) await screenshots(o, base.dir, ev);
@@ -115,7 +118,7 @@ export async function gatherEvidence(o: EvidenceOptions): Promise<Evidence> {
 
 async function failThenPass(o: EvidenceOptions, baseDir: string): Promise<Evidence["testProof"]> {
   const cmd = o.task.testCommand ?? o.repo.testCommand;
-  const changed = await changedFiles(o.worktree, o.repo.defaultBranch);
+  const changed = await changedFiles(o.worktree, o.base ?? o.repo.defaultBranch);
   const testFiles = changed.filter((f) => matchesAny(f, TEST_FILE_GLOBS) && existsSync(join(o.worktree, f)));
   if (!cmd || testFiles.length === 0)
     return {
@@ -131,7 +134,7 @@ async function failThenPass(o: EvidenceOptions, baseDir: string): Promise<Eviden
     mkdirSync(dirname(dest), { recursive: true });
     copyFileSync(join(o.worktree, f), dest);
   }
-  const r = await run(["sh", "-c", cmd], baseDir, { timeoutMs: 15 * 60_000, signal: o.signal });
+  const r = await runCheck(cmd, baseDir, { timeoutMs: 15 * 60_000, signal: o.signal, warn: o.log });
   const out = `${r.stdout}\n${r.stderr}`.trim();
   return {
     testFiles,
@@ -148,7 +151,12 @@ interface Preview {
   stop: () => Promise<void>;
 }
 
-async function startPreview(repo: Repo, dir: string, signal: AbortSignal): Promise<Preview> {
+async function startPreview(
+  repo: Repo,
+  dir: string,
+  signal: AbortSignal,
+  warn: (text: string) => void,
+): Promise<Preview> {
   const port = await freePort();
   const url = (repo.previewUrl ?? "http://localhost:{port}").replace("{port}", String(port));
   if (!repo.previewCommand) throw new Error("No preview command.");
@@ -167,9 +175,9 @@ async function startPreview(repo: Repo, dir: string, signal: AbortSignal): Promi
     return { url, stop: async () => server.stop(true) };
   }
 
-  const proc = Bun.spawn(["sh", "-c", repo.previewCommand], {
+  const proc = Bun.spawn(sandboxed(repo.previewCommand, dir, warn), {
     cwd: dir,
-    env: { ...process.env, PORT: String(port), BROWSER: "none", CI: "1" },
+    env: checkEnv({ PORT: String(port), BROWSER: "none", CI: "1" }),
     stdout: "ignore",
     stderr: "ignore",
   });
@@ -205,7 +213,7 @@ async function screenshots(o: EvidenceOptions, baseDir: string, ev: Evidence) {
 
   const capture = async (dir: string, label: "before" | "after") => {
     o.log(`Starting the app (${label === "before" ? o.repo.defaultBranch : "this branch"}) for screenshots`);
-    const preview = await startPreview(o.repo, dir, o.signal);
+    const preview = await startPreview(o.repo, dir, o.signal, o.log);
     const results: { key: string; file: string; a11y: Map<string, A11yIssue>; errors: string[] }[] = [];
     try {
       for (const path of paths) {

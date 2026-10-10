@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { guardToolCall } from "@nightcrew/core/guard";
 import {
   addNote,
   addRepo,
@@ -339,7 +340,31 @@ describe("review output", () => {
       review: () => ({ structured: { verdict: "lgtm", criteria: "all", concerns: 3 }, text: "lgtm" }),
     });
     const out = await runTask(deps(engine), task.id, new AbortController().signal);
-    expect(getRun(db, out.runId)?.run.verdict).toBe("needs_eyes");
+    expect(out.status).toBe("complete");
+    const run = getRun(db, out.runId);
+    expect(run?.run.verdict).toBe("needs_eyes");
+    expect(run?.artifacts.find((a) => a.kind === "review")?.content).toBe("lgtm");
+  });
+
+  test("a ready verdict with an unmet or unreported criterion needs your eyes", async () => {
+    // Value: protects=ready only counts when every criterion was reported and met; fails_when=a "ready" with met=false, or with fewer criteria than the task has, is shipped as ready; why_new=G8 only zero reported criteria was caught; seam=none
+    const reviews: ReviewOutput[] = [
+      { ...READY, criteria: [{ criterion: "Feature file exists", met: false, evidence: "missing" }] },
+      READY,
+    ];
+    const tasks = [setupTask(), setupTask({ title: "Two criteria", criteria: ["Feature file exists", "Docs"] })];
+    for (const [i, task] of tasks.entries()) {
+      const engine = new ScriptedEngine({
+        implement: (req) => {
+          writeFileSync(join(req.cwd, "src", "feature.ts"), "x\n");
+          return { text: "Done." };
+        },
+        review: () => ({ structured: reviews[i] }),
+      });
+      const out = await runTask(deps(engine), task.id, new AbortController().signal);
+      expect(out.status).toBe("complete");
+      expect(getRun(db, out.runId)?.run.verdict).toBe("needs_eyes");
+    }
   });
 
   test("normalizeReview keeps well-formed entries and drops the rest", () => {
@@ -362,5 +387,106 @@ describe("review output", () => {
       challenges: [{ challenge: "edge", held: true, detail: "" }],
       report: "",
     });
+  });
+});
+
+describe("pinned base", () => {
+  test("moving main onto the agent's commit doesn't hide an out-of-scope file", async () => {
+    // Value: protects=scope checks diff against the fork point pinned before any agent ran, not the movable local main; fails_when=changedFiles/validate go back to diffing against the default branch's name and an agent hides a workflow change by moving main; why_new=G1 the base was a ref the agent can move; seam=none
+    const task = setupTask();
+    const engine = new ScriptedEngine({
+      implement: async (req) => {
+        writeFileSync(join(req.cwd, "src", "feature.ts"), "x\n");
+        mkdirSync(join(req.cwd, ".github", "workflows"), { recursive: true });
+        writeFileSync(join(req.cwd, ".github", "workflows", "ci.yml"), "on: push\n");
+        await git(req.cwd, "add", "-A");
+        await git(req.cwd, "-c", "user.name=a", "-c", "user.email=a@a", "commit", "-qm", "work");
+        await git(req.cwd, "update-ref", "refs/heads/main", "HEAD");
+        return { text: "Done." };
+      },
+      review: () => ({ structured: READY }),
+    });
+    const out = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(out.status).toBe("failed");
+    expect(out.reason).toContain("outside scope: .github/workflows/ci.yml");
+  });
+});
+
+describe("integration branches", () => {
+  test("task runs can't move the ship branch or today's train", async () => {
+    // Value: protects=the guard treats the ship branch and train branches as protected during task runs; fails_when=protectedBranches is only the repo's list and an agent can `git branch -f dev HEAD`; why_new=G2 integration branches were unprotected; seam=none
+    const task = setupTask();
+    updateRepo(db, task.repoId, { shipBranch: "dev" });
+    const engine = new ScriptedEngine({
+      implement: (req) => {
+        writeFileSync(join(req.cwd, "src", "feature.ts"), "x\n");
+        return { text: "Done." };
+      },
+      review: () => ({ structured: READY }),
+    });
+    await runTask(deps(engine), task.id, new AbortController().signal);
+    const guard = engine.calls.find((c) => c.phase === "implement")?.guard;
+    if (!guard) throw new Error("no implement call");
+    const train = guard.protectedBranches.find((b) => b.startsWith("crew/train-"));
+    expect(guard.protectedBranches).toContain("dev");
+    expect(train).toBeTruthy();
+    for (const command of ["git branch -f dev HEAD", `git update-ref refs/heads/${train} HEAD`, "git checkout dev"])
+      expect(guardToolCall("Bash", { command }, guard).allow).toBe(false);
+  });
+});
+
+describe("rate limits", () => {
+  test("only a failed run whose last phase was rate limited reports a rate limit", async () => {
+    // Value: protects=rateLimited means the run failed because of a rate limit, so the crew backs off only then; fails_when=an early rate limit the run got past is sticky, or a stop or timeout after one reports rateLimited; why_new=G7 rateLimited was set once and never cleared; seam=none
+    const limitedPlan = { text: "Add src/feature.ts.", rateLimited: true };
+    // Planning hit a limit but went on; the real failure is the checks.
+    const realFailure = setupTask();
+    const failing = await runTask(
+      deps(
+        new ScriptedEngine({
+          plan: () => limitedPlan,
+          implement: (req) => {
+            writeFileSync(join(req.cwd, "src", "other.ts"), "x\n");
+            return { text: "Done." };
+          },
+        }),
+      ),
+      realFailure.id,
+      new AbortController().signal,
+    );
+    expect(failing.status).toBe("failed");
+    expect(failing.rateLimited).toBe(false);
+
+    // You pressed Stop after a rate-limited phase.
+    const stopped = setupTask({ title: "Stopped one" });
+    const stop = new AbortController();
+    const halted = await runTask(
+      deps(
+        new ScriptedEngine({
+          plan: () => {
+            stop.abort();
+            return limitedPlan;
+          },
+        }),
+      ),
+      stopped.id,
+      stop.signal,
+    );
+    expect(halted.status).toBe("timeout");
+    expect(halted.rateLimited).toBe(false);
+
+    // The build itself was cut off by a limit.
+    const limited = setupTask({ title: "Limited one" });
+    const cut = await runTask(
+      deps(
+        new ScriptedEngine({
+          implement: () => ({ ok: false, error: "Rate limited.", rateLimited: true }),
+        }),
+      ),
+      limited.id,
+      new AbortController().signal,
+    );
+    expect(cut.status).toBe("failed");
+    expect(cut.rateLimited).toBe(true);
   });
 });

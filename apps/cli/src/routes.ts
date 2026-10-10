@@ -6,6 +6,7 @@ import {
   AUTONOMY_LABEL,
   formatTokens,
   nextStart,
+  type Repo,
   type Settings,
   TASK_TYPES,
   type TaskStatus,
@@ -105,14 +106,10 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
     if (patch.level !== undefined && !Object.keys(AUTONOMY_LABEL).includes(patch.level))
       return c.json({ error: "Pick propose, draft_pr, train or ship." }, 400);
     const next = { ...current, ...patch };
-    const isProtected = (b: string) =>
-      [next.defaultBranch, "main", "master", ...(next.protectedBranches ?? [])].includes(b);
-    if (patch.shipBranch && isProtected(patch.shipBranch)) {
-      return c.json({ error: `${patch.shipBranch} is protected. Pick a branch like dev or staging.` }, 400);
-    }
-    if (next.level === "ship" && (!next.shipBranch || isProtected(next.shipBranch) || !next.allowShip?.length)) {
-      return c.json({ error: "Set a ship branch and the paths allowed to ship before choosing Ship to dev." }, 400);
-    }
+    const blocker = shipBlocker(next);
+    // A protected ship branch is refused at any level; the rest only matters for Ship to dev.
+    if ((patch.shipBranch && isProtectedBranch(next, patch.shipBranch)) || (next.level === "ship" && blocker))
+      return c.json({ error: blocker }, 400);
     return c.json(updateRepo(db, current.id, patch));
   });
 
@@ -314,7 +311,10 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
   app.get("/api/settings", (c) => c.json(getSettings(db)));
   app.patch("/api/settings", async (c) => {
     const patch = await body<Settings>(c);
-    if (patch.scheduleAt && !/^([01]\d|2[0-3]):[0-5]\d$/.test(patch.scheduleAt))
+    if (
+      patch.scheduleAt !== undefined &&
+      !(typeof patch.scheduleAt === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(patch.scheduleAt))
+    )
       return c.json({ error: "Use a 24-hour time like 22:00." }, 400);
     if (
       patch.maxAgents !== undefined &&
@@ -333,6 +333,21 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
       !(Number.isInteger(patch.dailyTokenBudget) && patch.dailyTokenBudget >= 100_000)
     )
       return c.json({ error: "The daily token budget must be a whole number of at least 100k." }, 400);
+    if (patch.dailyTokenBudget !== undefined) {
+      // A task whose budget is above the daily budget could never start.
+      const daily = patch.dailyTokenBudget;
+      const over = listTasks(db, ["draft", "queued", "later"]).filter((t) => t.tokenBudget > daily);
+      if (over.length) {
+        const most = Math.max(...over.map((t) => t.tokenBudget));
+        const n = over.length === 1 ? "1 waiting task has" : `${over.length} waiting tasks have`;
+        return c.json(
+          {
+            error: `${n} a budget above ${formatTokens(daily)} tokens. Lower ${over.length === 1 ? "it" : "them"} first, or keep the daily budget at ${formatTokens(most)} or more.`,
+          },
+          400,
+        );
+      }
+    }
     if (patch.dispatch !== undefined && typeof patch.dispatch !== "boolean")
       return c.json({ error: "Dispatch is on or off (true or false)." }, 400);
     for (const k of ["planModel", "buildModel", "reviewModel"] as const) {
@@ -383,7 +398,24 @@ function runsForTask(db: Db, taskId: string) {
   return getRun(db, task.lastRunId)?.attempts ?? [];
 }
 
-function pick<T extends object, K extends keyof T>(obj: T, keys: K[]): Pick<T, K> {
+/** The branches the crew never merges into: the default branch, main, master and the repo's own list. */
+export function isProtectedBranch(repo: Pick<Repo, "defaultBranch" | "protectedBranches">, branch: string): boolean {
+  return [repo.defaultBranch, "main", "master", ...(repo.protectedBranches ?? [])].includes(branch);
+}
+
+/** Why a repo can't use Ship to dev yet, or null when it can. Settings and promote share this rule. */
+export function shipBlocker(
+  repo: Pick<Repo, "defaultBranch" | "protectedBranches" | "shipBranch" | "allowShip">,
+): string | null {
+  if (repo.shipBranch && isProtectedBranch(repo, repo.shipBranch))
+    return `${repo.shipBranch} is protected. Pick a branch like dev or staging.`;
+  if (!repo.shipBranch || !repo.allowShip?.length)
+    return "Set a ship branch and the paths allowed to ship before choosing Ship to dev.";
+  return null;
+}
+
+/** Copy only the listed keys that are set, so a request body can't write anything else. */
+export function pick<T extends object, K extends keyof T>(obj: T, keys: K[]): Pick<T, K> {
   const out = {} as Pick<T, K>;
   for (const k of keys) if (obj[k] !== undefined) out[k] = obj[k];
   return out;

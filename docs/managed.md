@@ -14,7 +14,7 @@ With the managed engine, each phase runs on **Claude Managed Agents** instead of
    - a short-lived GitHub token from `gh auth token`, used for that one session and never stored,
    - a cost limit derived from the task's token budget (the session API only takes a cost limit).
 3. The cloud environment's networking is **limited** to GitHub and package registries. (An environment created without a networking setting gets unrestricted access, so NightCrew always sets one.)
-4. The agent works, commits, and pushes the task branch. Pushing that branch is the only push allowed. Every shell, write and edit call is held for confirmation (`always_ask`) and NightCrew's guard decides it, the same guard the local engine uses. Read-only tools (read, glob, grep, web) run on the server's `auto` policy. Each guarded call costs a short round trip; if NightCrew goes away mid-session, the session waits and spends nothing.
+4. The agent works, commits, and pushes the task branch. Pushing that branch is the only push allowed. Every shell, write and edit call is held for confirmation (`always_ask`) and NightCrew's guard decides it, the same guard the local engine uses. The guard sees `/workspace/<repo>` paths, in file paths and shell commands, as the local worktree, so cleaning `/workspace/<repo>/dist` is allowed and deleting the mount itself isn't. Read-only tools (read, glob, grep, web) run on the server's `auto` policy. Each guarded call costs a short round trip; if NightCrew goes away mid-session, the session waits and spends nothing.
 5. NightCrew fetches the branch back and fast-forwards the local worktree. The rest of the pipeline then runs as usual: checks, evidence, the Skeptic, the trust ladder.
 
 ## Requirements and limits

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addRepo, createTask, type Db, getRepo, getRun, listTrains, openDb, updateRepo } from "@nightcrew/db";
@@ -199,6 +199,7 @@ describe("reflexes", () => {
     expect(a?.workflow).toMatchObject({ choice: "quick" });
   });
   test("rule confidence drops with held challenges and concerns", () => {
+    // Value: protects=confidence branches on the structured missing count; fails_when=ruleConfidence goes back to sniffing "MISSING" in prose (a brief or note containing the word tanks confidence, a reworded summary hides gaps); why_new=O2 moved the input from text to a number; seam=none
     expect(ruleConfidence({ review: READY, evidenceMissing: 0, checksPassed: true })).toBeCloseTo(0.95);
     expect(
       ruleConfidence({
@@ -208,10 +209,6 @@ describe("reflexes", () => {
       }),
     ).toBeCloseTo(0.8);
     expect(ruleConfidence({ review: READY, evidenceMissing: 1, checksPassed: true })).toBe(0.45);
-  });
-  test("rule confidence reads the missing-evidence count, not the rendered text", () => {
-    // Value: protects=confidence branches on the structured missing count; fails_when=ruleConfidence goes back to sniffing "MISSING" in prose (a brief or note containing the word tanks confidence, a reworded summary hides gaps); why_new=O2 moved the input from text to a number; seam=none
-    expect(ruleConfidence({ review: READY, evidenceMissing: 0, checksPassed: true })).toBeCloseTo(0.95);
     expect(ruleConfidence({ review: READY, evidenceMissing: 2, checksPassed: true })).toBe(0.45);
   });
 });
@@ -246,6 +243,17 @@ describe("landing against a real origin", () => {
     await git(other, "add", "-A");
     await commit(other, "theirs");
     await git(other, "push", "-q", "origin", "dev");
+  }
+  /** A commit on top of `base` that NightCrew didn't make. */
+  async function commitOnto(base: string, file: string) {
+    const wt = join(dir, `onto-${file.replace(/\W/g, "-")}`);
+    await git(repoPath, "worktree", "add", "-q", "--detach", wt, base);
+    writeFileSync(join(wt, file), "not from NightCrew\n");
+    await git(wt, "add", "-A");
+    await commit(wt, "outside");
+    const out = await sha("HEAD", wt);
+    await git(repoPath, "worktree", "remove", "--force", wt);
+    return out;
   }
   function rejectPushes(origin: string, on = true) {
     const hook = join(origin, "hooks", "pre-receive");
@@ -313,7 +321,7 @@ describe("landing against a real origin", () => {
     const repo = shipRepo();
     const train = { branch: "crew/train-2026-10-10", cars: [] } as never;
     await taskBranch("crew/a", "src/a.ts");
-    const boarded = await boardTrain(repo, train, "crew/a", "A");
+    const boarded = await boardTrain(repo, train, "crew/a", "A", true);
     if (!boarded.ok) throw new Error(boarded.error);
     rejectPushes(origin);
     const pulled = await pullCar(repo, train, boarded.sha, true);
@@ -357,5 +365,67 @@ describe("landing against a real origin", () => {
     await taskBranch("crew/c", "src/c.ts");
     expect((await shipTask(repo, "crew/c", "C", false)).ok).toBe(true);
     expect(runs()).toBe(2); // nothing to reinstall
+  });
+
+  test("a ship branch moved onto a commit NightCrew didn't make is refused, not pushed", async () => {
+    // Value: protects=local-only commits on the ship branch that NightCrew didn't record stop the ship instead of riding along in its push; fails_when=branchWorktree goes back to a bare ff-only (a no-op when local is ahead) and pushes whatever local dev points at; why_new=G3 an agent could move the local ship ref; seam=none
+    const origin = await withOrigin();
+    const repo = shipRepo();
+    await taskBranch("crew/a", "src/a.ts");
+    expect((await shipTask(repo, "crew/a", "A", true)).ok).toBe(true);
+    await git(repoPath, "update-ref", "refs/heads/dev", await commitOnto("dev", "evil.txt"));
+    await taskBranch("crew/b", "src/b.ts");
+    const b = await shipTask(repo, "crew/b", "B", true);
+    expect(b.ok).toBe(false);
+    if (!b.ok) expect(b.error).toContain("NightCrew didn't make");
+    expect(await tree("dev", origin)).not.toContain("evil.txt");
+    expect(await tree("dev", origin)).not.toContain("src/b.ts");
+  });
+
+  test("an interrupted train merge is undone before the next car boards", async () => {
+    // Value: protects=a merge NightCrew started but never finished (crash between merge and test or rollback) is reset from the marker on the next use; fails_when=branchWorktree ignores the landing marker and the half-landed car stays on the train untested; why_new=G3 train branches can be ahead of origin, so reuse can't reset to origin; seam=none
+    const repo = shipRepo();
+    const train = { branch: "crew/train-2026-10-10", cars: [] } as never;
+    await taskBranch("crew/a", "src/a.ts");
+    expect((await boardTrain(repo, train, "crew/a", "A", false)).ok).toBe(true);
+    const wt = join(repoPath, ".worktrees", "_crew-train-2026-10-10");
+    const gitDir = (await git(wt, "rev-parse", "--absolute-git-dir")).stdout.trim();
+    await taskBranch("crew/x", "src/x.ts");
+    writeFileSync(join(gitDir, "nightcrew-landing"), `${await sha("HEAD", wt)} merge crew/x\n`);
+    await git(wt, "-c", "user.name=t", "-c", "user.email=t@t", "merge", "--no-ff", "--no-edit", "crew/x");
+    await taskBranch("crew/b", "src/b.ts");
+    expect((await boardTrain(repo, train, "crew/b", "B", false)).ok).toBe(true);
+    const files = await tree("crew/train-2026-10-10");
+    expect(files).toContain("src/a.ts");
+    expect(files).toContain("src/b.ts");
+    expect(files).not.toContain("src/x.ts");
+    expect(existsSync(join(gitDir, "nightcrew-landing"))).toBe(false);
+  });
+
+  test("with publishing off, landing doesn't fetch or catch up with origin", async () => {
+    // Value: protects=a dry run never touches the network and lands on the local branch as it is; fails_when=branchWorktree fetches or fast-forwards when publish is false; why_new=G3 publish wasn't threaded into branchWorktree; seam=none
+    const origin = await withOrigin();
+    const repo = shipRepo();
+    const tracked = await sha("refs/remotes/origin/dev");
+    await otherPush(origin, "src/theirs.ts");
+    await taskBranch("crew/a", "src/a.ts");
+    expect((await shipTask(repo, "crew/a", "A", false)).ok).toBe(true);
+    expect(await sha("refs/remotes/origin/dev")).toBe(tracked);
+    expect(await tree("dev")).not.toContain("src/theirs.ts");
+  });
+
+  test("dependencies the catch-up with origin brought in are installed", async () => {
+    // Value: protects=a manifest change pulled in by the fast-forward to origin triggers a reinstall before the tests; fails_when=testsPass diffs from the pre-merge sha (after the fast-forward) and runs tests on stale deps; why_new=G4 the ff's own changes were never diffed; seam=none
+    const origin = await withOrigin();
+    const log = join(dir, "setup.log");
+    const repo = shipRepo({ setupCommand: `mkdir -p node_modules && echo run >> '${log}'` });
+    const runs = () => readFileSync(log, "utf8").trim().split("\n").length;
+    await taskBranch("crew/a", "src/a.ts");
+    expect((await shipTask(repo, "crew/a", "A", true)).ok).toBe(true);
+    expect(runs()).toBe(1);
+    await otherPush(origin, "package.json");
+    await taskBranch("crew/b", "src/b.ts");
+    expect((await shipTask(repo, "crew/b", "B", true)).ok).toBe(true);
+    expect(runs()).toBe(2);
   });
 });

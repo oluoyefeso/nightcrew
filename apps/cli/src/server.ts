@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { extname, join } from "node:path";
 import type { TriageAction } from "@nightcrew/core";
@@ -14,7 +15,8 @@ import {
 } from "@nightcrew/db";
 import type { AgentEngine, Crew } from "@nightcrew/runner";
 import { eq } from "drizzle-orm";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
+import { getCookie, setCookie } from "hono/cookie";
 import { mergePr } from "./github";
 import { mountTaskRoutes } from "./routes";
 import { syncClassic } from "./sync";
@@ -31,20 +33,51 @@ export interface ServerOptions {
   engine: AgentEngine;
   dataDir: string;
   publish: boolean;
+  /**
+   * The per-launch key from the link `nightcrew` prints. When set, the page
+   * and API answer only a browser that opened that link (or a caller sending
+   * it in X-NightCrew-Token). Unset: no key check (tests, development).
+   */
+  token?: string;
 }
 
 export function createApp(opts: ServerOptions) {
   const { db } = opts;
   const app = new Hono();
 
-  // The API is for this machine only: refuse DNS-rebound hosts and cross-site writes.
+  const { token } = opts;
+  const hasKey = (c: Context) =>
+    token === undefined ||
+    sameSecret(c.req.header(TOKEN_HEADER), token) ||
+    Object.entries(getCookie(c)).some(([name, value]) => name.startsWith(COOKIE) && sameSecret(value, token));
+
+  // Opening the printed link trades ?t= for a cookie and drops it from the address bar.
+  app.use("*", async (c, next) => {
+    if (token === undefined) return next();
+    const url = new URL(c.req.url);
+    if (sameSecret(url.searchParams.get("t") ?? undefined, token)) {
+      setCookie(c, `${COOKIE}_${url.port || "80"}`, token, { path: "/", httpOnly: true, sameSite: "Strict" });
+      url.searchParams.delete("t");
+      return c.redirect(`${url.pathname}${url.search}`, 302);
+    }
+    if (c.req.path.startsWith("/api/")) return next();
+    // The locked page styles itself, but let the dashboard's own files load.
+    if (c.req.path.startsWith("/assets/") || /^\/favicon\.(svg|ico)$/.test(c.req.path) || hasKey(c)) return next();
+    return c.html(LOCKED_PAGE, 401);
+  });
+
+  // The API is for this machine only: refuse DNS-rebound hosts, callers without
+  // this launch's key, and cross-site writes.
   app.use("/api/*", async (c, next) => {
-    if (!isLocalHost(c.req.header("host") ?? new URL(c.req.url).host)) {
+    const host = c.req.header("host") ?? new URL(c.req.url).host;
+    if (!isLocalHost(host)) {
       return c.json({ error: "NightCrew only answers to localhost." }, 403);
     }
+    if (!hasKey(c)) return c.json({ error: LOCKED }, 401);
     if (MUTATING.has(c.req.method)) {
+      // A write must come from this very origin, not just any localhost page.
       const origin = c.req.header("origin");
-      if (origin !== undefined && !isLocalHost(originHost(origin))) {
+      if (origin !== undefined && origin.toLowerCase() !== `${new URL(c.req.url).protocol}//${host}`.toLowerCase()) {
         return c.json({ error: "Cross-site requests are refused." }, 403);
       }
       const type = c.req.header("content-type");
@@ -131,20 +164,34 @@ export function createApp(opts: ServerOptions) {
 }
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const COOKIE = "nc_session";
+const TOKEN_HEADER = "x-nightcrew-token";
+const LOCKED = "Open NightCrew from the link it printed in your terminal.";
+const LOCKED_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NightCrew</title>
+<style>
+:root{color-scheme:light dark;--bg:#f7f7f5;--fg:#1c1c1a;--muted:#6b6b66}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--fg:#ececea;--muted:#9a9a94}}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif;padding:0 16px}
+main{max-width:28rem}h1{font-size:1.25rem;margin:0 0 .5rem}p{margin:0;color:var(--muted)}
+</style></head>
+<body><main><h1>NightCrew</h1><p>${LOCKED}</p></main></body></html>
+`;
+
+/** Constant-time compare of a presented key with the real one. */
+function sameSecret(given: string | undefined, secret: string): boolean {
+  if (!given) return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(secret);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 /** "localhost:3721" or "[::1]" is local; anything else, including junk, is not. */
 function isLocalHost(host: string): boolean {
   const name = host.match(/^(\[[^\]]*\]|[^:[\]]+)(?::\d+)?$/)?.[1];
   return name !== undefined && LOCAL_HOSTS.has(name.toLowerCase());
-}
-
-function originHost(origin: string): string {
-  try {
-    return new URL(origin).host;
-  } catch {
-    return "";
-  }
 }
 
 export const VERSION = "1.0.0-alpha.2";

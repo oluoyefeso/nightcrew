@@ -67,6 +67,14 @@ describe("tasks", () => {
     expect(t.dependsOn).toEqual(["x"]);
     expect(t.repoName).toBe("acme");
   });
+  // Value: protects=a new task's default budget fits under the daily budget, while an explicit budget is kept; fails_when=createTask defaults to 1M regardless and a small daily budget holds every new task forever; why_new=the default ignored the daily budget; seam=none
+  test("the default token budget is capped at the daily budget", () => {
+    const { db, repo } = setup();
+    expect(createTask(db, { repoId: repo.id, title: "Big day" }).tokenBudget).toBe(1_000_000);
+    updateSettings(db, { dailyTokenBudget: 400_000 });
+    expect(createTask(db, { repoId: repo.id, title: "Small day" }).tokenBudget).toBe(400_000);
+    expect(createTask(db, { repoId: repo.id, title: "Set", tokenBudget: 200_000 }).tokenBudget).toBe(200_000);
+  });
 });
 
 test("notes and run events", () => {

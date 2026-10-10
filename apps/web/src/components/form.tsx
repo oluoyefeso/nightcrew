@@ -11,8 +11,11 @@ import {
 const control =
   "w-full rounded-xl bg-bg px-3 py-2 text-[13.5px] text-fg outline-none ring-1 ring-line transition-shadow placeholder:text-faint focus-within:ring-[color-mix(in_srgb,var(--dawn)_60%,transparent)]";
 
-/** The quieter ring for in-place editors (list rows, inline titles). */
-const inlineRing = "focus-within:ring-1 focus-within:ring-[color-mix(in_srgb,var(--dawn)_45%,transparent)]";
+/**
+ * The focus ring for in-place editors (list rows, inline titles). Same strength
+ * as form controls so it stays visible in Morning; only the resting ring is dropped.
+ */
+export const inlineEdit = "focus-within:ring-1 focus-within:ring-[color-mix(in_srgb,var(--dawn)_60%,transparent)]";
 const listRow = "group flex items-start gap-2.5 rounded-lg px-1 py-1 hover:bg-raised/60";
 
 export function Field({
@@ -141,7 +144,7 @@ export function ListEditor({
       {value.map((v, i) => (
         // Position keys: keying on the text would remount the input on every keystroke.
         // biome-ignore lint/suspicious/noArrayIndexKey: items are edited in place, never reordered
-        <div key={i} className={clsx(listRow, inlineRing)}>
+        <div key={i} className={clsx(listRow, inlineEdit)}>
           <span className="mt-[7px] size-1.5 shrink-0 rounded-full bg-dawn" />
           <input
             value={v}
@@ -160,7 +163,7 @@ export function ListEditor({
           </button>
         </div>
       ))}
-      <div className={clsx("flex items-center gap-2.5 rounded-lg px-1", inlineRing)}>
+      <div className={clsx("flex items-center gap-2.5 rounded-lg px-1", inlineEdit)}>
         <Plus className="size-3.5 shrink-0 text-faint" />
         <input
           value={draft}

@@ -75,18 +75,114 @@ describe("dispatcher", () => {
     const data = join(dir, "lockdata");
     mkdirSync(data, { recursive: true });
     const lockFile = join(data, "crew.lock");
-    // Held by another live process (this test's parent stands in for the dashboard).
-    writeFileSync(lockFile, JSON.stringify({ pid: process.ppid, startedAt: "x" }));
-    expect(takeCrewLock(data)).toEqual({ ok: false, pid: process.ppid });
+    // Held by another live NightCrew (a child whose command line says so stands in for the dashboard).
+    const owner = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 30000)", "nightcrew"]);
+    try {
+      writeFileSync(lockFile, JSON.stringify({ pid: owner.pid, startedAt: new Date().toISOString() }));
+      expect(takeCrewLock(data)).toEqual({ ok: false, pid: owner.pid, file: lockFile });
+    } finally {
+      owner.kill();
+    }
     // Its owner is gone: stale, so it's ours.
     const dead = Bun.spawn(["true"]);
     await dead.exited;
     writeFileSync(lockFile, JSON.stringify({ pid: dead.pid, startedAt: "x" }));
     const mine = takeCrewLock(data);
     expect(mine.ok).toBe(true);
-    expect(JSON.parse(readFileSync(lockFile, "utf8")).pid).toBe(process.pid);
+    const held = JSON.parse(readFileSync(lockFile, "utf8"));
+    expect(held.pid).toBe(process.pid);
+    expect(held.nonce).toBeString();
     if (mine.ok) mine.release();
     expect(existsSync(lockFile)).toBe(false);
+  });
+
+  test("a lock whose pid now belongs to some other program is stale", async () => {
+    // Value: protects=after a reboot reuses the old pid for an unrelated process, NightCrew still starts; fails_when=liveness alone (kill 0 or EPERM) decides ownership again; why_new=a reused pid made NightCrew refuse to start forever; seam=none
+    const data = join(dir, "lockdata");
+    mkdirSync(data, { recursive: true });
+    const lockFile = join(data, "crew.lock");
+    const other = Bun.spawn(["sleep", "30"]);
+    try {
+      writeFileSync(
+        lockFile,
+        JSON.stringify({ pid: other.pid, startedAt: new Date().toISOString(), nonce: "old", command: "nightcrew" }),
+      );
+      const mine = takeCrewLock(data);
+      expect(mine.ok).toBe(true);
+      expect(JSON.parse(readFileSync(lockFile, "utf8")).pid).toBe(process.pid);
+      // Release only removes our own lock, not one someone else wrote since.
+      writeFileSync(lockFile, JSON.stringify({ pid: other.pid, startedAt: "x", nonce: "theirs" }));
+      if (mine.ok) mine.release();
+      expect(existsSync(lockFile)).toBe(true);
+    } finally {
+      other.kill();
+    }
+    // A process that started after the lock was written can't own it, whatever it's called.
+    const late = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 30000)", "nightcrew"]);
+    try {
+      writeFileSync(lockFile, JSON.stringify({ pid: late.pid, startedAt: "2020-01-01T00:00:00Z", nonce: "old" }));
+      expect(takeCrewLock(data).ok).toBe(true);
+    } finally {
+      late.kill();
+    }
+  });
+
+  test("shutting down puts in-flight work back in the queue and publishes nothing", async () => {
+    // Value: protects=Ctrl-C requeues the running task, starts nothing new and never pushes a train on the way out; fails_when=Crew.finished treats a shutdown stop like a finished run (task marked done, retry or publishTrains runs); why_new=the first Ctrl-C used to mark in-flight tasks done and could git push during shutdown; seam=none
+    const a = await repo("a");
+    const long = createTask(db, { repoId: a.id, title: "Long", scope: ["src/**"], status: "queued" });
+    const next = createTask(db, { repoId: a.id, title: "Next", scope: ["src/**"], status: "queued" });
+    const started: string[] = [];
+    let building: () => void = () => {};
+    const inBuild = new Promise<void>((r) => {
+      building = r;
+    });
+    const engine = new ScriptedEngine({
+      implement: async (req) => {
+        started.push(req.prompt.match(/## Task\n(.+)/)?.[1] ?? "?");
+        building();
+        await new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, 5_000);
+          req.signal.addEventListener("abort", () => {
+            clearTimeout(t);
+            resolve();
+          });
+        });
+        return { ok: false, error: "Stopped: the task ran out of time or was cancelled." };
+      },
+    });
+    const crew = new Crew({ db, engine, dataDir: join(dir, "data"), publish: true });
+    let published = 0;
+    Object.assign(crew, {
+      publishTrains: async () => {
+        published++;
+      },
+    });
+    await crew.pump();
+    await inBuild;
+    crew.shutdown();
+    await crew.drain();
+    expect(started).toEqual(["Long"]);
+    expect(getTask(db, long.id)?.status).toBe("queued");
+    expect(getTask(db, next.id)?.status).toBe("queued");
+    expect(published).toBe(0);
+    expect(crew.getStatus().active).toHaveLength(0);
+  });
+
+  test("a task whose run crashes goes back in the queue instead of staying running", async () => {
+    // Value: protects=a thrown runTask never strands a task in "running", and a task that always crashes waits before retrying instead of spinning; fails_when=the launch catch only records a message, or requeues with no delay; why_new=a crash used to leave the task running until the next restart; seam=none
+    const r = await repo("a");
+    const t = createTask(db, { repoId: r.id, title: "Crashy", scope: ["src/**"], status: "queued" });
+    // A data dir that is a file: runTask throws making its artifacts folder.
+    const dataDir = join(dir, "data-file");
+    writeFileSync(dataDir, "not a folder");
+    const crew = new Crew({ db, engine: new ScriptedEngine({}), dataDir, publish: false });
+    await crew.drain();
+    const after = getTask(db, t.id);
+    expect(after?.status).toBe("queued");
+    expect(new Date(after?.runAt ?? 0).getTime()).toBeGreaterThan(Date.now());
+    expect(crew.getStatus().message).toContain("crashed");
+    expect(crew.getStatus().scheduled).toBe(1);
   });
 
   test("runs agents in parallel across repos, one per repo by default", async () => {

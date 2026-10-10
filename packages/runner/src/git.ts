@@ -36,6 +36,22 @@ export async function run(
 
 export const git = (cwd: string, ...args: string[]) => run(["git", ...args], cwd);
 
+const repoLocks = new Map<string, Promise<unknown>>();
+
+/**
+ * Run git admin work (worktrees, trains, ships) for one repo at a time, so
+ * parallel agents never race on .git/worktrees or an integration branch.
+ */
+export function withRepoLock<T>(repoPath: string, fn: () => Promise<T>): Promise<T> {
+  const prev = repoLocks.get(repoPath) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  repoLocks.set(
+    repoPath,
+    next.catch(() => {}),
+  );
+  return next;
+}
+
 export interface RepoInfo {
   path: string;
   name: string;
@@ -135,7 +151,8 @@ export function detectSetupCommand(path: string): string | null {
           ? "yarn install --frozen-lockfile"
           : has("package-lock.json")
             ? "npm ci"
-            : "npm install";
+            : // No lockfile: install without creating one, so setup never adds files to the task.
+              "npm install --no-package-lock --no-save";
   }
   if (has("uv.lock")) return "uv sync";
   if (has("requirements.txt")) return "pip install -r requirements.txt";
@@ -173,7 +190,11 @@ export function detectPreview(path: string): { command: string; url: string } | 
  * A branch that already exists, from a sent-back task, is checked out as-is
  * so the crew continues where it left off.
  */
-export async function ensureWorktree(repoPath: string, branch: string, base: string): Promise<string> {
+export function ensureWorktree(repoPath: string, branch: string, base: string): Promise<string> {
+  return withRepoLock(repoPath, () => ensureWorktreeUnlocked(repoPath, branch, base));
+}
+
+async function ensureWorktreeUnlocked(repoPath: string, branch: string, base: string): Promise<string> {
   const dir = join(repoPath, ".worktrees", slugify(branch.replace(/\//g, "-"), 64));
   excludeWorktrees(repoPath);
   if (existsSync(join(dir, ".git"))) {
@@ -192,7 +213,15 @@ export async function ensureWorktree(repoPath: string, branch: string, base: str
 }
 
 /** A throwaway checkout of the base branch, for before-screenshots and fail-then-pass. */
-export async function baseWorktree(
+export function baseWorktree(
+  repoPath: string,
+  base: string,
+  label: string,
+): Promise<{ dir: string; remove: () => Promise<void> }> {
+  return withRepoLock(repoPath, () => baseWorktreeUnlocked(repoPath, base, label));
+}
+
+async function baseWorktreeUnlocked(
   repoPath: string,
   base: string,
   label: string,
@@ -204,9 +233,10 @@ export async function baseWorktree(
   if (!add.ok) throw new Error(`Couldn't check out ${base} for comparison: ${add.stderr.trim()}`);
   return {
     dir,
-    remove: async () => {
-      await git(repoPath, "worktree", "remove", "--force", dir);
-    },
+    remove: () =>
+      withRepoLock(repoPath, async () => {
+        await git(repoPath, "worktree", "remove", "--force", dir);
+      }),
   };
 }
 
@@ -242,6 +272,35 @@ export async function changedFiles(dir: string, base: string): Promise<string[]>
 
 function unquote(p: string) {
   return p.startsWith('"') && p.endsWith('"') ? JSON.parse(p) : p;
+}
+
+/** Content hash of each file (or "missing"), to tell setup's changes from the agent's. */
+export async function fingerprints(dir: string, files: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  for (const f of files) {
+    const r = await git(dir, "hash-object", "--", f);
+    out.set(f, r.ok ? r.stdout.trim() : "missing");
+  }
+  return out;
+}
+
+/**
+ * Files NightCrew's own setup (dependency install) created or changed, and
+ * nobody has touched since. They don't count against the task's scope and
+ * aren't committed.
+ */
+export async function untouchedSetupFiles(dir: string, setup: Map<string, string>): Promise<Set<string>> {
+  const now = await fingerprints(dir, [...setup.keys()]);
+  return new Set([...setup].filter(([f, hash]) => now.get(f) === hash).map(([f]) => f));
+}
+
+/** Put setup-only files back: restore tracked ones, delete new ones. */
+export async function dropSetupFiles(dir: string, setup: Map<string, string>): Promise<void> {
+  for (const f of await untouchedSetupFiles(dir, setup)) {
+    const tracked = (await git(dir, "ls-files", "--error-unmatch", "--", f)).ok;
+    if (tracked) await git(dir, "checkout", "--", f);
+    else await run(["rm", "-f", "--", f], dir);
+  }
 }
 
 export async function diffStat(

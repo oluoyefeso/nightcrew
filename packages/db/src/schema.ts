@@ -116,6 +116,8 @@ export const tasks = sqliteTable(
     model: text("model"),
     testCommand: text("test_command"),
     question: text("question"),
+    /** Hold until this time (ISO). Null: run as soon as an agent is free. */
+    runAt: text("run_at"),
     source: text("source").notNull().default("manual"),
     /** Where it came from, like a GitHub issue URL. */
     sourceRef: text("source_ref"),

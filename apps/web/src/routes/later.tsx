@@ -43,7 +43,7 @@ export function LaterPage() {
           </p>
         )}
         <p className="text-[14px] text-muted">
-          Work you've captured but haven't scheduled. Move anything to tonight with one click.
+          Work you've captured but haven't started. Send anything to an agent with one click.
         </p>
       </header>
 
@@ -63,7 +63,7 @@ export function LaterPage() {
                 </span>
               </Link>
               <Button size="sm" onClick={() => move.mutate({ id: t.id, status: "queued" })}>
-                Tonight
+                Run now
               </Button>
               <button
                 type="button"

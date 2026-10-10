@@ -19,7 +19,7 @@ export function classify(input: {
   status: RunStatus;
   prState: PrState | null;
   prUrl: string | null;
-  triage?: "merge" | "send_back" | "close" | "tonight" | "undo" | null;
+  triage?: "merge" | "send_back" | "close" | "again" | "undo" | null;
   verdict?: string | null;
   type?: string | null;
   /** Shipped by the crew to the ship branch, and not undone. */
@@ -27,7 +27,7 @@ export function classify(input: {
   /** Merged into tonight's train; you merge the train. */
   onTrain?: boolean;
 }): Bucket {
-  if (input.triage === "send_back" || input.triage === "tonight") return "back";
+  if (input.triage === "send_back" || input.triage === "again") return "back";
   if (input.triage === "merge" || input.prState === "merged" || input.shipped) return "shipped";
   if (input.triage === "close" || input.prState === "closed") return "failed";
   if (input.status === "failed" || input.status === "timeout" || input.status === "blocked") {
@@ -46,10 +46,10 @@ export function classify(input: {
 }
 
 /**
- * A report day runs from 18:00 to 18:00 local time, so one evening's queue and
- * the following morning (and any daytime retries) land in the same report.
+ * A report day runs from 04:00 to 04:00 local time: agents work around the
+ * clock, and late-night work still belongs to the day it started.
  */
-export const REPORT_DAY_CUTOFF_HOURS = 18;
+export const REPORT_DAY_CUTOFF_HOURS = 4;
 
 export function nightIdFor(iso: string, offsetMinutes = new Date(iso).getTimezoneOffset()): string {
   const local = new Date(new Date(iso).getTime() - offsetMinutes * 60_000);
@@ -63,25 +63,35 @@ export interface HorizonWindow {
 }
 
 /**
- * The Horizon spans 22:00 → 07:00 for a real overnight run. Runs outside that
- * window (daytime test runs) stretch it to whole hours around the actual work.
+ * The Horizon covers the hours around the day's work, in whole hours. For
+ * today it runs up to now, so agents still working sit at its right edge.
  */
-export function horizonWindow(runs: Pick<Run, "startedAt" | "endedAt">[], nightId: string): HorizonWindow {
-  const start = new Date(`${nightId}T22:00:00`);
-  const end = new Date(start.getTime() + 9 * 3_600_000);
+export function horizonWindow(
+  runs: Pick<Run, "startedAt" | "endedAt">[],
+  dayId: string,
+  now = new Date(),
+): HorizonWindow {
   const times = runs
     .flatMap((r) => [r.startedAt, r.endedAt])
     .filter((t): t is string => Boolean(t))
     .map((t) => new Date(t).getTime());
-  if (times.length === 0) return { start, end };
-  const min = Math.min(...times);
-  const max = Math.max(...times);
-  if (min >= start.getTime() && max <= end.getTime()) return { start, end };
-  const s = new Date(min);
+  if (nightIdFor(now.toISOString()) === dayId) times.push(now.getTime());
+  if (times.length === 0) {
+    const start = new Date(`${dayId}T09:00:00`);
+    return { start, end: new Date(start.getTime() + 9 * 3_600_000) };
+  }
+  const s = new Date(Math.min(...times));
   s.setMinutes(0, 0, 0);
-  const e = new Date(max);
-  if (e.getMinutes() || e.getSeconds()) e.setHours(e.getHours() + 1, 0, 0, 0);
-  if (e.getTime() - s.getTime() < 2 * 3_600_000) e.setTime(s.getTime() + 2 * 3_600_000);
+  const e = new Date(Math.max(...times));
+  if (e.getMinutes() || e.getSeconds() || e.getMilliseconds()) e.setHours(e.getHours() + 1, 0, 0, 0);
+  if (e.getTime() - s.getTime() < 3 * 3_600_000) s.setTime(e.getTime() - 3 * 3_600_000);
+  // Today: leave room after "now" so the latest reports don't sit under the marker.
+  if (nightIdFor(now.toISOString()) === dayId) {
+    const room = Math.max(30 * 60_000, (e.getTime() - s.getTime()) * 0.15);
+    // Whole hours, so the hour labels underneath stay true to scale.
+    const end = Math.ceil((now.getTime() + room) / 3_600_000) * 3_600_000;
+    if (end > e.getTime()) e.setTime(end);
+  }
   return { start: s, end: e };
 }
 
@@ -126,7 +136,7 @@ export function summarize(runs: Run[]): ReportSummary {
 export function greeting(s: ReportSummary, now = new Date()): string {
   const h = now.getHours();
   const hello = h < 12 ? "Good morning." : h < 18 ? "Good afternoon." : "Good evening.";
-  if (s.total === 0) return `${hello} Nothing ran this night.`;
+  if (s.total === 0) return `${hello} Nothing has finished yet.`;
   const needYou = s.byBucket.ready + s.byBucket.eyes;
   const parts: string[] = [];
   if (s.byBucket.shipped) parts.push(`${spell(s.byBucket.shipped)} shipped`);

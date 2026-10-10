@@ -19,6 +19,7 @@ import init from "../migrations/0000_init.sql" with { type: "text" };
 import tasksMigration from "../migrations/0001_tasks.sql" with { type: "text" };
 import previewMigration from "../migrations/0002_preview.sql" with { type: "text" };
 import trustMigration from "../migrations/0003_trust.sql" with { type: "text" };
+import scheduleMigration from "../migrations/0004_schedule.sql" with { type: "text" };
 import * as schema from "./schema";
 
 export * from "./tasks";
@@ -32,6 +33,7 @@ const MIGRATIONS: [name: string, sql: string][] = [
   ["0001_tasks", tasksMigration],
   ["0002_preview", previewMigration],
   ["0003_trust", trustMigration],
+  ["0004_schedule", scheduleMigration],
 ];
 
 export type Db = BunSQLiteDatabase<typeof schema> & { $client: Database };

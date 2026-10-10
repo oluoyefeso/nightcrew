@@ -29,6 +29,13 @@
       "when": 1791640692131,
       "tag": "0003_trust",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1791650746884,
+      "tag": "0004_schedule",
+      "breakpoints": true
     }
   ]
 }

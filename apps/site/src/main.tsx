@@ -9,7 +9,7 @@ const REPO = "https://github.com/oluoyefeso/nightcrew";
 const INSTALL = "curl -fsSL https://raw.githubusercontent.com/oluoyefeso/nightcrew/main/install.sh | sh";
 
 // ── The replay ──────────────────────────────────────────────────────────────
-// An example night in the real Morning Report design. The first three tasks
+// An example day in the real Inbox design. The first three tasks
 // and their costs are real runs from building NightCrew (October 2026); the
 // last two are illustrative, priced inside the range those runs measured.
 
@@ -105,34 +105,37 @@ function Replay() {
   const shipped = done.filter((n) => n.bucket === "shipped").length;
   const needYou = done.filter((n) => n.bucket === "ready" || n.bucket === "eyes").length;
   const spent = done.reduce((s, n) => s + Number(n.cost.slice(1)), 0);
-  const clock = 22 * 60 + Math.round(t * 9 * 60);
+  const clock = 9 * 60 + Math.round(t * 9 * 60);
   const hh = String(Math.floor(clock / 60) % 24).padStart(2, "0");
   const mm = String(clock % 60).padStart(2, "0");
-  const morning = t >= 1;
+  const morning = t >= 1; // every agent has reported
 
   return (
     <div className="overflow-hidden rounded-[18px] bg-surface text-left shadow-[var(--shadow)] ring-1 ring-line">
       <div className="flex items-center justify-between gap-3 border-line border-b px-4 py-2.5">
         <div className="flex gap-1 text-[12px]">
-          <span className="whitespace-nowrap rounded-md bg-raised px-2 py-1">Morning Report</span>
-          <span className="hidden px-2 py-1 text-muted sm:inline">Tonight</span>
+          <span className="whitespace-nowrap rounded-md bg-raised px-2 py-1">Inbox</span>
+          <span className="hidden px-2 py-1 text-muted sm:inline">Agents</span>
           <span className="hidden px-2 py-1 text-muted sm:inline">Later</span>
         </div>
         <span className="flex items-center gap-2 whitespace-nowrap font-mono text-[11px] text-muted tabular">
           <span className={clsx("size-1.5 rounded-full", morning ? "bg-ok" : "animate-pulse bg-dawn")} />
-          {morning ? "07:00" : `${hh}:${mm}`}
-          <span className="hidden sm:inline">· {morning ? "night complete" : "crew working"}</span>
+          {morning ? "18:00" : `${hh}:${mm}`}
+          <span className="hidden sm:inline">
+            ·{" "}
+            {morning ? "all agents reported" : `${Math.max(1, Math.min(3, NIGHT.length - done.length))} agents working`}
+          </span>
         </span>
       </div>
       <div className="grid gap-4 px-5 pt-6 pb-5 sm:px-7">
         <div className="min-h-[2.3em] font-medium text-[24px] leading-[1.12] tracking-[-0.03em] sm:text-[30px]">
           {morning ? (
             <>
-              <span className="text-faint">Good morning.</span> {shipped === 2 ? "Two" : shipped} shipped and{" "}
+              <span className="text-faint">Good afternoon.</span> {shipped === 2 ? "Two" : shipped} shipped and{" "}
               {needYou === 3 ? "three" : needYou} need you.
             </>
           ) : (
-            <span className="text-muted">The crew is working…</span>
+            <span className="text-muted">Agents are working…</span>
           )}
         </div>
         <p className="flex flex-wrap gap-x-5 gap-y-1 font-mono text-[11.5px] text-muted tabular">
@@ -166,10 +169,10 @@ function Replay() {
             ))}
           </div>
           <div className="mt-1.5 flex justify-between font-mono text-[10px] text-faint">
-            <span>22:00</span>
-            <span>01:00</span>
-            <span>04:00</span>
-            <span>07:00</span>
+            <span>09:00</span>
+            <span>12:00</span>
+            <span>15:00</span>
+            <span>18:00</span>
           </div>
         </div>
         <div className="divide-y divide-line overflow-hidden rounded-xl ring-1 ring-line">
@@ -355,11 +358,12 @@ function Site() {
             <div className="grid max-w-[860px] justify-items-center gap-6">
               <Eyebrow>Open source · runs on your machine</Eyebrow>
               <h1 className="t-display">
-                Queue it at night. <span className="text-faint">Merge it with coffee.</span>
+                Dispatch the work. <span className="text-faint">Judge the evidence.</span>
               </h1>
               <p className="t-lede max-w-[560px]">
-                NightCrew runs your coding tasks overnight with Claude, across all your repos. Every task comes back
-                with a plan, evidence it actually works, and a review by an agent whose only job is to prove it doesn't.
+                NightCrew is a control room for coding agents. Describe the work and agents start right away, in
+                parallel, inside guardrails you set. Each one comes back with evidence and a status report you can judge
+                in seconds, day or night.
               </p>
               <div className="flex flex-wrap items-center justify-center gap-3" id="start">
                 <InstallButton />
@@ -376,9 +380,7 @@ function Site() {
             </div>
             <div className="grid w-full max-w-[920px] gap-2.5">
               <Replay />
-              <p className="text-center font-mono text-[11px] text-faint">
-                An example night, replayed in the real Morning Report
-              </p>
+              <p className="text-center font-mono text-[11px] text-faint">An example day, replayed in the real Inbox</p>
             </div>
           </div>
         </section>
@@ -386,25 +388,28 @@ function Site() {
         <section id="how" className="mx-auto grid max-w-[1120px] gap-10 px-5 py-24 [&>*]:min-w-0">
           <Reveal className="grid gap-4">
             <Eyebrow>How it works</Eyebrow>
-            <H2 claim="One loop, three moments." rest="Hand off at night, sleep, clear the report in the morning." />
+            <H2
+              claim="You run the crew."
+              rest="Agents do the work, inside your guardrails, and report back with proof."
+            />
           </Reveal>
           <Reveal>
             <div className="grid gap-px overflow-hidden rounded-[18px] bg-line ring-1 ring-line md:grid-cols-3">
               {[
                 [
-                  "21:30 · Tonight",
+                  "Any time · Dispatch",
                   "Tell the crew",
-                  "Describe the work in plain English, or pull in GitHub issues. NightCrew drafts task cards with scope, acceptance criteria and a budget, and asks if something's unclear. You edit, then queue.",
+                  "Describe the work in plain English, or pull in GitHub issues. NightCrew drafts task cards with scope, acceptance criteria and a budget, and asks if something's unclear. Run now, or schedule it for off-peak.",
                 ],
                 [
-                  "22:00 → 06:00 · Overnight",
-                  "The crew works",
-                  "Each task gets its own git worktree and an isolated Claude session. Small tasks build directly; bigger ones plan first. Every tool call passes a guard: no pushes, no secrets, nothing outside scope.",
+                  "In parallel · Agents work",
+                  "Inside guardrails",
+                  "Several agents at once, each in its own git worktree and isolated Claude session, within your per-repo limits and daily budget. Every tool call passes a guard: no pushes, no secrets, nothing outside scope.",
                 ],
                 [
-                  "07:00 · Morning",
-                  "Clear the report",
-                  "Shipped, Ready to merge, Needs your eyes, Failed. One key per decision. Anything you send back with a note runs again tonight, on the same branch, with your note.",
+                  "As they finish · Report back",
+                  "Judge the evidence",
+                  "Reports land in your Inbox as agents finish: shipped, ready to merge, needs your eyes. One key per decision. Send something back with a note and an agent picks it up on the same branch.",
                 ],
               ].map(([time, title, body]) => (
                 <div key={title} className="grid content-start gap-3 bg-surface p-7">
@@ -447,7 +452,7 @@ function Site() {
                   </div>
                 </div>
                 <figcaption className="text-[13px] text-muted">
-                  A real UI task from testing NightCrew: the crew added system dark mode for $0.16. NightCrew started
+                  A real UI task from testing NightCrew: an agent added system dark mode for $0.16. NightCrew started
                   the site on both branches and took these itself.
                 </figcaption>
               </figure>
@@ -490,7 +495,11 @@ function Site() {
               {[
                 ["Propose", "Plans only. No code.", 0],
                 ["Draft PR", "One PR per task. You merge.", 1],
-                ["Nightly train", "Tonight's tasks merge into one branch, tested together. You merge one PR.", 2],
+                [
+                  "Daily train",
+                  "The day's finished tasks merge into one branch, tested together. You merge one PR.",
+                  2,
+                ],
                 [
                   "Ship to dev",
                   "The crew merges to dev itself when evidence, the Skeptic and your rules agree. Undo is one key.",
@@ -542,7 +551,7 @@ function Site() {
                   "48×",
                   "lower cost per turn, measured against a session that loads every skill, plugin and connector installed on the machine",
                 ],
-                ["$25", "default nightly budget. The crew stops before it, and every task has its own cap."],
+                ["$25", "default daily budget. Agents wait rather than pass it, and every task has its own cap."],
               ].map(([n, l]) => (
                 <div key={n} className="grid gap-2 bg-surface p-7">
                   <span className="font-medium text-[44px] leading-none tracking-[-0.035em] tabular">{n}</span>
@@ -573,7 +582,7 @@ function Site() {
 
         <section className="mx-auto grid max-w-[1120px] justify-items-center gap-6 px-5 pt-16 pb-28 text-center">
           <h2 className="text-balance font-medium text-[40px] leading-[1.04] tracking-[-0.035em] sm:text-[64px]">
-            Give the crew tonight's work. <span className="text-faint">Wake up to proof.</span>
+            Hand off the work. <span className="text-faint">Keep the judgement.</span>
           </h2>
           <InstallButton large />
           <p className="font-mono text-[12px] text-faint">macOS and Linux · needs git, gh and Claude Code</p>

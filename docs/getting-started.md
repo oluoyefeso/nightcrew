@@ -29,31 +29,37 @@ Check them in **Settings → Repos**. Without a test command, NightCrew can't ve
 nightcrew
 ```
 
-It opens at `http://localhost:3721` and keeps the nightly schedule while it runs. Your data lives in `~/.nightcrew`.
+It opens at `http://localhost:3721`. While it runs, agents pick up work as soon as it's queued. Your data lives in `~/.nightcrew`.
 
-## 4. Plan tonight
+## 4. Give the agents work
 
-On **Tonight**, describe the work like you'd brief a contractor. Several things at once is fine:
+On **Agents**, describe the work like you'd brief a contractor. Several things at once is fine:
 
 > Dark mode that follows the system. Also the crash when a widget has no title. Don't touch billing.
 
-The crew drafts one card per piece of work. Each card has a repo, a type, a scope (the files it may change), acceptance criteria, and a question if something is unclear. Fix anything that's off, then **Queue**. Drag to reorder. Parked work goes to **Later**.
+The crew drafts one card per piece of work. Each card has a repo, a type, a scope (the files it may change), acceptance criteria, and a question if something is unclear. Fix anything that's off, then:
 
-From a terminal: `nightcrew add "…"`.
+- **Run now**: agents start as soon as a slot is free (the default),
+- **Schedule**: hold until the schedule time, such as off-peak,
+- **Save to Later**: park it.
 
-## 5. Let it run
+From a terminal: `nightcrew add "…"` (add `--schedule` or `--later`).
 
-The crew starts at 22:00 by default, or press **Run now**. Watch any task live from the strip at the top of Tonight. Stop it at any time; unfinished work is kept on its branch.
+## 5. Watch, or don't
 
-## 6. Clear the Morning Report
+**Agents** shows every agent working: phase, last step, elapsed time, and a Stop button. Stop one and its work so far stays on its branch. **Pause dispatch** lets running agents finish but starts nothing new. Turn on desktop or Slack notifications in Settings to hear when an agent finishes or needs you.
+
+## 6. Judge the reports
+
+Reports land in the **Inbox** as agents finish. Today's Inbox shows who's still working at the top.
 
 | Key | Does |
 |---|---|
 | `J` / `K` | Move between tasks |
 | `1` (twice) | Merge the PR |
-| `2` | Send back with a note; it runs again tonight on the same branch |
-| `3` | Dismiss, or take a task off the nightly train |
-| `H` | Try again tonight |
+| `2` | Send back with a note; an agent picks it up on the same branch |
+| `3` | Dismiss, or take a task off the daily train |
+| `H` | Run it again |
 | `U` | Undo the last decision, or undo a ship to dev |
 | `⌘K` | Command bar |
 

@@ -52,7 +52,7 @@ export function RunPage({ runId }: { runId: string }) {
         search={{ run: r.id }}
         className="inline-flex w-fit items-center gap-1.5 text-[12.5px] text-muted hover:text-fg"
       >
-        <ArrowLeft className="size-3.5" /> Morning Report
+        <ArrowLeft className="size-3.5" /> Inbox
       </Link>
 
       <header className="grid gap-3">
@@ -127,7 +127,7 @@ export function RunPage({ runId }: { runId: string }) {
         {list.length === 0 ? (
           <p className="text-[13px] text-faint">
             {r.source === "classic"
-              ? "Classic runs didn't record step-by-step activity. See the logs in the Morning Report."
+              ? "Classic runs didn't record step-by-step activity. See the logs in the Inbox."
               : "No activity yet."}
           </p>
         ) : (

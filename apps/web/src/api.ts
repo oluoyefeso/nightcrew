@@ -80,17 +80,38 @@ export interface RunEvent {
   text: string;
 }
 
-export interface CrewStatus {
-  state: "idle" | "running" | "stopping" | "waiting";
-  taskId: string | null;
+export interface ActiveAgent {
+  taskId: string;
   runId: string | null;
-  startedAt: string | null;
-  spentCents: number;
-  done: number;
-  remaining: number;
-  nextStartAt: string;
+  title: string;
+  repoId: string;
+  repoName: string;
+  phase: string | null;
+  startedAt: string;
+  lastEvent: string | null;
+}
+
+export interface CrewStatus {
+  state: "working" | "idle" | "paused" | "waiting";
+  active: ActiveAgent[];
+  queued: number;
+  scheduled: number;
+  nextAt: string | null;
+  spentTodayCents: number;
+  dailyBudgetCents: number;
+  maxAgents: number;
   message: string | null;
   engine: string;
+}
+
+export interface AgentReport {
+  runId: string;
+  taskId: string;
+  title: string;
+  status: "complete" | "failed" | "timeout";
+  costCents: number;
+  prUrl: string | null;
+  reason: string | null;
 }
 
 export interface DraftTask {
@@ -155,20 +176,26 @@ export function useCrewStream() {
   useEffect(() => {
     let es: EventSource | null = null;
     let retry: ReturnType<typeof setTimeout> | undefined;
-    let lastState: string | null = null;
-    let lastTask: string | null = null;
+    let lastActive = "";
     const connect = () => {
       es = new EventSource("/api/stream");
       es.addEventListener("status", (m) => {
         const s = JSON.parse((m as MessageEvent).data) as CrewStatus;
         qc.setQueryData(crewQuery.queryKey, s);
-        if (s.state !== lastState || s.taskId !== lastTask) {
+        const active = s.active.map((a) => a.taskId).join(",");
+        if (active !== lastActive) {
           qc.invalidateQueries({ queryKey: ["tasks"] });
           qc.invalidateQueries({ queryKey: ["report"] });
           qc.invalidateQueries({ queryKey: ["nights"] });
         }
-        lastState = s.state;
-        lastTask = s.taskId;
+        lastActive = active;
+      });
+      es.addEventListener("report", (m) => {
+        const r = JSON.parse((m as MessageEvent).data) as AgentReport;
+        qc.invalidateQueries({ queryKey: ["report"] });
+        qc.invalidateQueries({ queryKey: ["tasks"] });
+        qc.invalidateQueries({ queryKey: ["trains"] });
+        announce(r);
       });
       es.addEventListener("run_event", (m) => {
         const e = JSON.parse((m as MessageEvent).data) as RunEvent;
@@ -191,4 +218,26 @@ export function useCrewStream() {
       es?.close();
     };
   }, [qc]);
+}
+
+/** An agent reported back: a toast in the app, and a desktop notification if you've allowed them and aren't looking. */
+function announce(r: AgentReport) {
+  const text = r.status === "complete" ? `Finished: ${r.title}` : `Needs you: ${r.title}`;
+  window.dispatchEvent(new CustomEvent("nc:toast", { detail: text }));
+  try {
+    if (typeof Notification !== "undefined" && Notification.permission === "granted" && document.hidden) {
+      const n = new Notification(text, {
+        body: r.status === "complete" ? `$${(r.costCents / 100).toFixed(2)}` : (r.reason ?? ""),
+        tag: r.runId,
+      });
+      n.onclick = () => {
+        window.focus();
+        window.location.href = `/?run=${encodeURIComponent(r.runId)}`;
+      };
+    }
+  } catch {}
+}
+
+export function toast(text: string) {
+  window.dispatchEvent(new CustomEvent("nc:toast", { detail: text }));
 }

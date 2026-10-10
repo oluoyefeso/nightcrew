@@ -1,7 +1,9 @@
-// The crew: works through tonight's queue one task at a time, within the
-// nightly budget, starting on schedule or when you press Run now.
+// The crew: a dispatcher that keeps agents working around the clock. Queued
+// tasks start as soon as a slot is free (within the per-repo and total
+// limits and the daily budget); scheduled tasks wait for their time. Each
+// agent reports back when it finishes.
 
-import { nextStart, nightIdFor, planQueue } from "@nightcrew/core";
+import { nightIdFor, planQueue } from "@nightcrew/core";
 import {
   type Db,
   getRepo,
@@ -10,6 +12,7 @@ import {
   listTasks,
   listTrains,
   type RunEvent,
+  spentOnDay,
   updateTask,
   updateTrain,
 } from "@nightcrew/db";
@@ -19,29 +22,55 @@ import { runTask, type TaskOutcome } from "./pipeline";
 import { classifyFailure, NoReflexes, type Reflexes } from "./reflexes";
 import { materializeRoutines } from "./routines";
 
-export interface CrewStatus {
-  state: "idle" | "running" | "stopping" | "waiting";
-  taskId: string | null;
+export interface ActiveAgent {
+  taskId: string;
   runId: string | null;
-  startedAt: string | null;
-  spentCents: number;
-  done: number;
-  remaining: number;
-  nextStartAt: string;
+  title: string;
+  repoId: string;
+  repoName: string;
+  phase: string | null;
+  startedAt: string;
+  lastEvent: string | null;
+}
+
+export interface CrewStatus {
+  /** working: agents running. idle: nothing to do. paused: you paused dispatch. waiting: backing off. */
+  state: "working" | "idle" | "paused" | "waiting";
+  active: ActiveAgent[];
+  queued: number;
+  scheduled: number;
+  /** Next scheduled start, if any. */
+  nextAt: string | null;
+  spentTodayCents: number;
+  dailyBudgetCents: number;
+  maxAgents: number;
   message: string | null;
   engine: string;
 }
 
-export type CrewEvent = { type: "status"; status: CrewStatus } | { type: "run_event"; event: RunEvent };
+export type CrewEvent =
+  | { type: "status"; status: CrewStatus }
+  | { type: "run_event"; event: RunEvent }
+  | { type: "report"; outcome: TaskOutcome & { title: string; taskId: string } };
 
 const RATE_LIMIT_WAITS_MS = [5, 10, 20].map((m) => m * 60_000);
+const TICK_MS = 15_000;
+
+interface Running {
+  agent: ActiveAgent;
+  abort: AbortController;
+  done: Promise<void>;
+}
 
 export class Crew {
-  private abort: AbortController | null = null;
-  private status: CrewStatus;
-  private lastAutoNight: string | null = null;
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private running = new Map<string, Running>();
   private listeners = new Set<(e: CrewEvent) => void>();
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private pausedUntil = 0;
+  private rateLimitStrikes = 0;
+  private retriedToday = new Map<string, string>();
+  private message: string | null = null;
+  private pumping = false;
 
   constructor(
     private readonly deps: {
@@ -52,7 +81,6 @@ export class Crew {
       reflexes?: Reflexes;
     },
   ) {
-    this.status = this.idleStatus(null);
     // A task left "running" by a crash goes back to the queue.
     for (const t of listTasks(deps.db, ["running"])) updateTask(deps.db, t.id, { status: "queued" });
   }
@@ -63,13 +91,38 @@ export class Crew {
   }
 
   getStatus(): CrewStatus {
-    return { ...this.status, nextStartAt: nextStart(getSettings(this.deps.db).startAt).toISOString() };
+    const { db } = this.deps;
+    const s = getSettings(db);
+    const queuedTasks = listTasks(db, ["queued"]);
+    const now = Date.now();
+    const scheduled = queuedTasks.filter((t) => t.runAt && new Date(t.runAt).getTime() > now);
+    const nextAt = scheduled.map((t) => t.runAt as string).sort()[0] ?? null;
+    const active = [...this.running.values()].map((r) => r.agent);
+    const state: CrewStatus["state"] = !s.dispatch
+      ? "paused"
+      : this.pausedUntil > now
+        ? "waiting"
+        : active.length
+          ? "working"
+          : "idle";
+    return {
+      state,
+      active,
+      queued: queuedTasks.length - scheduled.length,
+      scheduled: scheduled.length,
+      nextAt,
+      spentTodayCents: spentOnDay(db, nightIdFor(new Date().toISOString())),
+      dailyBudgetCents: s.dailyBudgetCents,
+      maxAgents: s.maxAgents,
+      message: this.message,
+      engine: this.deps.engine.name,
+    };
   }
 
-  /** Check the clock every 30 seconds and start the queue on schedule. */
+  /** Start the dispatcher: check for work now and every few seconds. */
   startSchedule() {
-    this.timer ??= setInterval(() => this.tick(), 30_000);
-    this.tick();
+    this.timer ??= setInterval(() => void this.pump(), TICK_MS);
+    void this.pump();
   }
 
   stopSchedule() {
@@ -77,153 +130,187 @@ export class Crew {
     this.timer = null;
   }
 
-  private tick(now = new Date()) {
-    const s = getSettings(this.deps.db);
-    if (!s.autoStart || this.status.state !== "idle") return;
-    const [h, m] = s.startAt.split(":").map(Number);
-    const start = new Date(now);
-    start.setHours(h ?? 22, m ?? 0, 0, 0);
-    if (start.getTime() > now.getTime()) start.setDate(start.getDate() - 1);
-    // Inside the eight hours after the start time, run once per night.
-    const inWindow = now.getTime() - start.getTime() < 8 * 3_600_000;
-    const night = nightIdFor(start.toISOString());
-    if (inWindow && this.lastAutoNight !== night) materializeRoutines(this.deps.db, now);
-    if (inWindow && this.lastAutoNight !== night && listTasks(this.deps.db, ["queued"]).length > 0) {
-      this.lastAutoNight = night;
-      void this.start("schedule");
-    }
-  }
-
-  /** Work through the queue. Resolves when it's empty, stopped or out of budget. */
-  async start(trigger: "schedule" | "manual" = "manual"): Promise<void> {
-    if (this.status.state !== "idle") return;
-    const { db } = this.deps;
-    this.abort = new AbortController();
-    const settings = getSettings(db);
-    this.set({
-      state: "running",
-      startedAt: new Date().toISOString(),
-      spentCents: 0,
-      done: 0,
-      message: trigger === "schedule" ? "Started on schedule" : "Started by you",
-    });
-
-    let rateLimitStrikes = 0;
-    let endMessage: string | null = null;
-    const retried = new Set<string>();
-    const reflexes = this.deps.reflexes ?? new NoReflexes();
-    const routines = materializeRoutines(db);
-    if (routines) this.set({ message: `Queued ${routines} routine ${routines === 1 ? "task" : "tasks"} for tonight.` });
+  /**
+   * Fill free agent slots with the next runnable tasks. Safe to call any
+   * time: when a task is added, when an agent finishes, on the timer.
+   */
+  async pump(): Promise<void> {
+    if (this.pumping) return;
+    this.pumping = true;
     try {
-      while (!this.abort.signal.aborted) {
-        const all = listTasks(db);
-        const { order } = planQueue(all);
-        const nextId = order[0];
-        if (!nextId) break;
-        const task = getTask(db, nextId);
-        if (!task) break;
+      const { db } = this.deps;
+      materializeRoutines(db);
+      const s = getSettings(db);
+      if (!s.dispatch || this.pausedUntil > Date.now()) return this.emitStatus();
 
-        if (this.status.spentCents + task.budgetCents > settings.nightlyBudgetCents) {
-          endMessage = `Stopped before "${task.title}": it could take the night past its $${(settings.nightlyBudgetCents / 100).toFixed(2)} budget.`;
+      for (;;) {
+        if (this.running.size >= s.maxAgents) break;
+        const next = this.nextRunnable(s.maxPerRepo);
+        if (!next) break;
+        const spent = spentOnDay(db, nightIdFor(new Date().toISOString())) + this.inFlightBudget();
+        if (spent + next.budgetCents > s.dailyBudgetCents) {
+          this.message = `Holding "${next.title}": it could take today past the $${(s.dailyBudgetCents / 100).toFixed(2)} budget.`;
           break;
         }
-
-        this.set({ taskId: task.id, runId: null, remaining: order.length });
-        const outcome: TaskOutcome = await runTask(
-          {
-            db,
-            engine: this.deps.engine,
-            dataDir: this.deps.dataDir,
-            models: { plan: settings.planModel, build: settings.buildModel, review: settings.reviewModel },
-            publish: this.deps.publish,
-            reflexes,
-            onEvent: (event) => {
-              if (this.status.runId !== event.runId) this.set({ runId: event.runId });
-              this.emit({ type: "run_event", event });
-            },
-          },
-          task.id,
-          this.abort.signal,
-        );
-        this.set({ spentCents: this.status.spentCents + outcome.costCents, done: this.status.done + 1 });
-
-        // Rate limited: put the task back and wait, up to three times a night.
-        if (outcome.reason?.includes("429") && !this.abort.signal.aborted) {
-          const wait = RATE_LIMIT_WAITS_MS[rateLimitStrikes++];
-          if (wait === undefined) {
-            endMessage = "Rate limited three times. Stopping for the night.";
-            break;
-          }
-          updateTask(db, task.id, { status: "queued" });
-          this.set({ state: "waiting", message: `Rate limited. Trying again in ${wait / 60_000} minutes.` });
-          await sleep(wait, this.abort.signal);
-          this.set({ state: "running" });
-        } else if (
-          outcome.status === "failed" &&
-          !retried.has(task.id) &&
-          !this.abort.signal.aborted &&
-          outcome.reason
-        ) {
-          // A flaky failure gets one more go tonight; a real one waits for morning.
-          const kind = await classifyFailure(reflexes, outcome.reason, outcome.reason);
-          if (kind === "flaky") {
-            retried.add(task.id);
-            updateTask(db, task.id, { status: "queued" });
-            this.set({ message: `"${task.title}" looked like a flaky failure, so it gets one more try.` });
-          }
-        }
+        this.launch(next.id);
       }
-      await this.publishTrains();
+      this.emitStatus();
     } finally {
-      const stopped = this.abort?.signal.aborted;
-      const { done, spentCents } = this.status;
-      this.abort = null;
-      const summary = `Finished ${done} ${done === 1 ? "task" : "tasks"} for $${(spentCents / 100).toFixed(2)}.`;
-      this.status = this.idleStatus(stopped ? `Stopped by you. ${summary}` : (endMessage ?? summary));
-      this.emit({ type: "status", status: this.getStatus() });
+      this.pumping = false;
     }
   }
 
-  /** Push every train that picked up cars tonight and open its one PR. */
-  private async publishTrains() {
+  /** The highest-priority queued task that can start now. */
+  private nextRunnable(maxPerRepo: number) {
+    const { db } = this.deps;
+    const all = listTasks(db);
+    const byId = new Map(all.map((t) => [t.id, t]));
+    const now = Date.now();
+    const perRepo = new Map<string, number>();
+    for (const r of this.running.values()) perRepo.set(r.agent.repoId, (perRepo.get(r.agent.repoId) ?? 0) + 1);
+    for (const id of planQueue(all).order) {
+      const t = byId.get(id);
+      if (!t || this.running.has(id)) continue;
+      if (t.runAt && new Date(t.runAt).getTime() > now) continue;
+      // Dependencies must have finished, not just started.
+      if (t.dependsOn.some((d) => byId.get(d) && !["done", "archived"].includes(byId.get(d)?.status ?? ""))) continue;
+      if ((perRepo.get(t.repoId) ?? 0) >= maxPerRepo) continue;
+      return t;
+    }
+    return null;
+  }
+
+  private inFlightBudget(): number {
+    let n = 0;
+    for (const r of this.running.values()) n += getTask(this.deps.db, r.agent.taskId)?.budgetCents ?? 0;
+    return n;
+  }
+
+  private launch(taskId: string) {
+    const { db } = this.deps;
+    const task = getTask(db, taskId);
+    if (!task) return;
+    const s = getSettings(db);
+    const abort = new AbortController();
+    const agent: ActiveAgent = {
+      taskId,
+      runId: null,
+      title: task.title,
+      repoId: task.repoId,
+      repoName: task.repoName,
+      phase: "setup",
+      startedAt: new Date().toISOString(),
+      lastEvent: null,
+    };
+    // Mark it running before the first await so the next pump skips it.
+    updateTask(db, taskId, { status: "running" });
+    const done = runTask(
+      {
+        db,
+        engine: this.deps.engine,
+        dataDir: this.deps.dataDir,
+        models: { plan: s.planModel, build: s.buildModel, review: s.reviewModel },
+        publish: this.deps.publish,
+        reflexes: this.deps.reflexes ?? new NoReflexes(),
+        onEvent: (event) => {
+          agent.runId = event.runId;
+          if (event.kind === "phase") agent.phase = event.phase;
+          if (event.kind !== "text") agent.lastEvent = event.text;
+          this.emit({ type: "run_event", event });
+          if (event.kind === "phase") this.emitStatus();
+        },
+      },
+      taskId,
+      abort.signal,
+    )
+      .then((outcome) => this.finished(task.id, task.title, task.repoId, outcome))
+      .catch((e) => {
+        this.message = `"${task.title}" crashed: ${e instanceof Error ? e.message : String(e)}`;
+      })
+      .finally(() => {
+        this.running.delete(taskId);
+        this.emitStatus();
+        void this.pump();
+      });
+    this.running.set(taskId, { agent, abort, done });
+    this.message = null;
+  }
+
+  private async finished(taskId: string, title: string, repoId: string, outcome: TaskOutcome) {
+    const { db } = this.deps;
+    this.emit({ type: "report", outcome: { ...outcome, title, taskId } });
+
+    if (outcome.reason?.includes("429")) {
+      // Rate limited: put it back and pause dispatch for a while.
+      const wait = RATE_LIMIT_WAITS_MS[Math.min(this.rateLimitStrikes++, RATE_LIMIT_WAITS_MS.length - 1)] as number;
+      updateTask(db, taskId, { status: "queued" });
+      this.pausedUntil = Date.now() + wait;
+      this.message = `Rate limited. Agents resume in ${wait / 60_000} minutes.`;
+      setTimeout(() => void this.pump(), wait + 500);
+      return;
+    }
+    this.rateLimitStrikes = 0;
+
+    if (outcome.status === "failed" && outcome.reason) {
+      const today = nightIdFor(new Date().toISOString());
+      if (this.retriedToday.get(taskId) !== today) {
+        const kind = await classifyFailure(this.deps.reflexes ?? new NoReflexes(), outcome.reason, outcome.reason);
+        if (kind === "flaky") {
+          this.retriedToday.set(taskId, today);
+          updateTask(db, taskId, { status: "queued" });
+          this.message = `"${title}" looked like a flaky failure, so it gets one more try.`;
+        }
+      }
+    }
+
+    // A repo's train is published whenever no agent is working in that repo.
+    const stillBusy = [...this.running.values()].some((r) => r.agent.repoId === repoId && r.agent.taskId !== taskId);
+    if (!stillBusy) await this.publishTrains(repoId);
+  }
+
+  /** Push the repo's open train and open (or refresh) its one PR. */
+  private async publishTrains(repoId: string) {
     if (!this.deps.publish) return;
+    const repo = getRepo(this.deps.db, repoId);
+    if (!repo) return;
     for (const train of listTrains(this.deps.db).filter(
-      (t) => (t.status === "open" || t.status === "published") && t.cars.some((c) => c.state === "on"),
+      (t) =>
+        t.repoId === repoId &&
+        (t.status === "open" || t.status === "published") &&
+        t.cars.some((c) => c.state === "on"),
     )) {
-      const repo = getRepo(this.deps.db, train.repoId);
-      if (!repo) continue;
       try {
         const pr = await publishTrain(repo, train);
         if (pr) updateTrain(this.deps.db, train.id, { status: "published", prUrl: pr.prUrl, prNumber: pr.prNumber });
       } catch (e) {
-        this.set({ message: `Couldn't publish the ${repo.name} train: ${e instanceof Error ? e.message : String(e)}` });
+        this.message = `Couldn't publish the ${repo.name} train: ${e instanceof Error ? e.message : String(e)}`;
       }
     }
   }
 
-  stop() {
-    if (!this.abort) return;
-    this.set({ state: "stopping", message: "Stopping after the current step…" });
-    this.abort.abort();
+  /** Stop one agent. Its unfinished work stays on its branch. */
+  stopAgent(taskId: string): boolean {
+    const r = this.running.get(taskId);
+    if (!r) return false;
+    r.abort.abort();
+    return true;
   }
 
-  private idleStatus(message: string | null): CrewStatus {
-    return {
-      state: "idle",
-      taskId: null,
-      runId: null,
-      startedAt: null,
-      spentCents: 0,
-      done: 0,
-      remaining: 0,
-      nextStartAt: new Date().toISOString(),
-      message,
-      engine: this.deps.engine.name,
-    };
+  /** Stop every agent. */
+  stopAll() {
+    for (const r of this.running.values()) r.abort.abort();
   }
 
-  private set(patch: Partial<CrewStatus>) {
-    this.status = { ...this.status, ...patch };
+  /** Resolves when no agent is working and nothing runnable is left (for `nightcrew run` and tests). */
+  async drain(): Promise<void> {
+    await this.pump();
+    while (this.running.size) {
+      await Promise.race([...this.running.values()].map((r) => r.done));
+      await this.pump();
+    }
+  }
+
+  private emitStatus() {
     this.emit({ type: "status", status: this.getStatus() });
   }
 
@@ -234,14 +321,4 @@ export class Crew {
       } catch {}
     }
   }
-}
-
-function sleep(ms: number, signal: AbortSignal) {
-  return new Promise<void>((resolve) => {
-    const t = setTimeout(resolve, ms);
-    signal.addEventListener("abort", () => {
-      clearTimeout(t);
-      resolve();
-    });
-  });
 }

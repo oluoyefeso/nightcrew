@@ -115,9 +115,9 @@ export function RunPane({
           </Callout>
         )}
         {run.trainId && !run.shipSha && (
-          <Callout label="On tonight's train">
-            This task is merged into the nightly train with the night's other work and tested together. You merge the
-            train's one PR, or press 3 to take this task off it.
+          <Callout label="On today's train">
+            This task is merged into today's train with the other finished work in this repo and tested together. You
+            merge the train's one PR, or press 3 to take this task off it.
           </Callout>
         )}
 
@@ -272,7 +272,7 @@ function TriageBar({ run, onToast }: { run: Run; onToast: (msg: string) => void 
   const unship = useMutation({
     mutationFn: () => api.post<{ demoted: boolean }>(`/api/runs/${encodeURIComponent(run.id)}/unship`),
     onSuccess: (r) => {
-      onToast(r.demoted ? "Undone. The repo goes back to the nightly train for now." : "Undone.");
+      onToast(r.demoted ? "Undone. The repo goes back to the daily train for now." : "Undone.");
       qc.invalidateQueries({ queryKey: ["run", run.id] });
       qc.invalidateQueries({ queryKey: ["report"] });
     },
@@ -327,7 +327,7 @@ function TriageBar({ run, onToast }: { run: Run; onToast: (msg: string) => void 
   const sendBack = () => {
     if (!note.trim()) return;
     if (onTrain) pull.mutate();
-    act("send_back", "Sent back. It goes into tonight's queue with your note.", note);
+    act("send_back", "Sent back. An agent picks it up with your note.", note);
     setComposing(false);
     setNote("");
   };
@@ -339,7 +339,7 @@ function TriageBar({ run, onToast }: { run: Run; onToast: (msg: string) => void 
       if (k === "1") merge();
       else if (k === "2") setComposing(true);
       else if (k === "3" && run.bucket !== "failed" && !shipped) dismiss();
-      else if (k === "h") act("tonight", "Queued to try again tonight.");
+      else if (k === "h") act("again", "Queued again. An agent picks it up as soon as a slot is free.");
       else if (k === "u" && canUndo) undo();
       else return;
       e.preventDefault();
@@ -397,8 +397,12 @@ function TriageBar({ run, onToast }: { run: Run; onToast: (msg: string) => void 
         </Button>
       )}
       {(run.bucket === "failed" || run.bucket === "eyes") && (
-        <Button variant="ghost" onClick={() => act("tonight", "Queued to try again tonight.")} kbd="H">
-          Try again tonight
+        <Button
+          variant="ghost"
+          onClick={() => act("again", "Queued again. An agent picks it up as soon as a slot is free.")}
+          kbd="H"
+        >
+          Run again
         </Button>
       )}
       {canUndo && (

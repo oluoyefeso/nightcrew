@@ -24,7 +24,19 @@ import {
 } from "@nightcrew/db";
 import type { AgentEngine, EngineEvent, PhaseRequest, PhaseResult } from "./engine";
 import { type Evidence, gatherEvidence, summarizeEvidence } from "./evidence";
-import { changedFiles, commitAll, commitsAhead, diffStat, ensureWorktree, openOrUpdatePr, push, run } from "./git";
+import {
+  changedFiles,
+  commitAll,
+  commitsAhead,
+  diffStat,
+  dropSetupFiles,
+  ensureWorktree,
+  fingerprints,
+  openOrUpdatePr,
+  push,
+  run,
+  untouchedSetupFiles,
+} from "./git";
 import { boardTrain, canShip, shipTask, trainBranch } from "./landing";
 import {
   implementPrompt,
@@ -98,6 +110,8 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     stat: null as { additions: number; deletions: number; files: number } | null,
   };
   const artifacts = new Map<string, { kind: string; name: string; content: string }>();
+  /** Files the dependency install wrote, with their hashes: NightCrew's, not the agent's. */
+  let setupFiles = new Map<string, string>();
 
   const save = () =>
     upsertRuns(db, [
@@ -180,6 +194,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     clearTimeout(timer);
     // Keep unfinished work on the branch (locally) so the next attempt resumes it.
     if (status !== "complete" && state.worktree) {
+      await dropSetupFiles(state.worktree, setupFiles).catch(() => {});
       const kept = await commitAll(
         state.worktree,
         `WIP: ${task.title}\n\nNightCrew stopped early: ${reason ?? status}.`,
@@ -203,14 +218,18 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     const worktree = await ensureWorktree(repo.path, task.branch, repo.defaultBranch);
     state.worktree = worktree;
     // A fresh worktree has no dependencies; tests and previews need them.
+    // Whatever the install itself writes is NightCrew's, not the agent's.
     if (
       repo.setupCommand &&
       !(repo.setupCommand.match(/\b(bun|npm|pnpm|yarn)\b/) && existsSync(join(worktree, "node_modules")))
     ) {
       emit("info", `Installing dependencies: ${repo.setupCommand}`);
+      const before = new Set(await changedFiles(worktree, repo.defaultBranch));
       const setup = await run(["sh", "-c", repo.setupCommand], worktree, { timeoutMs: 10 * 60_000 });
       if (!setup.ok)
         emit("info", `Dependency install failed (exit ${setup.code}). Continuing; the crew can install what it needs.`);
+      const touched = (await changedFiles(worktree, repo.defaultBranch)).filter((f) => !before.has(f));
+      setupFiles = await fingerprints(worktree, touched);
     }
     const ctx: PromptContext = {
       task,
@@ -325,7 +344,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
 
     // Validate, with one repair attempt
     phase("validate", "Checking the work");
-    let check = await validate(worktree, task, repo);
+    let check = await validate(worktree, task, repo, setupFiles);
     artifact("tests", "Checks", check.log);
     if (!check.ok && !stop.aborted) {
       emit("info", `Checks failed: ${check.reason}. Trying one repair.`);
@@ -346,7 +365,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       );
       account(fix);
       phase("validate", "Checking the repair");
-      check = await validate(worktree, task, repo);
+      check = await validate(worktree, task, repo, setupFiles);
       artifact("tests", "Checks", check.log);
     }
     if (check.noChanges) return await finish("failed", "The crew finished without changing anything.");
@@ -398,7 +417,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       artifact("review", "REVIEW.md", review.text || `The review didn't finish: ${review.error ?? "unknown error"}`);
     }
     // The reviewer may have fixed small things; checks must still pass.
-    const recheck = await validate(worktree, task, repo);
+    const recheck = await validate(worktree, task, repo, setupFiles);
     if (!recheck.ok) return await finish("failed", `Checks failed after review: ${recheck.reason}`);
     state.confidence = await scoreConfidence(reflexes, {
       task,
@@ -409,6 +428,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
 
     // Publish
     phase("publish", "Committing");
+    await dropSetupFiles(worktree, setupFiles);
     await commitAll(worktree, `${task.title}\n\nNightCrew task ${task.id}, run ${runId}.`);
     state.stat = await diffStat(worktree, repo.defaultBranch);
     const hasRemote = (await run(["git", "remote", "get-url", "origin"], worktree)).ok;
@@ -504,8 +524,16 @@ export interface CheckResult {
 }
 
 /** NightCrew's own checks, independent of what the agent claims. */
-export async function validate(worktree: string, task: Task, repo: Repo): Promise<CheckResult> {
-  const files = (await changedFiles(worktree, repo.defaultBranch)).filter((f) => !f.startsWith(".worktrees/"));
+export async function validate(
+  worktree: string,
+  task: Task,
+  repo: Repo,
+  setupFiles: Map<string, string> = new Map(),
+): Promise<CheckResult> {
+  const fromSetup = await untouchedSetupFiles(worktree, setupFiles);
+  const files = (await changedFiles(worktree, repo.defaultBranch)).filter(
+    (f) => !f.startsWith(".worktrees/") && !fromSetup.has(f),
+  );
   const lines: string[] = [`Changed files (${files.length}):`, ...files.map((f) => `  ${f}`)];
   if (files.length === 0)
     return { ok: false, noChanges: true, reason: "No files changed.", log: lines.join("\n"), files };

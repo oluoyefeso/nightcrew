@@ -12,7 +12,7 @@ function NavLink({
   children,
   className,
 }: {
-  to: "/" | "/tonight" | "/later";
+  to: "/" | "/agents" | "/later";
   children: ReactNode;
   className?: string;
 }) {
@@ -30,38 +30,73 @@ function NavLink({
   );
 }
 
-/** Idle: when the crew starts. Working: what it's on. */
+/** How many agents are working right now. */
 function CrewPill() {
   const crew = useQuery(crewQuery);
   const s = crew.data;
   if (!s) return null;
-  if (s.state === "idle") {
-    const t = new Date(s.nextStartAt);
-    return (
-      <Link
-        to="/tonight"
-        className="hidden items-center gap-2 rounded-full px-3 py-1.5 font-mono text-[11.5px] text-faint hover:text-muted lg:inline-flex"
-      >
-        <span className="size-1.5 rounded-full bg-faint" />
-        starts {t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}
-      </Link>
-    );
-  }
+  const working = s.active.length;
+  const label =
+    s.state === "paused"
+      ? "dispatch paused"
+      : s.state === "waiting"
+        ? "backing off"
+        : working
+          ? `${working} working`
+          : "agents idle";
   return (
     <Link
-      to={s.runId ? "/run/$runId" : "/tonight"}
-      params={s.runId ? { runId: s.runId } : undefined}
-      className="inline-flex items-center gap-2 rounded-full bg-[color-mix(in_srgb,var(--dawn)_14%,transparent)] px-3 py-1.5 font-mono text-[11.5px] text-dawn"
+      to="/agents"
+      className={clsx(
+        "inline-flex items-center gap-2 whitespace-nowrap rounded-full px-3 py-1.5 font-mono text-[11.5px]",
+        working ? "bg-[color-mix(in_srgb,var(--dawn)_14%,transparent)] text-dawn" : "text-faint hover:text-muted",
+      )}
     >
-      <span className="size-1.5 animate-pulse rounded-full bg-dawn" />
-      {s.state === "waiting" ? "waiting" : s.state === "stopping" ? "stopping" : "crew working"}
+      <span
+        className={clsx(
+          "size-1.5 rounded-full",
+          working ? "animate-pulse bg-dawn" : s.state === "paused" ? "bg-bad" : "bg-faint",
+        )}
+      />
+      {label}
     </Link>
+  );
+}
+
+/** Toasts from anywhere: window.dispatchEvent(new CustomEvent("nc:toast", { detail: "…" })). */
+function Toasts() {
+  const [items, setItems] = useState<{ id: number; text: string }[]>([]);
+  useEffect(() => {
+    let n = 0;
+    const onToast = (e: Event) => {
+      const id = ++n;
+      setItems((list) => [...list.slice(-2), { id, text: String((e as CustomEvent).detail) }]);
+      setTimeout(() => setItems((list) => list.filter((x) => x.id !== id)), 3600);
+    };
+    window.addEventListener("nc:toast", onToast);
+    return () => window.removeEventListener("nc:toast", onToast);
+  }, []);
+  return (
+    <div
+      aria-live="polite"
+      className="pointer-events-none fixed inset-x-0 bottom-6 z-50 grid justify-items-center gap-2 px-4"
+    >
+      {items.map((t) => (
+        <div
+          key={t.id}
+          className="pointer-events-auto rounded-full bg-fg px-4 py-2 text-[13px] text-bg shadow-[var(--shadow)] motion-safe:animate-[nc-rise_.24s_var(--ease-out-quint)]"
+        >
+          {t.text}
+        </div>
+      ))}
+    </div>
   );
 }
 
 export function Shell() {
   useCrewStream();
   const tasks = useQuery(tasksQuery(["queued", "running"]));
+  // Working + waiting: everything the agents have on their plate.
   const queued = tasks.data?.length ?? 0;
   return (
     <div className="flex min-h-full flex-col">
@@ -72,9 +107,9 @@ export function Shell() {
             NightCrew
           </Link>
           <nav className="flex items-center gap-0.5 overflow-x-auto text-[13px]">
-            <NavLink to="/">Morning Report</NavLink>
-            <NavLink to="/tonight">
-              Tonight
+            <NavLink to="/">Inbox</NavLink>
+            <NavLink to="/agents">
+              Agents
               {queued > 0 && (
                 <span className="rounded-full bg-[color-mix(in_srgb,var(--dawn)_18%,transparent)] px-1.5 font-mono text-[10.5px] text-dawn">
                   {queued}
@@ -111,6 +146,7 @@ export function Shell() {
         <Outlet />
       </main>
       <CommandBar />
+      <Toasts />
     </div>
   );
 }

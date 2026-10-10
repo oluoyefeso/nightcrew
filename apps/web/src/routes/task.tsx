@@ -11,7 +11,7 @@ import { fmtDay, fmtTime } from "../lib";
 
 const STATUS_COPY: Record<Task["status"], { label: string; color: string }> = {
   draft: { label: "Draft", color: "var(--muted)" },
-  queued: { label: "Tonight", color: "var(--dawn)" },
+  queued: { label: "Queued", color: "var(--dawn)" },
   later: { label: "Later", color: "var(--sky)" },
   running: { label: "Running", color: "var(--dawn)" },
   done: { label: "Ran", color: "var(--ok)" },
@@ -55,7 +55,7 @@ function TaskEditor({
     mutationFn: () => api.del(`/api/tasks/${t.id}`),
     onSuccess: () => {
       invalidate();
-      navigate({ to: "/tonight" });
+      navigate({ to: "/agents" });
     },
   });
 
@@ -110,7 +110,7 @@ function TaskEditor({
         <div className="flex flex-wrap gap-2">
           {t.status !== "queued" && t.status !== "running" && (
             <Button variant="primary" size="sm" onClick={() => save.mutate({ status: "queued" })}>
-              Queue for tonight
+              Run now
             </Button>
           )}
           {t.status === "queued" && (

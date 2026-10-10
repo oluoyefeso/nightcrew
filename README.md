@@ -1,10 +1,10 @@
 # NightCrew
 
-Queue it at night. Merge it with coffee.
+Dispatch the work. Judge the evidence.
 
-NightCrew runs your coding tasks overnight with Claude, across all your repos. Every task comes back with a plan, evidence that it works, and a review by a separate agent whose job is to prove it doesn't. In the morning you clear one calm report, one key per decision.
+NightCrew is a control room for coding agents. Describe the work and agents start right away, in parallel, across your repos, inside guardrails you set. Each one comes back with evidence that it works, a review by a separate agent whose job is to prove it doesn't, and a status report you can judge in seconds. Day or night: you manage the crew, the agents do the work.
 
-![The Morning Report](docs/screenshots/morning-report.png)
+![The Inbox](docs/screenshots/inbox.png)
 
 > **1.0 alpha.** The bash runner from 0.x still works and lives in [`classic/`](classic/README.md).
 
@@ -22,28 +22,30 @@ nightcrew repo add        # detects the test, install and preview commands
 nightcrew                 # opens the dashboard at http://localhost:3721
 ```
 
-Describe tonight's work in the dashboard, or from a terminal:
+Give the agents work in the dashboard, or from a terminal:
 
 ```bash
 nightcrew add "Dark mode that follows the system, and fix the crash when a widget has no title"
 ```
 
-The crew starts at 22:00 (change it in Settings), or press **Run now**. Try everything without spending anything with `nightcrew --demo`.
+Agents start as soon as a slot is free: up to 3 at once and 1 per repo by default, within a $25 daily budget (all adjustable). Add `--schedule` to hold work for off-peak, or `--later` to park it. Try everything without spending anything with `nightcrew --demo`.
 
-## What a night looks like
+## How it works
 
-1. **Tonight.** You describe the work. NightCrew drafts task cards with scope, acceptance criteria, the evidence it will need and a budget, and asks one question if something is unclear.
-2. **Overnight.** Each task gets its own git worktree and an isolated Claude session.
+1. **Dispatch.** Describe the work. NightCrew drafts task cards with scope, acceptance criteria, the evidence it will need and a budget, and asks one question if something is unclear. Run now, schedule it, or park it in Later.
+2. **Agents work, in parallel.** The **Agents** page shows every agent live: its phase, its last step, and a Stop button.
+   - Each task gets its own git worktree and an isolated Claude session.
    - Small tasks build directly; bigger ones plan first.
    - Every tool call passes a guard that refuses writes outside scope, pushes, publishing, secrets and protected branches.
-   - NightCrew runs your tests itself and gives a failing task one repair attempt.
-   - It then gathers evidence and hands everything to the Skeptic.
-3. **Morning.** The Morning Report groups the night into Shipped, Ready to merge, Needs your eyes, Sent back and Failed, laid out on the Horizon, the night drawn as a time axis.
+   - NightCrew runs your tests itself and gives a failing task one repair attempt, then gathers evidence and hands it to the Skeptic.
+3. **They report back.** Reports land in the **Inbox** as agents finish, grouped into Shipped, Ready to merge, Needs your eyes, Sent back and Failed, and laid out on the Horizon (the day as a time axis). Desktop and Slack notifications are optional.
    - `1` merges.
-   - `2` sends a task back with a note; it runs again tonight on the same branch.
+   - `2` sends a task back with a note; an agent picks it up on the same branch.
    - `3` dismisses.
-   - `H` tries again tonight.
+   - `H` runs it again.
    - `U` undoes.
+
+![Agents at work](docs/screenshots/agents.png)
 
 ## Evidence, not claims
 
@@ -63,14 +65,14 @@ Each repo earns autonomy from its track record:
 |---|---|
 | Propose | Plans only, no code |
 | Draft PR | One draft PR per task (the default) |
-| Nightly train | Ready tasks merge into `crew/train-<night>` and are tested together; you merge one PR |
+| Daily train | Ready tasks merge into `crew/train-<day>` and are tested together; you merge one PR |
 | Ship to dev | The crew merges into your ship branch itself when evidence, the Skeptic, an 80% confidence score and your path rules all agree. `U` reverts it and drops the repo back to the train |
 
 `main`, the default branch and anything you protect are never touched. NightCrew suggests a promotion when the record earns it ("8 of the last 10 tasks merged without changes"). See [docs/trust-ladder.md](docs/trust-ladder.md).
 
 ## Cost
 
-A small task costs about **$0.08** end to end (build, check, review, commit). That figure is measured, not estimated. Each crew session runs isolated: no filesystem settings, MCP servers, skills or plugins from your machine, only the repo's own `CLAUDE.md` / `AGENTS.md`. On a typical setup that measured 48× cheaper per turn, and it keeps the agent's tools to what the task needs. Nightly and per-task budgets are hard caps.
+A small task costs about **$0.08** end to end (build, check, review, commit). That figure is measured, not estimated. Each crew session runs isolated: no filesystem settings, MCP servers, skills or plugins from your machine, only the repo's own `CLAUDE.md` / `AGENTS.md`. On a typical setup that measured 48× cheaper per turn, and it keeps the agent's tools to what the task needs. Daily and per-task budgets are hard caps.
 
 ## More
 

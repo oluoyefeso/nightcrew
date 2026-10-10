@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Repo, Train } from "@nightcrew/core";
 import { matchesAny } from "@nightcrew/core/guard";
-import { git, openOrUpdatePr, push, run } from "./git";
+import { git, openOrUpdatePr, push, run, withRepoLock } from "./git";
 
 /** A long-lived worktree for an integration branch (train or ship branch). */
 async function branchWorktree(repo: Repo, branch: string, createFrom?: string): Promise<string> {
@@ -92,7 +92,7 @@ export function canShip(input: {
 }
 
 /** Merge the task branch into the ship branch, test, push. */
-export async function shipTask(
+async function shipTaskUnlocked(
   repo: Repo,
   branch: string,
   title: string,
@@ -121,7 +121,7 @@ export async function shipTask(
 }
 
 /** Undo a ship: revert its merge commit on the ship branch and push. */
-export async function undoShip(
+async function undoShipUnlocked(
   repo: Repo,
   shipBranch: string,
   sha: string,
@@ -146,12 +146,12 @@ export async function undoShip(
 
 // ── The nightly train ───────────────────────────────────────────────────────
 
-export function trainBranch(nightId: string) {
-  return `crew/train-${nightId}`;
+export function trainBranch(dayId: string) {
+  return `crew/train-${dayId}`;
 }
 
 /** Add a finished task to tonight's train. If the train's tests break, it comes straight back off. */
-export async function boardTrain(
+async function boardTrainUnlocked(
   repo: Repo,
   train: Train,
   taskBranch: string,
@@ -169,7 +169,7 @@ export async function boardTrain(
 }
 
 /** Push the train and open (or refresh) its one PR. */
-export async function publishTrain(repo: Repo, train: Train): Promise<{ prUrl: string; prNumber: number } | null> {
+async function publishTrainUnlocked(repo: Repo, train: Train): Promise<{ prUrl: string; prNumber: number } | null> {
   const on = train.cars.filter((c) => c.state === "on");
   if (!on.length) return null;
   const dir = await branchWorktree(repo, train.branch, repo.defaultBranch);
@@ -195,7 +195,7 @@ Made overnight by [NightCrew](https://github.com/oluoyefeso/nightcrew)`;
 }
 
 /** Take one task off the train: revert its merge commit. */
-export async function pullCar(
+async function pullCarUnlocked(
   repo: Repo,
   train: Train,
   mergeSha: string,
@@ -210,3 +210,18 @@ export async function pullCar(
   if (publish && (await git(dir, "remote", "get-url", "origin")).ok) await push(dir, train.branch);
   return { ok: true };
 }
+
+// Integration-branch work holds the repo's lock so parallel agents in one
+// repo never merge into the same branch at the same moment.
+export const shipTask = (repo: Repo, ...a: Tail<Parameters<typeof shipTaskUnlocked>>) =>
+  withRepoLock(repo.path, () => shipTaskUnlocked(repo, ...a));
+export const undoShip = (repo: Repo, ...a: Tail<Parameters<typeof undoShipUnlocked>>) =>
+  withRepoLock(repo.path, () => undoShipUnlocked(repo, ...a));
+export const boardTrain = (repo: Repo, ...a: Tail<Parameters<typeof boardTrainUnlocked>>) =>
+  withRepoLock(repo.path, () => boardTrainUnlocked(repo, ...a));
+export const publishTrain = (repo: Repo, ...a: Tail<Parameters<typeof publishTrainUnlocked>>) =>
+  withRepoLock(repo.path, () => publishTrainUnlocked(repo, ...a));
+export const pullCar = (repo: Repo, ...a: Tail<Parameters<typeof pullCarUnlocked>>) =>
+  withRepoLock(repo.path, () => pullCarUnlocked(repo, ...a));
+
+type Tail<T extends unknown[]> = T extends [unknown, ...infer R] ? R : never;

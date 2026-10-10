@@ -5,6 +5,7 @@ import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { nextStart } from "@nightcrew/core";
 import { addRepo, createTask, getRepoByPath, getSettings, listRepos, listTasks, openDb } from "@nightcrew/db";
 import {
   type AgentEngine,
@@ -25,17 +26,18 @@ import { syncClassic } from "./sync";
 const HELP = `nightcrew ${VERSION}
 
 Usage
-  nightcrew                     Open the dashboard and keep the nightly schedule
-  nightcrew add "<request>"     Draft tasks from a sentence and queue them for tonight
+  nightcrew                     Open the dashboard; agents pick up work around the clock
+  nightcrew add "<request>"     Draft tasks from a sentence and dispatch them
   nightcrew repo add [path]     Let the crew work in a repo (default: current folder)
-  nightcrew run                 Work through tonight's queue now, in this terminal
+  nightcrew run                 Run the queue in this terminal until it's empty
   nightcrew import              Import classic runs and refresh PR state
 
 Options
   --port <n>          Dashboard port (default 3721)
   --no-open           Don't open a browser window
   --repo <path>       Repo for \`add\` (default: current folder if it's a known repo)
-  --later             With \`add\`: park the tasks in Later instead of tonight
+  --later             With \`add\`: park the tasks in Later
+  --schedule          With \`add\`: hold the tasks until the schedule time (Settings, default 22:00)
   --demo              Use a pretend crew that spends nothing (for trying things out)
   --engine managed    Run tasks on Claude Managed Agents (needs ANTHROPIC_API_KEY; experimental)
   --no-publish        Keep branches local: don't push or open PRs
@@ -52,6 +54,7 @@ const { values, positionals } = parseArgs({
     "no-open": { type: "boolean", default: false },
     repo: { type: "string" },
     later: { type: "boolean", default: false },
+    schedule: { type: "boolean", default: false },
     demo: { type: "boolean", default: process.env.NIGHTCREW_DEMO === "1" },
     engine: { type: "string", default: process.env.NIGHTCREW_ENGINE ?? "local" },
     "no-publish": { type: "boolean", default: false },
@@ -79,7 +82,7 @@ mkdirSync(values.data, { recursive: true });
 const db = openDb(join(values.data, "nightcrew.db"));
 const classicRoot = values.classic ? resolve(values.classic) : undefined;
 const engine: AgentEngine = values.demo
-  ? new DemoEngine()
+  ? new DemoEngine(Number(process.env.NIGHTCREW_DEMO_STEP_MS) || 900)
   : values.engine === "managed"
     ? managedEngine()
     : new SdkEngine({ claudePath: claudeOnPath() });
@@ -103,6 +106,23 @@ function managedEngine(): AgentEngine {
 const publish = !values["no-publish"] && !values.demo;
 const reflexes = reflexesFromEnv();
 const crew = new Crew({ db, engine, dataDir: values.data, publish, reflexes });
+
+// Reports that need a person go to Slack, if you've set a webhook.
+crew.subscribe((e) => {
+  if (e.type !== "report") return;
+  const hook = getSettings(db).slackWebhookUrl;
+  if (!hook) return;
+  const o = e.outcome;
+  const text =
+    o.status === "complete"
+      ? `NightCrew finished "${o.title}"${o.prUrl ? `: ${o.prUrl}` : ""} ($${(o.costCents / 100).toFixed(2)})`
+      : `NightCrew needs you: "${o.title}" stopped. ${o.reason ?? ""}`;
+  void fetch(hook, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+  }).catch(() => {});
+});
 
 /** In the compiled binary the SDK can't find its bundled CLI, so use Claude Code from PATH. */
 function claudeOnPath(): string | undefined {
@@ -129,7 +149,7 @@ async function serve() {
   const s = getSettings(db);
   console.log(`\n  NightCrew is running at ${url}`);
   console.log(
-    `  Crew: ${engine.name}${publish ? "" : " (branches stay local)"} · starts at ${s.startAt}${s.autoStart ? "" : " (auto-start off)"}\n`,
+    `  Agents: up to ${s.maxAgents} at once (${s.maxPerRepo} per repo) · $${(s.dailyBudgetCents / 100).toFixed(2)} a day · ${engine.name}${publish ? "" : ", branches stay local"} · reflexes: ${reflexes.name}${s.dispatch ? "" : " · dispatch paused"}\n`,
   );
   if (!values["no-open"] && !values.dev) openBrowser(url);
 }
@@ -235,6 +255,7 @@ switch (command) {
         question: d.question,
         dependsOn: d.dependsOn.map((i) => ids[i]).filter((x): x is string => Boolean(x)),
         status: d.question ? "draft" : values.later ? "later" : "queued",
+        runAt: values.schedule ? nextStart(getSettings(db).scheduleAt).toISOString() : null,
         source: "cli",
       });
       ids.push(t.id);
@@ -244,22 +265,38 @@ switch (command) {
     }
     if (fallback)
       console.log("  (Couldn't reach Claude to shape this, so it's saved as one task. Edit it in the dashboard.)");
+    if (!values.later)
+      console.log(
+        values.schedule
+          ? `  Scheduled for ${getSettings(db).scheduleAt}.`
+          : "  Queued. The running dashboard's agents pick it up as soon as a slot is free (or run: nightcrew run).",
+      );
     break;
   }
 
   case "run": {
     const queued = listTasks(db, ["queued"]);
     if (!queued.length) {
-      console.log("  Tonight's queue is empty.");
+      console.log("  The queue is empty.");
       break;
     }
+    const st = getSettings(db);
     console.log(
-      `  Running ${queued.length} task${queued.length === 1 ? "" : "s"} with the ${engine.name} crew. Ctrl-C stops after the current step.\n`,
+      `  ${queued.length} task${queued.length === 1 ? "" : "s"} queued · up to ${st.maxAgents} agents at once (${engine.name}). Ctrl-C stops them.\n`,
     );
-    process.on("SIGINT", () => crew.stop());
+    process.on("SIGINT", () => crew.stopAll());
+    const titles = new Map<string, string>();
     crew.subscribe((e) => {
+      if (e.type === "status") for (const a of e.status.active) if (a.runId) titles.set(a.runId, a.title);
+      if (e.type === "report") {
+        const o = e.outcome;
+        console.log(
+          `  ${o.status === "complete" ? "✓" : "!"} [${o.title}] ${o.status === "complete" ? "finished" : o.reason} · $${(o.costCents / 100).toFixed(2)}${o.prUrl ? ` · ${o.prUrl}` : ""}`,
+        );
+      }
       if (e.type === "run_event") {
         const ev = e.event;
+        const who = (titles.get(ev.runId) ?? "").slice(0, 28);
         const mark =
           ev.kind === "phase"
             ? "▸"
@@ -270,11 +307,17 @@ switch (command) {
                 : ev.kind === "result"
                   ? "✓"
                   : " ";
-        console.log(`  ${mark} ${ev.kind === "phase" ? ev.text : `  ${ev.text}`}`.slice(0, 200));
+        if (ev.kind === "text" || ev.kind === "result") return;
+        console.log(
+          `  ${mark} ${who ? `[${who}] ` : ""}${ev.kind === "phase" ? ev.text : `  ${ev.text}`}`.slice(0, 200),
+        );
       }
     });
-    await crew.start("manual");
-    console.log(`\n  ${crew.getStatus().message ?? "Done."}`);
+    await crew.drain();
+    const end = crew.getStatus();
+    console.log(
+      `\n  ${end.message ?? "All agents are done."} Spent today: $${(end.spentTodayCents / 100).toFixed(2)}.`,
+    );
     break;
   }
 

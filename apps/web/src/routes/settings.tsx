@@ -1,6 +1,7 @@
 import { AUTONOMY_LABEL, type AutonomyLevel, type Repo, type Settings } from "@nightcrew/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
+import { useState } from "react";
 import { api, crewQuery, reposQuery, settingsQuery } from "../api";
 import { AddRepo } from "../components/add-repo";
 import { ChipsEditor, Field, Select, TextInput } from "../components/form";
@@ -8,7 +9,7 @@ import { ChipsEditor, Field, Select, TextInput } from "../components/form";
 const LEVEL_HINT: Record<AutonomyLevel, string> = {
   propose: "Plans only. No code changes.",
   draft_pr: "One draft PR per task. You merge.",
-  train: "Ready tasks merge into one nightly branch, tested together. You merge the train's PR.",
+  train: "Ready tasks merge into one daily branch, tested together. You merge the train's PR.",
   ship: "The crew merges into your ship branch itself when evidence, the Skeptic and the rules below agree. You get Undo.",
 };
 
@@ -38,41 +39,94 @@ export function SettingsPage() {
 
       {s && (
         <section className="grid gap-5">
-          <h2 className="font-medium text-[16px] tracking-[-0.02em]">The night</h2>
+          <h2 className="font-medium text-[16px] tracking-[-0.02em]">Agents</h2>
           <div className="grid gap-4 sm:grid-cols-3">
-            <Field label="Start time" htmlFor="start" hint="24-hour, your local time.">
+            <Field label="Agents at once" htmlFor="max-agents" hint="Across all repos.">
               <TextInput
-                id="start"
-                type="time"
-                defaultValue={s.startAt}
-                onBlur={(e) => e.target.value !== s.startAt && save.mutate({ startAt: e.target.value })}
+                id="max-agents"
+                type="number"
+                min={1}
+                max={12}
+                defaultValue={s.maxAgents}
+                onBlur={(e) =>
+                  save.mutate({ maxAgents: Math.min(12, Math.max(1, Math.round(Number(e.target.value) || 1))) })
+                }
                 className="font-mono"
               />
             </Field>
-            <Field label="Nightly budget (USD)" htmlFor="budget" hint="The crew stops before passing it.">
+            <Field
+              label="Per repo"
+              htmlFor="per-repo"
+              hint="Above 1, same-repo agents use separate branches; the train catches conflicts."
+            >
+              <TextInput
+                id="per-repo"
+                type="number"
+                min={1}
+                max={6}
+                defaultValue={s.maxPerRepo}
+                onBlur={(e) =>
+                  save.mutate({ maxPerRepo: Math.min(6, Math.max(1, Math.round(Number(e.target.value) || 1))) })
+                }
+                className="font-mono"
+              />
+            </Field>
+            <Field label="Daily budget (USD)" htmlFor="budget" hint="New agents wait rather than pass it.">
               <TextInput
                 id="budget"
                 type="number"
                 min={1}
                 step={1}
-                defaultValue={s.nightlyBudgetCents / 100}
+                defaultValue={s.dailyBudgetCents / 100}
                 onBlur={(e) =>
-                  save.mutate({ nightlyBudgetCents: Math.max(100, Math.round(Number(e.target.value) * 100)) })
+                  save.mutate({ dailyBudgetCents: Math.max(100, Math.round(Number(e.target.value) * 100)) })
                 }
                 className="font-mono"
               />
             </Field>
-            <Field label="Start automatically" htmlFor="auto">
+          </div>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Field label="Dispatch" htmlFor="dispatch" hint="Paused: running agents finish, nothing new starts.">
               <Select
-                id="auto"
-                value={s.autoStart ? "yes" : "no"}
-                onChange={(e) => save.mutate({ autoStart: e.target.value === "yes" })}
+                id="dispatch"
+                value={s.dispatch ? "on" : "off"}
+                onChange={(e) => save.mutate({ dispatch: e.target.value === "on" })}
               >
-                <option value="yes">Yes, at the start time</option>
-                <option value="no">No, I'll press Run now</option>
+                <option value="on">Start work as soon as it's added</option>
+                <option value="off">Paused</option>
               </Select>
             </Field>
+            <Field
+              label="Schedule time"
+              htmlFor="schedule"
+              hint={'Where "Schedule" sends work, e.g. off-peak. Local time.'}
+            >
+              <TextInput
+                id="schedule"
+                type="time"
+                defaultValue={s.scheduleAt}
+                onBlur={(e) => e.target.value !== s.scheduleAt && save.mutate({ scheduleAt: e.target.value })}
+                className="font-mono"
+              />
+            </Field>
+            <Field
+              label="Slack webhook"
+              htmlFor="slack"
+              hint="Optional. Agents report there when they finish or need you."
+            >
+              <TextInput
+                id="slack"
+                defaultValue={s.slackWebhookUrl ?? ""}
+                onBlur={(e) =>
+                  (e.target.value || null) !== s.slackWebhookUrl &&
+                  save.mutate({ slackWebhookUrl: e.target.value.trim() || null })
+                }
+                placeholder="https://hooks.slack.com/…"
+                className="font-mono"
+              />
+            </Field>
           </div>
+          <BrowserNotifications />
           <div className="grid gap-4 sm:grid-cols-3">
             {(
               [
@@ -287,5 +341,32 @@ function TrackLine({ repoId }: { repoId: string }) {
     <p className="font-mono text-[11.5px] text-muted">
       Track record, last {recent} finished: {mergedAsIs} merged unchanged · {sentBack} sent back · {undone} undone
     </p>
+  );
+}
+
+function BrowserNotifications() {
+  const supported = typeof Notification !== "undefined";
+  const [perm, setPerm] = useState(supported ? Notification.permission : "denied");
+  if (!supported) return null;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-raised/50 px-4 py-3">
+      <p className="text-[13.5px]">
+        Desktop notifications{" "}
+        <span className="text-muted">when an agent finishes or needs you and this tab isn't in front.</span>
+      </p>
+      {perm === "granted" ? (
+        <span className="font-mono text-[12px] text-ok">On</span>
+      ) : perm === "denied" ? (
+        <span className="text-[12px] text-faint">Blocked in your browser settings</span>
+      ) : (
+        <button
+          type="button"
+          onClick={() => Notification.requestPermission().then(setPerm)}
+          className="rounded-full bg-fg px-3.5 py-1.5 font-medium text-[12.5px] text-bg"
+        >
+          Turn on
+        </button>
+      )}
+    </div>
   );
 }

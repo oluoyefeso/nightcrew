@@ -19,6 +19,7 @@ import {
   ManagedEngine,
   reflexesFromEnv,
   SdkEngine,
+  takeCrewLock,
 } from "@nightcrew/runner";
 import { createApp, VERSION } from "./server";
 import { syncClassic } from "./sync";
@@ -78,6 +79,17 @@ if (values.version) {
 
 const command = positionals[0] ?? "up";
 const cwd = process.cwd();
+const usesAgents = ["up", "serve", "run"].includes(command);
+const compiled = import.meta.path.startsWith("/$bunfs") || import.meta.path.includes("~BUN");
+if (compiled && usesAgents && !values.demo && values.engine !== "managed" && !Bun.which("claude")) {
+  console.error(`NightCrew runs its agents with Claude Code, and \`claude\` isn't on your PATH.
+
+  Install it:  npm i -g @anthropic-ai/claude-code
+  Log in:      claude   (once, then quit it)
+
+Then start NightCrew again. To look around without Claude, use: nightcrew --demo`);
+  process.exit(1);
+}
 mkdirSync(values.data, { recursive: true });
 const db = openDb(join(values.data, "nightcrew.db"));
 const classicRoot = values.classic ? resolve(values.classic) : undefined;
@@ -107,7 +119,7 @@ const publish = !values["no-publish"] && !values.demo;
 const reflexes = reflexesFromEnv();
 const crew = new Crew({ db, engine, dataDir: values.data, publish, reflexes });
 
-// Reports that need a person go to Slack, if you've set a webhook.
+// Every report goes to Slack, if you've set a webhook: agents report there when they finish or need you.
 crew.subscribe((e) => {
   if (e.type !== "report") return;
   const hook = getSettings(db).slackWebhookUrl;
@@ -126,8 +138,43 @@ crew.subscribe((e) => {
 
 /** In the compiled binary the SDK can't find its bundled CLI, so use Claude Code from PATH. */
 function claudeOnPath(): string | undefined {
-  if (!import.meta.path.startsWith("/$bunfs") && !import.meta.path.includes("~BUN")) return undefined;
+  if (!compiled) return undefined;
   return Bun.which("claude") ?? undefined;
+}
+
+/**
+ * Become the one process that dispatches the queue, then requeue whatever a
+ * crash left running. Exits if another live process already dispatches.
+ */
+function takeQueue(busy: (pid: number) => string): () => void {
+  const lock = takeCrewLock(values.data);
+  if (!lock.ok) {
+    console.error(busy(lock.pid));
+    process.exit(1);
+  }
+  process.on("exit", lock.release);
+  const recovered = crew.recover();
+  if (recovered)
+    console.log(`  Put ${recovered} task${recovered === 1 ? "" : "s"} left running by a crash back in the queue.`);
+  return lock.release;
+}
+
+/** First Ctrl-C stops the agents and lets them save their work; a second one (or 20s) quits. */
+function quitOnSignals() {
+  let stopping = false;
+  const quit = () => process.exit(130);
+  process.on("SIGINT", () => {
+    if (stopping || !crew.getStatus().active.length) quit();
+    stopping = true;
+    crew.shutdown();
+    console.log("\n  Stopping agents... press Ctrl-C again to quit now.");
+    void crew.drain().then(quit);
+    setTimeout(quit, 20_000).unref();
+  });
+  process.on("SIGTERM", () => {
+    crew.shutdown();
+    process.exit(143);
+  });
 }
 
 async function sync() {
@@ -140,6 +187,10 @@ async function sync() {
 }
 
 async function serve() {
+  takeQueue(
+    (pid) => `Another NightCrew is already running the queue (pid ${pid}). Use its dashboard, or stop it first.`,
+  );
+  quitOnSignals();
   const port = Number(values.port);
   const webDir = resolve(import.meta.dir, "../../web/dist");
   const app = createApp({ db, cwd, classicRoot, webDir, crew, engine, dataDir: values.data, publish });
@@ -275,16 +326,20 @@ switch (command) {
   }
 
   case "run": {
+    const release = takeQueue(
+      (pid) => `The dashboard is already running the queue (pid ${pid}). Add work there, or stop it first.`,
+    );
     const queued = listTasks(db, ["queued"]);
     if (!queued.length) {
       console.log("  The queue is empty.");
+      release();
       break;
     }
     const st = getSettings(db);
     console.log(
       `  ${queued.length} task${queued.length === 1 ? "" : "s"} queued · up to ${st.maxAgents} agents at once (${engine.name}). Ctrl-C stops them.\n`,
     );
-    process.on("SIGINT", () => crew.stopAll());
+    quitOnSignals();
     const titles = new Map<string, string>();
     crew.subscribe((e) => {
       if (e.type === "status") for (const a of e.status.active) if (a.runId) titles.set(a.runId, a.title);
@@ -314,6 +369,7 @@ switch (command) {
       }
     });
     await crew.drain();
+    release();
     const end = crew.getStatus();
     console.log(`\n  ${end.message ?? "All agents are done."} Tokens today: ${formatTokens(end.tokensToday)}.`);
     break;

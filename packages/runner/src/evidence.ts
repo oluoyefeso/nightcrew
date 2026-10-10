@@ -84,7 +84,7 @@ export async function gatherEvidence(o: EvidenceOptions): Promise<Evidence> {
     base = await baseWorktree(o.repo.path, o.repo.defaultBranch, `${o.task.id}`);
     if (o.repo.setupCommand) {
       o.log(`Installing dependencies on ${o.repo.defaultBranch} for comparison`);
-      await run(["sh", "-c", o.repo.setupCommand], base.dir, { timeoutMs: 10 * 60_000 });
+      await run(["sh", "-c", o.repo.setupCommand], base.dir, { timeoutMs: 10 * 60_000, signal: o.signal });
     }
     if (needsProof) ev.testProof = await failThenPass(o, base.dir);
     if (needsShots) await screenshots(o, base.dir, ev);
@@ -131,7 +131,7 @@ async function failThenPass(o: EvidenceOptions, baseDir: string): Promise<Eviden
     mkdirSync(dirname(dest), { recursive: true });
     copyFileSync(join(o.worktree, f), dest);
   }
-  const r = await run(["sh", "-c", cmd], baseDir, { timeoutMs: 15 * 60_000 });
+  const r = await run(["sh", "-c", cmd], baseDir, { timeoutMs: 15 * 60_000, signal: o.signal });
   const out = `${r.stdout}\n${r.stderr}`.trim();
   return {
     testFiles,
@@ -173,7 +173,11 @@ async function startPreview(repo: Repo, dir: string, signal: AbortSignal): Promi
     stdout: "ignore",
     stderr: "ignore",
   });
+  // A stop kills the app at once, not after the remaining screenshots.
+  const kill = () => proc.kill();
+  signal.addEventListener("abort", kill, { once: true });
   const stop = async () => {
+    signal.removeEventListener("abort", kill);
     proc.kill();
     await Promise.race([proc.exited, Bun.sleep(3000)]);
   };

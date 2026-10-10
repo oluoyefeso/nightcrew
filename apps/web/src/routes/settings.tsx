@@ -226,6 +226,7 @@ function RepoCard({ repo }: { repo: Repo }) {
           />
         </Field>
       </div>
+      {update.error && <p className="text-[12.5px] text-bad">{update.error.message}</p>}
       {(repo.level === "ship" || repo.level === "train") && (
         <div className="grid gap-4 rounded-xl bg-raised/50 p-4">
           <div className="grid gap-4 sm:grid-cols-2">

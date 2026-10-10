@@ -248,12 +248,60 @@ describe("ManagedEngine", () => {
       configs: [
         { name: "write", enabled: false },
         { name: "edit", enabled: false },
+        { name: "bash", permission_policy: { type: "always_ask" } },
       ],
     });
+    // Every tool that writes or runs a command asks, so the guard decides it.
     expect(write?.tools?.[0]).toEqual({
       type: "agent_toolset_20260401",
       default_config: { enabled: true, permission_policy: { type: "auto" } },
+      configs: [
+        { name: "bash", permission_policy: { type: "always_ask" } },
+        { name: "write", permission_policy: { type: "always_ask" } },
+        { name: "edit", permission_policy: { type: "always_ask" } },
+      ],
     });
+  });
+
+  test("the guard denies a blocked shell command the cloud holds for confirmation", async () => {
+    let calls = 0;
+    const fake = new FakeClient(async function* () {
+      if (calls++) return;
+      const push = toolUse("bash", { command: "git push origin main" }, "ask");
+      const test = toolUse("bash", { command: "bun test" }, "ask");
+      yield push;
+      yield test;
+      yield idle("requires_action", { event_ids: [push.id, test.id] });
+      yield idle("end_turn");
+    });
+    const events: EngineEvent[] = [];
+    await engineFor(fake).runPhase(request(), (e) => events.push(e));
+    const confirmations = fake.sent().filter((e) => e.type === "user.tool_confirmation");
+    expect(confirmations).toEqual([
+      {
+        type: "user.tool_confirmation",
+        tool_use_id: expect.any(String),
+        result: "deny",
+        deny_message: "NightCrew pushes the branch itself after checks pass.",
+      },
+      { type: "user.tool_confirmation", tool_use_id: expect.any(String), result: "allow" },
+    ]);
+    expect(events.find((e) => e.kind === "denied")?.text).toBe(
+      "Blocked $ git push origin main: NightCrew pushes the branch itself after checks pass.",
+    );
+  });
+
+  test("an already stopped phase does nothing", async () => {
+    const stop = new AbortController();
+    stop.abort();
+    const fake = new FakeClient(script(idle("end_turn")));
+    const r = await engineFor(fake).runPhase(request({ signal: stop.signal }), () => {});
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe("Stopped: the task ran out of time or was cancelled.");
+    expect(r.tokensIn).toBe(0);
+    expect(fake.calls).toHaveLength(0);
+    // Nothing was pushed for a session that never started.
+    expect((await git(bare, "rev-parse", "--verify", "--quiet", `refs/heads/${BRANCH}`)).ok).toBe(false);
   });
 
   test("parses the structured answer from fenced JSON in the final text", async () => {

@@ -9,7 +9,11 @@ import {
 } from "react";
 
 const control =
-  "w-full rounded-xl bg-bg px-3 py-2 text-[13.5px] text-fg outline-none ring-1 ring-line transition-shadow placeholder:text-faint focus:ring-[color-mix(in_srgb,var(--dawn)_60%,transparent)]";
+  "w-full rounded-xl bg-bg px-3 py-2 text-[13.5px] text-fg outline-none ring-1 ring-line transition-shadow placeholder:text-faint focus-within:ring-[color-mix(in_srgb,var(--dawn)_60%,transparent)]";
+
+/** The quieter ring for in-place editors (list rows, inline titles). */
+const inlineRing = "focus-within:ring-1 focus-within:ring-[color-mix(in_srgb,var(--dawn)_45%,transparent)]";
+const listRow = "group flex items-start gap-2.5 rounded-lg px-1 py-1 hover:bg-raised/60";
 
 export function Field({
   label,
@@ -137,7 +141,7 @@ export function ListEditor({
       {value.map((v, i) => (
         // Position keys: keying on the text would remount the input on every keystroke.
         // biome-ignore lint/suspicious/noArrayIndexKey: items are edited in place, never reordered
-        <div key={i} className="group flex items-start gap-2.5 rounded-lg px-1 py-1 hover:bg-raised/60">
+        <div key={i} className={clsx(listRow, inlineRing)}>
           <span className="mt-[7px] size-1.5 shrink-0 rounded-full bg-dawn" />
           <input
             value={v}
@@ -156,7 +160,7 @@ export function ListEditor({
           </button>
         </div>
       ))}
-      <div className="flex items-center gap-2.5 px-1">
+      <div className={clsx("flex items-center gap-2.5 rounded-lg px-1", inlineRing)}>
         <Plus className="size-3.5 shrink-0 text-faint" />
         <input
           value={draft}

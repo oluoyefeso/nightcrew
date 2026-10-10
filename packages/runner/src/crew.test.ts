@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addRepo, createTask, type Db, getTask, openDb, updateSettings } from "@nightcrew/db";
-import { Crew } from "./crew";
+import { Crew, takeCrewLock } from "./crew";
 import { ScriptedEngine } from "./engine";
 import { git } from "./git";
 import type { ReviewOutput } from "./prompts";
@@ -47,6 +47,48 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 const crewWith = (engine: ScriptedEngine) => new Crew({ db, engine, dataDir: join(dir, "data"), publish: false });
 
 describe("dispatcher", () => {
+  test("a task left running by a crash goes back to the queue when the crew recovers", async () => {
+    // Value: protects=recover() requeues tasks orphaned in "running" so a crash never strands work; fails_when=the recovery loop is dropped or touches other statuses; why_new=crash recovery untested; seam=none
+    updateSettings(db, { dispatch: false });
+    const r = await repo("a");
+    const orphan = createTask(db, { repoId: r.id, title: "Orphan", scope: ["src/**"], status: "running" });
+    const finished = createTask(db, { repoId: r.id, title: "Finished", scope: ["src/**"], status: "done" });
+    const parked = createTask(db, { repoId: r.id, title: "Parked", scope: ["src/**"], status: "later" });
+    const crew = crewWith(new ScriptedEngine({}));
+    expect(crew.recover()).toBe(1);
+    expect(getTask(db, orphan.id)?.status).toBe("queued");
+    expect(getTask(db, finished.id)?.status).toBe("done");
+    expect(getTask(db, parked.id)?.status).toBe("later");
+    expect(crew.getStatus().queued).toBe(1);
+  });
+
+  test("constructing a crew alone leaves running tasks alone", async () => {
+    // Value: protects=a CLI command (add, repo, import) never requeues tasks a live dashboard is running; fails_when=recovery moves back into the constructor and every process steals running work; why_new=R4 split recovery out of the constructor; seam=none
+    const r = await repo("a");
+    const live = createTask(db, { repoId: r.id, title: "Live", scope: ["src/**"], status: "running" });
+    crewWith(new ScriptedEngine({}));
+    expect(getTask(db, live.id)?.status).toBe("running");
+  });
+
+  test("only one process holds the crew lock; a dead owner's lock is taken over", async () => {
+    // Value: protects=the dashboard and `nightcrew run` never dispatch the same queue at once, and a crash never wedges the lock; fails_when=the lock is not exclusive, a stale pid blocks forever, or release removes someone else's lock; why_new=R4 cross-process lock is new; seam=none
+    const data = join(dir, "lockdata");
+    mkdirSync(data, { recursive: true });
+    const lockFile = join(data, "crew.lock");
+    // Held by another live process (this test's parent stands in for the dashboard).
+    writeFileSync(lockFile, JSON.stringify({ pid: process.ppid, startedAt: "x" }));
+    expect(takeCrewLock(data)).toEqual({ ok: false, pid: process.ppid });
+    // Its owner is gone: stale, so it's ours.
+    const dead = Bun.spawn(["true"]);
+    await dead.exited;
+    writeFileSync(lockFile, JSON.stringify({ pid: dead.pid, startedAt: "x" }));
+    const mine = takeCrewLock(data);
+    expect(mine.ok).toBe(true);
+    expect(JSON.parse(readFileSync(lockFile, "utf8")).pid).toBe(process.pid);
+    if (mine.ok) mine.release();
+    expect(existsSync(lockFile)).toBe(false);
+  });
+
   test("runs agents in parallel across repos, one per repo by default", async () => {
     const a = await repo("a");
     const b = await repo("b");
@@ -157,5 +199,90 @@ describe("dispatcher", () => {
     await crew.drain();
     expect(getTask(db, stopMe.id)?.status).toBe("done");
     expect(getTask(db, keep.id)?.status).toBe("done");
+  });
+
+  test("a rate-limited agent puts its task back and pauses dispatch", async () => {
+    // Value: protects=429 requeues the task and holds new dispatch during backoff; fails_when=the 429 check or pausedUntil gate breaks and agents hammer the API; why_new=backoff path untested; seam=none
+    updateSettings(db, { maxAgents: 1 });
+    const a = await repo("a");
+    const b = await repo("b");
+    const limited = createTask(db, { repoId: a.id, title: "Limited", scope: ["src/**"], status: "queued" });
+    const waiting = createTask(db, { repoId: b.id, title: "Waiting", scope: ["src/**"], status: "queued" });
+    const started: string[] = [];
+    const engine = new ScriptedEngine({
+      implement: (req) => {
+        started.push(req.prompt.match(/## Task\n(.+)/)?.[1] ?? "?");
+        return { ok: false, error: "Rate limited by the API (429).", rateLimited: true };
+      },
+    });
+    const crew = crewWith(engine);
+    await crew.drain();
+    expect(started).toEqual(["Limited"]);
+    expect(getTask(db, limited.id)?.status).toBe("queued");
+    expect(getTask(db, waiting.id)?.status).toBe("queued");
+    const status = crew.getStatus();
+    expect(status.state).toBe("waiting");
+    expect(status.message).toContain("Rate limited");
+    crew.stopSchedule();
+  });
+
+  test("a flaky failure gets exactly one more try that day", async () => {
+    // Value: protects=flaky failures retry once per task per day, never loop; fails_when=retriedToday is dropped (infinite retries) or flaky never requeues; why_new=retry path untested; seam=none
+    const r = await repo("a");
+    const t = createTask(db, { repoId: r.id, title: "Flaky", scope: ["src/**"], status: "queued" });
+    let attempts = 0;
+    const engine = new ScriptedEngine({
+      implement: () => {
+        attempts++;
+        return { ok: false, error: "connect ETIMEDOUT 140.82.112.3:443" };
+      },
+    });
+    await crewWith(engine).drain();
+    expect(attempts).toBe(2);
+    expect(getTask(db, t.id)?.status).toBe("done");
+  });
+
+  test("a failure that merely mentions 429 doesn't pause dispatch", async () => {
+    // Value: protects=only an engine-reported rate limit pauses the crew; fails_when=Crew.finished goes back to matching "429" in the reason, so a test failure like "expected 429" halts every agent for minutes; why_new=R2 replaced text matching with a structured flag; seam=none
+    updateSettings(db, { maxAgents: 1 });
+    const a = await repo("a");
+    const b = await repo("b");
+    createTask(db, { repoId: a.id, title: "First", scope: ["src/**"], status: "queued" });
+    createTask(db, { repoId: b.id, title: "Second", scope: ["src/**"], status: "queued" });
+    const started: string[] = [];
+    const engine = new ScriptedEngine({
+      implement: (req) => {
+        started.push(req.prompt.match(/## Task\n(.+)/)?.[1] ?? "?");
+        return { ok: false, error: "Expected status 429 but got 200." };
+      },
+    });
+    const crew = crewWith(engine);
+    await crew.drain();
+    expect(started).toEqual(["First", "Second"]);
+    expect(crew.getStatus().state).not.toBe("waiting");
+  });
+
+  test("a test command that fails with a network blip in its output gets one flaky retry", async () => {
+    // Value: protects=flaky classification sees the failing check's output, not just "`cmd` failed (exit 1)"; fails_when=TaskOutcome stops carrying the log or Crew passes the reason as the log; why_new=R3 classifyFailure got the reason twice; seam=none
+    const r = await repo("a");
+    const t = createTask(db, {
+      repoId: r.id,
+      title: "Network",
+      scope: ["src/**"],
+      status: "queued",
+      // The reason quotes the command, so only the output may spell out the blip.
+      testCommand: "printf 'connect ETIME%sOUT 140.82.112.3:443\\n' D; exit 1",
+    });
+    let attempts = 0;
+    const engine = new ScriptedEngine({
+      implement: (req) => {
+        attempts++;
+        writeFileSync(join(req.cwd, "src", "x.ts"), `export const n = ${attempts};\n`);
+        return { text: "done" };
+      },
+    });
+    await crewWith(engine).drain();
+    expect(attempts).toBe(2);
+    expect(getTask(db, t.id)?.status).toBe("done");
   });
 });

@@ -2,7 +2,16 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { nextStart, type Settings, TASK_TYPES, type TaskStatus, type TaskType } from "@nightcrew/core";
+import {
+  AUTONOMY_LABEL,
+  formatTokens,
+  nextStart,
+  type Settings,
+  TASK_TYPES,
+  type TaskStatus,
+  type TaskType,
+  type Workflow,
+} from "@nightcrew/core";
 import {
   addNote,
   addRepo,
@@ -38,6 +47,11 @@ import type { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 
 const STATUSES: TaskStatus[] = ["draft", "queued", "later", "running", "done", "archived"];
+/** A new task waits somewhere; only the crew moves it to running or done. */
+const NEW_STATUSES: TaskStatus[] = ["draft", "queued", "later"];
+const WORKFLOWS: Workflow[] = ["auto", "quick", "planned"];
+const MIN_TASK_TOKENS = 50_000;
+const MAX_TASK_MINUTES = 600;
 
 export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: AgentEngine; dataDir: string }) {
   const { db, crew } = deps;
@@ -71,30 +85,35 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
   });
 
   app.patch("/api/repos/:id", async (c) => {
-    const patch = await body<Parameters<typeof updateRepo>[2]>(c);
     const current = getRepo(db, c.req.param("id"));
-    if (patch.shipBranch && current?.protectedBranches.includes(patch.shipBranch)) {
+    if (!current) return c.json({ error: "Repo not found." }, 404);
+    const patch = pick(await body<Parameters<typeof updateRepo>[2]>(c), [
+      "name",
+      "defaultBranch",
+      "protectedBranches",
+      "testCommand",
+      "level",
+      "setupCommand",
+      "previewCommand",
+      "previewUrl",
+      "previewPaths",
+      "shipBranch",
+      "allowShip",
+      "alwaysAsk",
+    ]);
+    if (Object.keys(patch).length === 0) return c.json(current);
+    if (patch.level !== undefined && !Object.keys(AUTONOMY_LABEL).includes(patch.level))
+      return c.json({ error: "Pick propose, draft_pr, train or ship." }, 400);
+    const next = { ...current, ...patch };
+    const isProtected = (b: string) =>
+      [next.defaultBranch, "main", "master", ...(next.protectedBranches ?? [])].includes(b);
+    if (patch.shipBranch && isProtected(patch.shipBranch)) {
       return c.json({ error: `${patch.shipBranch} is protected. Pick a branch like dev or staging.` }, 400);
     }
-    const repo = updateRepo(
-      db,
-      c.req.param("id"),
-      pick(patch, [
-        "name",
-        "defaultBranch",
-        "protectedBranches",
-        "testCommand",
-        "level",
-        "setupCommand",
-        "previewCommand",
-        "previewUrl",
-        "previewPaths",
-        "shipBranch",
-        "allowShip",
-        "alwaysAsk",
-      ]),
-    );
-    return repo ? c.json(repo) : c.json({ error: "Repo not found." }, 404);
+    if (next.level === "ship" && (!next.shipBranch || isProtected(next.shipBranch) || !next.allowShip?.length)) {
+      return c.json({ error: "Set a ship branch and the paths allowed to ship before choosing Ship to dev." }, 400);
+    }
+    return c.json(updateRepo(db, current.id, patch));
   });
 
   app.delete("/api/repos/:id", (c) => {
@@ -119,7 +138,7 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
 
   app.post("/api/tasks", async (c) => {
     const input = await body<NewTask>(c);
-    const err = validateTask(db, input);
+    const err = validateTask(db, input) ?? validateLimits(db, input);
     if (err) return c.json({ error: err }, 400);
     const created = createTask(db, { ...(input as NewTask), source: input.source ?? "manual" });
     void crew.pump();
@@ -135,8 +154,10 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
       when: "now" | "schedule" | "later";
     }>(c);
     if (!Array.isArray(tasks) || tasks.length === 0) return c.json({ error: "No tasks to save." }, 400);
+    if (status !== undefined && !NEW_STATUSES.includes(status))
+      return c.json({ error: "New tasks start as draft, queued or later." }, 400);
     for (const t of tasks) {
-      const err = validateTask(db, t);
+      const err = validateTask(db, t) ?? validateLimits(db, t);
       if (err) return c.json({ error: err }, 400);
     }
     const created: string[] = [];
@@ -180,9 +201,18 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
       "testCommand",
       "question",
       "repoId",
+      "runAt",
+      "workflow",
     ]);
     if (clean.type && !TASK_TYPES.includes(clean.type as TaskType)) return c.json({ error: "Unknown task type." }, 400);
     if (clean.status && !STATUSES.includes(clean.status)) return c.json({ error: "Unknown status." }, 400);
+    if ((clean.status === "running" || clean.status === "done") && clean.status !== current.status)
+      return c.json({ error: "Only the crew marks a task running or done. Queue it instead." }, 400);
+    if (clean.title !== undefined && !clean.title?.trim()) return c.json({ error: "Every task needs a title." }, 400);
+    if (clean.repoId !== undefined && !getRepo(db, clean.repoId))
+      return c.json({ error: "Pick a repo for the task." }, 400);
+    const err = validateLimits(db, clean);
+    if (err) return c.json({ error: err }, 400);
     const updated = updateTask(db, id, clean);
     void crew.pump();
     return c.json(updated);
@@ -204,6 +234,7 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
 
   app.post("/api/tasks/:id/notes", async (c) => {
     const { text } = await body<{ text: string }>(c);
+    if (!getTask(db, c.req.param("id"))) return c.json({ error: "Task not found." }, 404);
     if (!text?.trim()) return c.json({ error: "Write a note first." }, 400);
     addNote(db, c.req.param("id"), "you", text.trim());
     return c.json(listNotes(db, c.req.param("id")));
@@ -297,6 +328,20 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
       return c.json({ error: "Agents per repo must be between 1 and 6." }, 400);
     if (patch.slackWebhookUrl && !/^https:\/\/hooks\.slack\.com\//.test(patch.slackWebhookUrl))
       return c.json({ error: "Paste a Slack incoming webhook URL (https://hooks.slack.com/…)." }, 400);
+    if (
+      patch.dailyTokenBudget !== undefined &&
+      !(Number.isInteger(patch.dailyTokenBudget) && patch.dailyTokenBudget >= 100_000)
+    )
+      return c.json({ error: "The daily token budget must be a whole number of at least 100k." }, 400);
+    if (patch.dispatch !== undefined && typeof patch.dispatch !== "boolean")
+      return c.json({ error: "Dispatch is on or off (true or false)." }, 400);
+    for (const k of ["planModel", "buildModel", "reviewModel"] as const) {
+      const raw: unknown = patch[k];
+      if (raw === undefined) continue;
+      const model = typeof raw === "string" ? raw.trim() : "";
+      if (!model) return c.json({ error: "Name a model, like claude-sonnet-5-5." }, 400);
+      patch[k] = model;
+    }
     const next = updateSettings(db, patch);
     void crew.pump();
     return c.json(next);
@@ -307,6 +352,28 @@ function validateTask(db: Db, t: Partial<NewTask>): string | null {
   if (!t.title?.trim()) return "Every task needs a title.";
   if (!t.repoId || !getRepo(db, t.repoId)) return "Pick a repo for the task.";
   if (t.type && !TASK_TYPES.includes(t.type)) return "Unknown task type.";
+  if (t.status !== undefined && !NEW_STATUSES.includes(t.status)) return "New tasks start as draft, queued or later.";
+  return null;
+}
+
+/** Budgets, time limits and timing, for new tasks and edits alike. */
+function validateLimits(
+  db: Db,
+  t: Pick<Partial<NewTask>, "tokenBudget" | "maxMinutes" | "runAt" | "workflow">,
+): string | null {
+  if (t.tokenBudget !== undefined) {
+    const daily = getSettings(db).dailyTokenBudget;
+    if (!(Number.isInteger(t.tokenBudget) && t.tokenBudget >= MIN_TASK_TOKENS && t.tokenBudget <= daily))
+      return `A task's token budget must be between ${formatTokens(MIN_TASK_TOKENS)} and ${formatTokens(daily)} tokens (the daily budget).`;
+  }
+  if (
+    t.maxMinutes !== undefined &&
+    !(Number.isInteger(t.maxMinutes) && t.maxMinutes >= 1 && t.maxMinutes <= MAX_TASK_MINUTES)
+  )
+    return `A task's time limit must be between 1 and ${MAX_TASK_MINUTES} minutes.`;
+  if (t.runAt !== undefined && t.runAt !== null && (typeof t.runAt !== "string" || Number.isNaN(Date.parse(t.runAt))))
+    return "Give the start time as an ISO date, or null to run as soon as an agent is free.";
+  if (t.workflow !== undefined && !WORKFLOWS.includes(t.workflow)) return "Workflow must be auto, quick or planned.";
   return null;
 }
 

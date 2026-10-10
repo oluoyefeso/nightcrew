@@ -48,7 +48,7 @@ export function Horizon({
             style={{ left: `${nowPct}%` }}
             aria-hidden="true"
           >
-            <span className="absolute -top-3 left-1/2 -translate-x-1/2 font-mono text-[9.5px] text-faint uppercase tracking-[0.08em]">
+            <span className="absolute -top-3 left-1/2 -translate-x-1/2 font-mono text-[11px] text-muted uppercase leading-none tracking-[0.08em]">
               now
             </span>
           </span>
@@ -91,7 +91,7 @@ export function Horizon({
           );
         })}
       </div>
-      <div className="relative mt-1.5 h-4 font-mono text-[10.5px] text-faint tabular">
+      <div className="relative mt-1.5 h-4 font-mono text-[11px] text-muted leading-4 tabular">
         {labels.map((l, i) => (
           <span
             key={l.pct}

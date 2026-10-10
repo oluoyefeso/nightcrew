@@ -34,6 +34,8 @@ import {
   type EngineEvent,
   type PhaseRequest,
   type PhaseResult,
+  STOPPED,
+  stoppedResult,
 } from "./engine";
 import { git, run } from "./git";
 import { withRepoInstructions } from "./sdk-engine";
@@ -116,6 +118,8 @@ export class ManagedEngine implements AgentEngine {
       error: null,
       rateLimited: false,
     };
+    // Stopped before it started: don't push or open a session.
+    if (req.signal.aborted) return stoppedResult();
     const model = req.model || this.opts.model || "";
     const kind: PhaseKind =
       req.outputSchema && req.phase === "compose" ? "no-tools" : req.guard.readOnly ? "read-only" : "write";
@@ -296,7 +300,7 @@ export class ManagedEngine implements AgentEngine {
       const message = e instanceof Error ? e.message : String(e);
       const status = typeof e === "object" && e && "status" in e ? (e as { status: unknown }).status : null;
       result.ok = false;
-      if (req.signal.aborted) result.error = "Stopped: the task ran out of time or was cancelled.";
+      if (req.signal.aborted) result.error = STOPPED;
       else if (status === 429 || /rate.?limit|429/i.test(message)) {
         result.error = "Rate limited by the API (429).";
         result.rateLimited = true;
@@ -390,8 +394,9 @@ export class ManagedEngine implements AgentEngine {
   }
 
   /**
-   * Answer tool calls the cloud's auto policy couldn't decide on, with the same
-   * guard the local engine uses. Nobody is around to answer them otherwise.
+   * Answer the tool calls the cloud holds for confirmation (every write and
+   * shell call, plus any the auto policy couldn't judge) with the same guard
+   * the local engine uses. Nobody is around to answer them otherwise.
    */
   private async confirm(
     sessionId: string,
@@ -421,6 +426,9 @@ export class ManagedEngine implements AgentEngine {
   }
 }
 
+/** Toolset tools that change files or run commands. Each call is put to the guard. */
+const GUARDED_TOOLS = ["bash", "write", "edit"] as const;
+
 function toolset(kind: PhaseKind, disabled: string[]): BetaManagedAgentsAgentToolset20260401Params {
   if (kind === "no-tools") return { type: "agent_toolset_20260401", default_config: { enabled: false } };
   const off = new Set(disabled.map((t) => TOOLSET_NAME[t]));
@@ -428,17 +436,21 @@ function toolset(kind: PhaseKind, disabled: string[]): BetaManagedAgentsAgentToo
     off.add("write");
     off.add("edit");
   }
-  const configs: BetaManagedAgentsAgentToolConfigParams[] = [...off]
-    .filter((name) => name !== undefined)
-    .map((name) => ({ name, enabled: false }) as BetaManagedAgentsAgentToolConfigParams);
+  const configs: BetaManagedAgentsAgentToolConfigParams[] = [
+    ...[...off]
+      .filter((name) => name !== undefined)
+      .map((name) => ({ name, enabled: false }) as BetaManagedAgentsAgentToolConfigParams),
+    // Permission policy: `always_ask` for every tool that writes or runs a
+    // command, so `confirm` puts each call to the same guard the local engine
+    // uses. The server's `auto` policy would allow most of them unchecked.
+    // Read-only tools stay on `auto`. Each guarded call costs a confirmation
+    // round trip, and a session left waiting (this process gone) spends nothing.
+    ...GUARDED_TOOLS.filter((name) => !off.has(name)).map(
+      (name) => ({ name, permission_policy: { type: "always_ask" } }) as BetaManagedAgentsAgentToolConfigParams,
+    ),
+  ];
   return {
     type: "agent_toolset_20260401",
-    // Permission policy: `auto`. The run is unattended, so `always_ask` would
-    // stall every tool call on a confirmation round trip (and forever if this
-    // process goes away), while `always_allow` runs anything the model types.
-    // `auto` has the server allow routine calls, deny high-risk ones on its
-    // own, and pause only on calls it can't judge, which `confirm` answers with
-    // the same guard the local engine applies. Nothing ever waits on a person.
     default_config: { enabled: true, permission_policy: { type: "auto" } },
     ...(configs.length ? { configs } : {}),
   };

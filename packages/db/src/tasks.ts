@@ -91,7 +91,9 @@ export function updateRepo(
     >
   >,
 ): Repo | null {
-  db.update(schema.repos).set(patch).where(eq(schema.repos.id, id)).run();
+  // Drizzle refuses an update with nothing to set.
+  if (Object.values(patch).some((v) => v !== undefined))
+    db.update(schema.repos).set(patch).where(eq(schema.repos.id, id)).run();
   return getRepo(db, id);
 }
 
@@ -325,9 +327,7 @@ export function listRunEvents(db: Db, runId: string, afterId = 0): RunEvent[] {
 export function getSettings(db: Db): Settings {
   const rows = db.select().from(schema.settings).all();
   const stored = Object.fromEntries(rows.map((r) => [r.key, r.value])) as Record<string, unknown>;
-  // Settings from the night-only days carry over.
-  if (stored.dailyBudgetCents === undefined && typeof stored.nightlyBudgetCents === "number")
-    stored.dailyBudgetCents = stored.nightlyBudgetCents;
+  // The night-era start time carries over as the schedule time.
   if (stored.scheduleAt === undefined && typeof stored.startAt === "string") stored.scheduleAt = stored.startAt;
   const known = Object.fromEntries(Object.entries(stored).filter(([k]) => k in DEFAULT_SETTINGS));
   return { ...DEFAULT_SETTINGS, ...known } as Settings;

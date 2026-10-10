@@ -80,6 +80,7 @@ A small task uses about **100k tokens** end to end (build, check, review, commit
 - [Configuration](docs/configuration.md): repos, budgets, models, preview commands, Jev
 - [Evidence](docs/evidence.md)
 - [Trust ladder](docs/trust-ladder.md)
+- [Security](docs/security.md): the guard, the OS sandbox, the push block and the local API
 - [Managed mode](docs/managed.md) (experimental): run the crew on Claude Managed Agents
 - [Design system](DESIGN.md)
 

@@ -9,11 +9,15 @@ export interface Exec {
   stderr: string;
 }
 
+/** How long a stopped command gets to exit after SIGTERM before SIGKILL. */
+const KILL_GRACE_MS = 2000;
+
 export async function run(
   cmd: string[],
   cwd: string,
-  opts: { timeoutMs?: number; env?: Record<string, string> } = {},
+  opts: { timeoutMs?: number; env?: Record<string, string>; signal?: AbortSignal } = {},
 ): Promise<Exec> {
+  if (opts.signal?.aborted) return { ok: false, code: -1, stdout: "", stderr: "Stopped." };
   try {
     const proc = Bun.spawn(cmd, {
       cwd,
@@ -22,12 +26,24 @@ export async function run(
       env: { ...process.env, ...opts.env, GIT_TERMINAL_PROMPT: "0" },
     });
     const timer = opts.timeoutMs ? setTimeout(() => proc.kill(), opts.timeoutMs) : undefined;
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
+    let stopped = false;
+    let forceKill: ReturnType<typeof setTimeout> | undefined;
+    const onAbort = () => {
+      stopped = true;
+      proc.kill("SIGTERM");
+      forceKill = setTimeout(() => proc.kill("SIGKILL"), KILL_GRACE_MS);
+    };
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
+    const output = Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+    const code = await proc.exited;
     clearTimeout(timer);
+    clearTimeout(forceKill);
+    opts.signal?.removeEventListener("abort", onAbort);
+    // A stopped command's children can hold its pipes open; don't wait on them.
+    const [stdout, stderr] = stopped
+      ? await Promise.race([output, Bun.sleep(1000).then(() => ["", ""] as const)])
+      : await output;
+    if (stopped) return { ok: false, code: code ?? -1, stdout, stderr: `${stderr}\nStopped.`.trim() };
     return { ok: code === 0, code, stdout, stderr };
   } catch (e) {
     return { ok: false, code: -1, stdout: "", stderr: e instanceof Error ? e.message : String(e) };

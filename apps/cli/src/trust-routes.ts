@@ -8,6 +8,7 @@ import {
   type Db,
   deleteRoutine,
   getRepo,
+  getRoutine,
   getRun,
   getTrain,
   listRepos,
@@ -15,10 +16,10 @@ import {
   listTasks,
   listTrains,
   markUndone,
+  setCarState,
   trackRecord,
   updateRepo,
   updateRoutine,
-  updateTrain,
 } from "@nightcrew/db";
 import { pullCar, undoShip } from "@nightcrew/runner";
 import type { Hono } from "hono";
@@ -41,7 +42,10 @@ export function mountTrustRoutes(app: Hono, deps: { db: Db; publish: boolean }) 
     const repo = getRepo(db, c.req.param("id"));
     if (!repo) return c.json({ error: "Repo not found." }, 404);
     if (level !== "train" && level !== "ship") return c.json({ error: "Promote to train or ship." }, 400);
-    if (level === "ship" && (!repo.shipBranch || !repo.allowShip.length)) {
+    if (
+      level === "ship" &&
+      (!repo.shipBranch || repo.protectedBranches.includes(repo.shipBranch) || !repo.allowShip.length)
+    ) {
       return c.json({ error: "Set a ship branch and the paths allowed to ship in Settings first." }, 400);
     }
     return c.json(updateRepo(db, repo.id, { level }));
@@ -73,11 +77,9 @@ export function mountTrustRoutes(app: Hono, deps: { db: Db; publish: boolean }) 
     if (!train || !car || !repo || car.state !== "on") return c.json({ error: "It's already off the train." }, 400);
     const r = await pullCar(repo, train, car.mergeSha, deps.publish);
     if (!r.ok) return c.json({ error: r.error }, 409);
-    return c.json(
-      updateTrain(db, train.id, {
-        cars: train.cars.map((x) => (x.runId === run.id ? { ...x, state: "pulled" as const } : x)),
-      }),
-    );
+    // pullCar can wait minutes behind the repo lock while other cars board, so
+    // change this one car on a fresh read instead of writing back the snapshot.
+    return c.json(setCarState(db, train.id, run.id, "pulled"));
   });
 
   // ── Routines ──
@@ -99,8 +101,26 @@ export function mountTrustRoutes(app: Hono, deps: { db: Db; publish: boolean }) 
     return c.json(createRoutine(db, { ...r, title: r.title, repoId: r.repoId, days: r.days }), 201);
   });
   app.patch("/api/routines/:id", async (c) => {
-    const r = await body<Parameters<typeof updateRoutine>[2]>(c);
-    return c.json(updateRoutine(db, c.req.param("id"), r));
+    const id = c.req.param("id");
+    if (!getRoutine(db, id)) return c.json({ error: "Routine not found." }, 404);
+    const raw = await body<NonNullable<Parameters<typeof updateRoutine>[2]>>(c);
+    const r = Object.fromEntries(
+      (["title", "brief", "type", "days", "enabled", "scope", "criteria"] as const).flatMap((k) =>
+        raw[k] === undefined ? [] : [[k, raw[k]]],
+      ),
+    ) as typeof raw;
+    if (Object.keys(r).length === 0) return c.json({ error: "Nothing to change." }, 400);
+    if (r.title !== undefined && !(typeof r.title === "string" && r.title.trim()))
+      return c.json({ error: "Give the routine a title." }, 400);
+    if (r.type !== undefined && !TASK_TYPES.includes(r.type)) return c.json({ error: "Unknown task type." }, 400);
+    if (
+      r.days !== undefined &&
+      !(Array.isArray(r.days) && r.days.length && r.days.every((d) => Number.isInteger(d) && d >= 0 && d <= 6))
+    )
+      return c.json({ error: "Pick at least one day." }, 400);
+    if (r.enabled !== undefined && typeof r.enabled !== "boolean")
+      return c.json({ error: "Turn the routine on or off (true or false)." }, 400);
+    return c.json(updateRoutine(db, id, r));
   });
   app.delete("/api/routines/:id", (c) => {
     deleteRoutine(db, c.req.param("id"));

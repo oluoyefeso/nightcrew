@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { formatTokens, nightIdFor, type Repo, type Task } from "@nightcrew/core";
-import { matchesAny } from "@nightcrew/core/guard";
+import { ALWAYS_PROTECTED, matchesAny } from "@nightcrew/core/guard";
 import {
   addCar,
   addRunEvent,
@@ -70,6 +70,10 @@ export interface TaskOutcome {
   tokens: number;
   prUrl: string | null;
   reason: string | null;
+  /** An engine reported a rate limit and the run didn't finish. */
+  rateLimited: boolean;
+  /** Tail of the failing check's output, or the last error, for telling flaky from real. */
+  log?: string;
 }
 
 const PHASE_NAME: Record<string, string> = {
@@ -80,8 +84,6 @@ const PHASE_NAME: Record<string, string> = {
   review: "Review",
   research: "Research",
 };
-
-const ALWAYS_PROTECTED = [".github/workflows/**", ".env", ".env.*", "**/.env", "**/.env.*"];
 
 export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortSignal): Promise<TaskOutcome> {
   const { db } = deps;
@@ -110,6 +112,8 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     confidence: null as number | null,
     worktree: null as string | null,
     stat: null as { additions: number; deletions: number; files: number } | null,
+    rateLimited: false,
+    log: null as string | null,
   };
   const artifacts = new Map<string, { kind: string; name: string; content: string }>();
   /** Files the dependency install wrote, with their hashes: NightCrew's, not the agent's. */
@@ -165,6 +169,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
   };
   const onEngine = (e: EngineEvent) => emit(e.kind, e.text, "tool" in e ? { tool: e.tool } : null);
   const account = (r: PhaseResult) => {
+    if (r.rateLimited) state.rateLimited = true;
     state.costUsd += r.costUsd;
     state.tokensIn += r.tokensIn;
     state.tokensOut += r.tokensOut;
@@ -188,10 +193,11 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
   save();
   emit("info", `Started ${task.title} in ${repo.name}`);
 
-  // The task's own time limit, on top of whatever stopped the whole night.
+  // The task's own time limit, on top of a stop from you or the crew.
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(), task.maxMinutes * 60_000);
   const stop = AbortSignal.any([signal, timeout.signal]);
+  const stoppedReason = (when: string) => `${timeout.signal.aborted ? "Ran out of time" : "Stopped"} ${when}.`;
 
   const finish = async (status: "complete" | "failed" | "timeout", reason: string | null): Promise<TaskOutcome> => {
     clearTimeout(timer);
@@ -213,8 +219,19 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     save();
     updateTask(db, task.id, { status: "done" });
     emit(status === "complete" ? "result" : "error", reason ?? state.summary ?? "Done.");
-    return { runId, status, costCents: Math.round(state.costUsd * 100), tokens: used(), prUrl: state.prUrl, reason };
+    return {
+      runId,
+      status,
+      costCents: Math.round(state.costUsd * 100),
+      tokens: used(),
+      prUrl: state.prUrl,
+      reason,
+      rateLimited: status !== "complete" && state.rateLimited,
+      log: status === "complete" ? undefined : (state.log ?? reason ?? "").slice(-4000),
+    };
   };
+  /** Stopped or out of time: keep the work, run nothing more. */
+  const halt = (when: string) => finish("timeout", stoppedReason(when));
 
   try {
     phase("setup", "Preparing the worktree");
@@ -228,12 +245,13 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     ) {
       emit("info", `Installing dependencies: ${repo.setupCommand}`);
       const before = new Set(await changedFiles(worktree, repo.defaultBranch));
-      const setup = await run(["sh", "-c", repo.setupCommand], worktree, { timeoutMs: 10 * 60_000 });
+      const setup = await run(["sh", "-c", repo.setupCommand], worktree, { timeoutMs: 10 * 60_000, signal: stop });
       if (!setup.ok)
         emit("info", `Dependency install failed (exit ${setup.code}). Continuing; the crew can install what it needs.`);
       const touched = (await changedFiles(worktree, repo.defaultBranch)).filter((f) => !before.has(f));
       setupFiles = await fingerprints(worktree, touched);
     }
+    if (stop.aborted) return await halt("while preparing the worktree");
     const ctx: PromptContext = {
       task,
       repo,
@@ -271,7 +289,8 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         onEngine,
       );
       account(r);
-      if (!r.ok) return await finish(stop.aborted ? "timeout" : "failed", r.error);
+      if (stop.aborted) return await halt("while researching");
+      if (!r.ok) return await finish("failed", r.error);
       state.summary = firstSentence(r.text);
       state.verdict = "ready";
       return await finish("complete", null);
@@ -300,6 +319,8 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         onEngine,
       );
       account(plan);
+      // A plan cut short by a stop is not a plan to build from.
+      if (stop.aborted) return await halt("while planning");
       // Build in the planner's session so what it already read stays in context.
       // Only when planner and builder are the same model; otherwise start fresh.
       session = plan.sessionId && deps.models.plan === (task.model ?? deps.models.build) ? plan.sessionId : undefined;
@@ -312,7 +333,6 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         planError = plan.error;
         emit("info", `Planning didn't finish (${plan.error ?? "no plan"}). Implementing from the brief instead.`);
         session = undefined;
-        if (stop.aborted) return await finish("timeout", "Ran out of time while planning.");
       }
     } else {
       emit("info", "Small, well-specified task: building directly, without a separate planning step.");
@@ -325,6 +345,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     }
 
     // Implement
+    if (stop.aborted) return await halt("before building");
     phase("implement", "Implementing");
     const ip = implementPrompt(ctx);
     const impl = await deps.engine.runPhase(
@@ -342,14 +363,16 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     );
     account(impl);
     session = impl.sessionId ?? session;
-    if (!impl.ok) return await finish(stop.aborted ? "timeout" : "failed", impl.error);
+    if (stop.aborted) return await halt("while building");
+    if (!impl.ok) return await finish("failed", impl.error);
     state.summary = firstSentence(impl.text);
 
     // Validate, with one repair attempt
     phase("validate", "Checking the work");
-    let check = await validate(worktree, task, repo, setupFiles);
+    let check = await validate(worktree, task, repo, setupFiles, stop);
     artifact("tests", "Checks", check.log);
-    if (!check.ok && !stop.aborted) {
+    if (stop.aborted) return await halt("while checking the work");
+    if (!check.ok) {
       emit("info", `Checks failed: ${check.reason}. Trying one repair.`);
       phase("repair", "Repairing");
       const rp = repairPrompt(ctx, check.log);
@@ -367,12 +390,17 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         onEngine,
       );
       account(fix);
+      if (stop.aborted) return await halt("while repairing");
       phase("validate", "Checking the repair");
-      check = await validate(worktree, task, repo, setupFiles);
+      check = await validate(worktree, task, repo, setupFiles, stop);
       artifact("tests", "Checks", check.log);
+      if (stop.aborted) return await halt("while checking the repair");
     }
     if (check.noChanges) return await finish("failed", "The crew finished without changing anything.");
-    if (!check.ok) return await finish(stop.aborted ? "timeout" : "failed", check.reason);
+    if (!check.ok) {
+      state.log = check.log;
+      return await finish("failed", check.reason);
+    }
 
     // Evidence NightCrew gathers itself
     let evidence: Evidence | null = null;
@@ -390,6 +418,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       artifact("evidence", "Evidence", JSON.stringify(evidence));
       ctx.evidence = summarizeEvidence(evidence);
       for (const m of evidence.missing) emit("info", `Missing evidence: ${m}`);
+      if (stop.aborted) return await halt("while gathering evidence");
     }
 
     // Review: the Skeptic tries to show the work isn't done
@@ -409,10 +438,12 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       onEngine,
     );
     account(review);
-    const verdict = review.ok ? (review.structured as ReviewOutput | null) : null;
+    if (stop.aborted) return await halt("while reviewing");
+    const verdict = review.ok ? normalizeReview(review.structured) : null;
     if (verdict) {
-      // Missing evidence always means a person should look.
-      state.verdict = verdict.verdict === "ready" && !evidence?.missing.length ? "ready" : "needs_eyes";
+      // Missing evidence, or criteria the Skeptic never checked, means a person should look.
+      const unchecked = task.criteria.length > 0 && verdict.criteria.length === 0;
+      state.verdict = verdict.verdict === "ready" && !evidence?.missing.length && !unchecked ? "ready" : "needs_eyes";
       artifact("review", "REVIEW.md", renderReview(verdict));
       if (verdict.summary) state.summary = state.summary ?? verdict.summary;
     } else {
@@ -420,16 +451,22 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       artifact("review", "REVIEW.md", review.text || `The review didn't finish: ${review.error ?? "unknown error"}`);
     }
     // The reviewer may have fixed small things; checks must still pass.
-    const recheck = await validate(worktree, task, repo, setupFiles);
-    if (!recheck.ok) return await finish("failed", `Checks failed after review: ${recheck.reason}`);
+    const recheck = await validate(worktree, task, repo, setupFiles, stop);
+    if (stop.aborted) return await halt("while rechecking after review");
+    if (!recheck.ok) {
+      state.log = recheck.log;
+      return await finish("failed", `Checks failed after review: ${recheck.reason}`);
+    }
     state.confidence = await scoreConfidence(reflexes, {
       task,
       review: verdict,
       evidence: ctx.evidence ?? null,
+      evidenceMissing: evidence?.missing.length ?? 0,
       checksPassed: recheck.ok,
     });
 
     // Publish
+    if (stop.aborted) return await halt("before publishing");
     phase("publish", "Committing");
     await dropSetupFiles(worktree, setupFiles);
     await commitAll(worktree, `${task.title}\n\nNightCrew task ${task.id}, run ${runId}.`);
@@ -465,9 +502,9 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       }
     }
 
-    // Nightly train: board tonight's integration branch; you merge one PR in the morning.
+    // Daily train: board today's integration branch; you merge one PR for the lot.
     if (repo.level === "train" && state.verdict === "ready") {
-      phase("publish", "Boarding tonight's train");
+      phase("publish", "Boarding today's train");
       const nightId = nightIdFor(startedAt);
       const train =
         getOpenTrain(db, repo.id, nightId) ??
@@ -477,7 +514,10 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       if (boarded.ok) {
         addCar(db, train.id, { runId, taskId: task.id, title: task.title, mergeSha: boarded.sha, state: "on" });
         setRunTrain(db, runId, train.id);
-        emit("info", `On tonight's train (${train.branch}). The train's PR opens when the night ends.`);
+        emit(
+          "info",
+          `On today's train (${train.branch}). Its PR opens or refreshes once no other agent is working in this repo.`,
+        );
         return await finish("complete", null);
       }
       addCar(db, train.id, { runId, taskId: task.id, title: task.title, mergeSha: "", state: "broke" });
@@ -489,6 +529,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       if (!hasRemote) {
         emit("info", "No GitHub remote, so the branch stays local.");
       } else {
+        if (stop.aborted) return await halt("before opening the PR");
         phase("publish", "Pushing and opening a draft PR");
         const pushed = await push(worktree, task.branch);
         if (!pushed.ok) return await finish("failed", `Push failed: ${pushed.stderr.trim().split("\n").pop()}`);
@@ -532,6 +573,7 @@ export async function validate(
   task: Task,
   repo: Repo,
   setupFiles: Map<string, string> = new Map(),
+  signal?: AbortSignal,
 ): Promise<CheckResult> {
   const fromSetup = await untouchedSetupFiles(worktree, setupFiles);
   const files = (await changedFiles(worktree, repo.defaultBranch)).filter(
@@ -557,7 +599,7 @@ export async function validate(
 
   const cmd = task.testCommand ?? repo.testCommand;
   if (cmd) {
-    const t = await run(["sh", "-c", cmd], worktree, { timeoutMs: 15 * 60_000 });
+    const t = await run(["sh", "-c", cmd], worktree, { timeoutMs: 15 * 60_000, signal });
     const out = `${t.stdout}\n${t.stderr}`.trim();
     lines.push("", `$ ${cmd}  (exit ${t.code})`, out.length > 8000 ? `…\n${out.slice(-8000)}` : out);
     if (!t.ok)
@@ -572,6 +614,33 @@ export async function validate(
     lines.push("", "No test command configured for this repo.");
   }
   return { ok: true, noChanges: false, reason: null, log: lines.join("\n"), files };
+}
+
+const VERDICTS = new Set(["ready", "needs_eyes", "not_done"]);
+
+/**
+ * The reviewer's answer, shape-checked. Managed mode hands over whatever JSON
+ * object it last saw, so anything malformed is dropped rather than trusted.
+ */
+export function normalizeReview(raw: unknown): ReviewOutput | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.verdict !== "string" || !VERDICTS.has(r.verdict)) return null;
+  const list = (v: unknown) =>
+    (Array.isArray(v) ? v : []).filter((x) => x && typeof x === "object") as Record<string, unknown>[];
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  return {
+    verdict: r.verdict as ReviewOutput["verdict"],
+    summary: str(r.summary),
+    criteria: list(r.criteria)
+      .filter((c) => typeof c.criterion === "string" && typeof c.met === "boolean")
+      .map((c) => ({ criterion: c.criterion as string, met: c.met as boolean, evidence: str(c.evidence) })),
+    concerns: (Array.isArray(r.concerns) ? r.concerns : []).filter((c): c is string => typeof c === "string"),
+    challenges: list(r.challenges)
+      .filter((c) => typeof c.challenge === "string" && typeof c.held === "boolean")
+      .map((c) => ({ challenge: c.challenge as string, held: c.held as boolean, detail: str(c.detail) })),
+    report: str(r.report),
+  };
 }
 
 function renderReview(r: ReviewOutput): string {
@@ -618,7 +687,7 @@ ${
 ${verdict?.concerns.length ? `### Reviewer concerns\n${verdict.concerns.map((c) => `- ${c}`).join("\n")}\n` : ""}
 ${details("Plan", input.plan)}${details("Review", verdict?.report ?? null)}${details("Checks", `\`\`\`\n${input.checks.slice(-4000)}\n\`\`\``)}
 ${task.sourceRef?.match(/\/issues\/(\d+)$/) ? `Closes #${task.sourceRef.match(/\/issues\/(\d+)$/)?.[1]}\n\n` : ""}---
-Made overnight by [NightCrew](https://github.com/oluoyefeso/nightcrew) · run \`${input.runId}\` · ${formatTokens(input.tokens)} tokens`;
+Made by [NightCrew](https://github.com/oluoyefeso/nightcrew) · run \`${input.runId}\` · ${formatTokens(input.tokens)} tokens`;
 }
 
 function firstSentence(text: string): string | null {

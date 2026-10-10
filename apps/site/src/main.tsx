@@ -264,7 +264,7 @@ function ThemeSwitch() {
     setTheme(t);
   };
   return (
-    <div role="radiogroup" aria-label="Theme" className="flex rounded-full bg-surface p-0.5 ring-1 ring-line">
+    <div role="radiogroup" aria-label="Theme" className="flex rounded-full bg-bg p-0.5 ring-1 ring-line">
       {(
         [
           ["light", "Light", Sun],
@@ -312,49 +312,51 @@ function Reveal({ children, className }: { children: React.ReactNode; className?
 function Site() {
   return (
     <div className="min-h-full">
-      <header className="sticky top-0 z-30 bg-[color-mix(in_srgb,var(--bg)_80%,transparent)] backdrop-blur-xl">
-        <nav className="mx-auto flex h-14 max-w-[1120px] items-center gap-6 px-5">
-          <a href="#top" className="flex items-center gap-2.5 font-medium text-[15px] tracking-[-0.02em]">
-            <svg viewBox="0 0 32 32" className="size-[22px]" aria-hidden="true">
-              <clipPath id="m">
-                <circle cx="16" cy="16" r="15" />
-              </clipPath>
-              <g clipPath="url(#m)">
-                <rect width="32" height="32" fill="var(--horizon-from)" />
-                <rect y="17" width="32" height="15" fill="var(--dawn)" />
-              </g>
-            </svg>
-            NightCrew
-          </a>
-          <div className="hidden items-center gap-5 text-[13.5px] text-muted md:flex">
-            <a href="#how" className="hover:text-fg">
-              How it works
-            </a>
-            <a href="#evidence" className="hover:text-fg">
-              Evidence
-            </a>
-            <a href="#trust" className="hover:text-fg">
-              Trust
-            </a>
-            <a href="#tokens" className="hover:text-fg">
-              Tokens
-            </a>
-          </div>
-          <div className="ml-auto flex items-center gap-2">
-            <a href={REPO} className="hidden rounded-full px-3 py-1.5 text-[13.5px] text-muted hover:text-fg sm:inline">
-              GitHub
-            </a>
-            <ThemeSwitch />
-            <a href="#start" className="rounded-full bg-dawn px-4 py-1.5 font-medium text-[13.5px] text-on-dawn">
-              Get started
-            </a>
-          </div>
-        </nav>
-      </header>
-
       <main id="top">
         <section className="nc-hero relative mx-2 mt-2 overflow-hidden rounded-[28px] bg-surface ring-1 ring-line sm:mx-3 sm:mt-3 sm:rounded-[32px]">
-          <div className="mx-auto grid max-w-[1120px] justify-items-center gap-14 px-5 pt-20 pb-16 text-center sm:pt-28">
+          <header className="z-10">
+            <nav className="mx-auto flex h-16 max-w-[1120px] items-center gap-6 px-5 sm:h-[76px] sm:pt-2">
+              <a href="#top" className="flex items-center gap-2.5 font-medium text-[15px] tracking-[-0.02em]">
+                <svg viewBox="0 0 32 32" className="size-[22px]" aria-hidden="true">
+                  <clipPath id="m">
+                    <circle cx="16" cy="16" r="15" />
+                  </clipPath>
+                  <g clipPath="url(#m)">
+                    <rect width="32" height="32" fill="var(--horizon-from)" />
+                    <rect y="17" width="32" height="15" fill="var(--dawn)" />
+                  </g>
+                </svg>
+                NightCrew
+              </a>
+              <div className="hidden items-center gap-5 text-[13.5px] text-muted md:flex">
+                <a href="#how" className="hover:text-fg">
+                  How it works
+                </a>
+                <a href="#evidence" className="hover:text-fg">
+                  Evidence
+                </a>
+                <a href="#trust" className="hover:text-fg">
+                  Trust
+                </a>
+                <a href="#tokens" className="hover:text-fg">
+                  Tokens
+                </a>
+              </div>
+              <div className="ml-auto flex items-center gap-2">
+                <a
+                  href={REPO}
+                  className="hidden rounded-full px-3 py-1.5 text-[13.5px] text-muted hover:text-fg sm:inline"
+                >
+                  GitHub
+                </a>
+                <ThemeSwitch />
+                <a href="#start" className="rounded-full bg-dawn px-4 py-1.5 font-medium text-[13.5px] text-on-dawn">
+                  Get started
+                </a>
+              </div>
+            </nav>
+          </header>
+          <div className="mx-auto grid max-w-[1120px] justify-items-center gap-14 px-5 pt-12 pb-16 text-center sm:pt-20">
             <div className="grid max-w-[860px] justify-items-center gap-6">
               <Eyebrow>Open source · runs on your machine</Eyebrow>
               <h1 className="t-display">

@@ -13,7 +13,7 @@
 }
 html {
   scroll-behavior: smooth;
-  scroll-padding-top: 72px;
+  scroll-padding-top: 24px;
 }
 @keyframes nc-tick-in {
   from {

@@ -25,6 +25,28 @@
         "yaml": "2.9.1",
       },
     },
+    "apps/site": {
+      "name": "@nightcrew/site",
+      "version": "1.0.0-alpha.0",
+      "dependencies": {
+        "@fontsource-variable/geist": "5.3.0",
+        "@fontsource-variable/geist-mono": "5.3.0",
+        "@fontsource/instrument-serif": "5.3.0",
+        "@nightcrew/core": "workspace:*",
+        "clsx": "2.1.1",
+        "lucide-react": "1.55.0",
+        "react": "19.3.0",
+        "react-dom": "19.3.0",
+      },
+      "devDependencies": {
+        "@tailwindcss/vite": "4.3.3",
+        "@types/react": "19.3.0",
+        "@types/react-dom": "19.3.0",
+        "@vitejs/plugin-react": "6.1.2",
+        "tailwindcss": "4.3.3",
+        "vite": "8.3.4",
+      },
+    },
     "apps/web": {
       "name": "@nightcrew/web",
       "version": "1.0.0-alpha.0",
@@ -80,7 +102,7 @@
         "pngjs": "7.0.0",
       },
       "devDependencies": {
-        "@types/pngjs": "^6.0.5",
+        "@types/pngjs": "6.0.5",
       },
     },
   },
@@ -210,6 +232,8 @@
     "@nightcrew/db": ["@nightcrew/db@workspace:packages/db"],
 
     "@nightcrew/runner": ["@nightcrew/runner@workspace:packages/runner"],
+
+    "@nightcrew/site": ["@nightcrew/site@workspace:apps/site"],
 
     "@nightcrew/web": ["@nightcrew/web@workspace:apps/web"],
 

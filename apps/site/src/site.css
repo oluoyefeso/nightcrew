@@ -1,0 +1,32 @@
+/* The hero's dawn: a low amber glow at the horizon, behind the replay. */
+.nc-hero::before {
+  content: "";
+  position: absolute;
+  inset: auto -20% -40% -20%;
+  height: 70%;
+  background: radial-gradient(60% 60% at 60% 100%, color-mix(in srgb, var(--dawn) 22%, transparent), transparent 70%);
+  pointer-events: none;
+}
+.nc-hero > * {
+  position: relative;
+}
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 72px;
+}
+@keyframes nc-tick-in {
+  from {
+    transform: translateX(-50%) scaleY(0);
+  }
+  to {
+    transform: translateX(-50%) scaleY(1);
+  }
+}
+.nc-tick {
+  animation: nc-tick-in 0.35s cubic-bezier(0.23, 1, 0.32, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}

@@ -8,8 +8,8 @@ import { ChipsEditor, Field, Select, TextInput } from "../components/form";
 const LEVEL_HINT: Record<AutonomyLevel, string> = {
   propose: "Plans only. No code changes.",
   draft_pr: "One draft PR per task. You merge.",
-  train: "Arrives in M3: tasks merge into a nightly branch, you merge the train.",
-  ship: "Arrives in M3: the crew merges to dev when the evidence bar is met.",
+  train: "Ready tasks merge into one nightly branch, tested together. You merge the train's PR.",
+  ship: "The crew merges into your ship branch itself when evidence, the Skeptic and the rules below agree. You get Undo.",
 };
 
 export function SettingsPage() {
@@ -152,9 +152,8 @@ function RepoCard({ repo }: { repo: Repo }) {
             onChange={(e) => update.mutate({ level: e.target.value as AutonomyLevel })}
           >
             {(Object.keys(AUTONOMY_LABEL) as AutonomyLevel[]).map((l) => (
-              <option key={l} value={l} disabled={l === "train" || l === "ship"}>
+              <option key={l} value={l}>
                 {AUTONOMY_LABEL[l]}
-                {l === "train" || l === "ship" ? " (M3)" : ""}
               </option>
             ))}
           </Select>
@@ -169,6 +168,50 @@ function RepoCard({ repo }: { repo: Repo }) {
           />
         </Field>
       </div>
+      {(repo.level === "ship" || repo.level === "train") && (
+        <div className="grid gap-4 rounded-xl bg-raised/50 p-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field
+              label="Ship branch"
+              htmlFor={`ship-${repo.id}`}
+              hint="Where the crew may merge on its own, like dev or staging. Never a protected branch."
+            >
+              <TextInput
+                id={`ship-${repo.id}`}
+                defaultValue={repo.shipBranch ?? ""}
+                onBlur={(e) => update.mutate({ shipBranch: e.target.value.trim() || null })}
+                placeholder="dev"
+                className="font-mono"
+              />
+            </Field>
+            <Field
+              label="Allowed to ship on their own"
+              htmlFor={`allow-${repo.id}`}
+              hint="A task ships only if every file it changes matches."
+            >
+              <ChipsEditor
+                id={`allow-${repo.id}`}
+                value={repo.allowShip}
+                onChange={(allowShip) => update.mutate({ allowShip })}
+                placeholder="src/components/**, docs/**"
+              />
+            </Field>
+          </div>
+          <Field
+            label="Always wait for me"
+            htmlFor={`ask-${repo.id}`}
+            hint="Any change touching these goes to Needs your eyes, whatever the level."
+          >
+            <ChipsEditor
+              id={`ask-${repo.id}`}
+              value={repo.alwaysAsk}
+              onChange={(alwaysAsk) => update.mutate({ alwaysAsk })}
+              placeholder="migrations/**, src/auth/**, package.json"
+            />
+          </Field>
+          <TrackLine repoId={repo.id} />
+        </div>
+      )}
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Install command" htmlFor={`setup-${repo.id}`} hint="Runs in each fresh worktree before tests.">
           <TextInput
@@ -229,5 +272,20 @@ function RepoCard({ repo }: { repo: Repo }) {
         />
       </Field>
     </article>
+  );
+}
+
+function TrackLine({ repoId }: { repoId: string }) {
+  const t = useQuery({
+    queryKey: ["track", repoId],
+    queryFn: () =>
+      api.get<{ recent: number; mergedAsIs: number; sentBack: number; undone: number }>(`/api/repos/${repoId}/track`),
+  });
+  if (!t.data) return null;
+  const { recent, mergedAsIs, sentBack, undone } = t.data;
+  return (
+    <p className="font-mono text-[11.5px] text-muted">
+      Track record, last {recent} finished: {mergedAsIs} merged unchanged · {sentBack} sent back · {undone} undone
+    </p>
   );
 }

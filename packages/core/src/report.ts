@@ -4,6 +4,7 @@ export const BUCKET_ORDER: Bucket[] = ["shipped", "ready", "eyes", "back", "fail
 
 export const BUCKET_LABEL: Record<Bucket, string> = {
   shipped: "Shipped",
+  // (Shipped covers merged PRs, ships to dev and finished research.)
   ready: "Ready to merge",
   eyes: "Needs your eyes",
   back: "Sent back",
@@ -21,9 +22,13 @@ export function classify(input: {
   triage?: "merge" | "send_back" | "close" | "tonight" | "undo" | null;
   verdict?: string | null;
   type?: string | null;
+  /** Shipped by the crew to the ship branch, and not undone. */
+  shipped?: boolean;
+  /** Merged into tonight's train; you merge the train. */
+  onTrain?: boolean;
 }): Bucket {
   if (input.triage === "send_back" || input.triage === "tonight") return "back";
-  if (input.triage === "merge" || input.prState === "merged") return "shipped";
+  if (input.triage === "merge" || input.prState === "merged" || input.shipped) return "shipped";
   if (input.triage === "close" || input.prState === "closed") return "failed";
   if (input.status === "failed" || input.status === "timeout" || input.status === "blocked") {
     return "failed";
@@ -31,7 +36,11 @@ export function classify(input: {
   if (input.status === "running" || input.status === "pending") return "eyes";
   // A research report is the deliverable; there's nothing to merge.
   if (input.type === "research" && input.status === "complete") return "shipped";
-  if (input.status === "complete" && input.prUrl && (input.verdict == null || input.verdict === "ready"))
+  if (
+    input.status === "complete" &&
+    (input.prUrl || input.onTrain) &&
+    (input.verdict == null || input.verdict === "ready")
+  )
     return "ready";
   return "eyes";
 }

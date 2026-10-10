@@ -72,6 +72,10 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
 
   app.patch("/api/repos/:id", async (c) => {
     const patch = await body<Parameters<typeof updateRepo>[2]>(c);
+    const current = getRepo(db, c.req.param("id"));
+    if (patch.shipBranch && current?.protectedBranches.includes(patch.shipBranch)) {
+      return c.json({ error: `${patch.shipBranch} is protected. Pick a branch like dev or staging.` }, 400);
+    }
     const repo = updateRepo(
       db,
       c.req.param("id"),
@@ -85,6 +89,9 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
         "previewCommand",
         "previewUrl",
         "previewPaths",
+        "shipBranch",
+        "allowShip",
+        "alwaysAsk",
       ]),
     );
     return repo ? c.json(repo) : c.json({ error: "Repo not found." }, 404);

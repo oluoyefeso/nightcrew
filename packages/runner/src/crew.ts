@@ -2,9 +2,22 @@
 // nightly budget, starting on schedule or when you press Run now.
 
 import { nextStart, nightIdFor, planQueue } from "@nightcrew/core";
-import { type Db, getSettings, getTask, listTasks, type RunEvent, updateTask } from "@nightcrew/db";
+import {
+  type Db,
+  getRepo,
+  getSettings,
+  getTask,
+  listTasks,
+  listTrains,
+  type RunEvent,
+  updateTask,
+  updateTrain,
+} from "@nightcrew/db";
 import type { AgentEngine } from "./engine";
+import { publishTrain } from "./landing";
 import { runTask, type TaskOutcome } from "./pipeline";
+import { classifyFailure, NoReflexes, type Reflexes } from "./reflexes";
+import { materializeRoutines } from "./routines";
 
 export interface CrewStatus {
   state: "idle" | "running" | "stopping" | "waiting";
@@ -36,6 +49,7 @@ export class Crew {
       engine: AgentEngine;
       dataDir: string;
       publish: boolean;
+      reflexes?: Reflexes;
     },
   ) {
     this.status = this.idleStatus(null);
@@ -73,6 +87,7 @@ export class Crew {
     // Inside the eight hours after the start time, run once per night.
     const inWindow = now.getTime() - start.getTime() < 8 * 3_600_000;
     const night = nightIdFor(start.toISOString());
+    if (inWindow && this.lastAutoNight !== night) materializeRoutines(this.deps.db, now);
     if (inWindow && this.lastAutoNight !== night && listTasks(this.deps.db, ["queued"]).length > 0) {
       this.lastAutoNight = night;
       void this.start("schedule");
@@ -95,6 +110,10 @@ export class Crew {
 
     let rateLimitStrikes = 0;
     let endMessage: string | null = null;
+    const retried = new Set<string>();
+    const reflexes = this.deps.reflexes ?? new NoReflexes();
+    const routines = materializeRoutines(db);
+    if (routines) this.set({ message: `Queued ${routines} routine ${routines === 1 ? "task" : "tasks"} for tonight.` });
     try {
       while (!this.abort.signal.aborted) {
         const all = listTasks(db);
@@ -117,6 +136,7 @@ export class Crew {
             dataDir: this.deps.dataDir,
             models: { plan: settings.planModel, build: settings.buildModel, review: settings.reviewModel },
             publish: this.deps.publish,
+            reflexes,
             onEvent: (event) => {
               if (this.status.runId !== event.runId) this.set({ runId: event.runId });
               this.emit({ type: "run_event", event });
@@ -138,8 +158,22 @@ export class Crew {
           this.set({ state: "waiting", message: `Rate limited. Trying again in ${wait / 60_000} minutes.` });
           await sleep(wait, this.abort.signal);
           this.set({ state: "running" });
+        } else if (
+          outcome.status === "failed" &&
+          !retried.has(task.id) &&
+          !this.abort.signal.aborted &&
+          outcome.reason
+        ) {
+          // A flaky failure gets one more go tonight; a real one waits for morning.
+          const kind = await classifyFailure(reflexes, outcome.reason, outcome.reason);
+          if (kind === "flaky") {
+            retried.add(task.id);
+            updateTask(db, task.id, { status: "queued" });
+            this.set({ message: `"${task.title}" looked like a flaky failure, so it gets one more try.` });
+          }
         }
       }
+      await this.publishTrains();
     } finally {
       const stopped = this.abort?.signal.aborted;
       const { done, spentCents } = this.status;
@@ -147,6 +181,23 @@ export class Crew {
       const summary = `Finished ${done} ${done === 1 ? "task" : "tasks"} for $${(spentCents / 100).toFixed(2)}.`;
       this.status = this.idleStatus(stopped ? `Stopped by you. ${summary}` : (endMessage ?? summary));
       this.emit({ type: "status", status: this.getStatus() });
+    }
+  }
+
+  /** Push every train that picked up cars tonight and open its one PR. */
+  private async publishTrains() {
+    if (!this.deps.publish) return;
+    for (const train of listTrains(this.deps.db).filter(
+      (t) => (t.status === "open" || t.status === "published") && t.cars.some((c) => c.state === "on"),
+    )) {
+      const repo = getRepo(this.deps.db, train.repoId);
+      if (!repo) continue;
+      try {
+        const pr = await publishTrain(repo, train);
+        if (pr) updateTrain(this.deps.db, train.id, { status: "published", prUrl: pr.prUrl, prNumber: pr.prNumber });
+      } catch (e) {
+        this.set({ message: `Couldn't publish the ${repo.name} train: ${e instanceof Error ? e.message : String(e)}` });
+      }
     }
   }
 

@@ -18,9 +18,11 @@ import { type BunSQLiteDatabase, drizzle } from "drizzle-orm/bun-sqlite";
 import init from "../migrations/0000_init.sql" with { type: "text" };
 import tasksMigration from "../migrations/0001_tasks.sql" with { type: "text" };
 import previewMigration from "../migrations/0002_preview.sql" with { type: "text" };
+import trustMigration from "../migrations/0003_trust.sql" with { type: "text" };
 import * as schema from "./schema";
 
 export * from "./tasks";
+export * from "./trust";
 export { schema };
 
 // Migrations are embedded so the compiled binary carries them. Append new
@@ -29,6 +31,7 @@ const MIGRATIONS: [name: string, sql: string][] = [
   ["0000_init", init],
   ["0001_tasks", tasksMigration],
   ["0002_preview", previewMigration],
+  ["0003_trust", trustMigration],
 ];
 
 export type Db = BunSQLiteDatabase<typeof schema> & { $client: Database };
@@ -196,7 +199,16 @@ function hydrate(db: Db, rows: (typeof schema.runs.$inferSelect)[]): Run[] {
       repo: r.repo,
       type: r.type,
       status,
-      bucket: classify({ status, prState, prUrl: r.prUrl, triage, verdict: r.verdict, type: r.type }),
+      bucket: classify({
+        status,
+        prState,
+        prUrl: r.prUrl,
+        triage,
+        verdict: r.verdict,
+        type: r.type,
+        shipped: Boolean(r.shipSha && !r.undoneAt),
+        onTrain: Boolean(r.trainId),
+      }),
       source: r.source as RunSource,
       startedAt: r.startedAt,
       endedAt: r.endedAt,
@@ -216,6 +228,11 @@ function hydrate(db: Db, rows: (typeof schema.runs.$inferSelect)[]): Run[] {
       summary: r.summary,
       verdict: r.verdict,
       phase: r.phase,
+      confidence: r.confidence,
+      shipSha: r.shipSha,
+      shipBranch: r.shipBranch,
+      undoneAt: r.undoneAt,
+      trainId: r.trainId,
       triage,
       note: triage ? (t?.note ?? null) : null,
       artifactKinds: (kinds.get(r.id) ?? []).sort((a, b) => ARTIFACT_ORDER.indexOf(a) - ARTIFACT_ORDER.indexOf(b)),

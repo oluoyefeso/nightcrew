@@ -42,6 +42,13 @@ export interface Run {
   verdict: string | null;
   /** plan | implement | review | validate | publish while running. */
   phase: string | null;
+  /** 0–1: how safe this is to merge without changes. */
+  confidence: number | null;
+  /** Set when the crew shipped it to the ship branch itself. */
+  shipSha: string | null;
+  shipBranch: string | null;
+  undoneAt: string | null;
+  trainId: string | null;
   /** One-line crew note: what the agent says it did. */
   summary: string | null;
   /** The user's latest triage decision, if it hasn't been undone. */

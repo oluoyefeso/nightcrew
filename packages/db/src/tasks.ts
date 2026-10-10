@@ -62,6 +62,9 @@ export function addRepo(
     previewCommand: input.previewCommand ?? null,
     previewUrl: input.previewUrl ?? null,
     previewPaths: ["/"],
+    shipBranch: null,
+    allowShip: [],
+    alwaysAsk: [],
   };
   db.insert(schema.repos).values(row).run();
   return toRepo(row);
@@ -82,6 +85,9 @@ export function updateRepo(
       | "previewCommand"
       | "previewUrl"
       | "previewPaths"
+      | "shipBranch"
+      | "allowShip"
+      | "alwaysAsk"
     >
   >,
 ): Repo | null {
@@ -115,6 +121,8 @@ export interface NewTask {
   testCommand?: string | null;
   question?: string | null;
   source?: Task["source"];
+  sourceRef?: string | null;
+  workflow?: Task["workflow"];
 }
 
 export function createTask(db: Db, input: NewTask): Task {
@@ -138,6 +146,8 @@ export function createTask(db: Db, input: NewTask): Task {
     testCommand: input.testCommand ?? null,
     question: input.question ?? null,
     source: input.source ?? "manual",
+    sourceRef: input.sourceRef ?? null,
+    workflow: input.workflow ?? "auto",
     createdAt: now(),
     updatedAt: now(),
     lastRunId: null,
@@ -163,6 +173,7 @@ export type TaskPatch = Partial<
     | "question"
     | "repoId"
     | "lastRunId"
+    | "workflow"
   >
 >;
 
@@ -219,6 +230,7 @@ function toTask(r: { task: typeof schema.tasks.$inferSelect; repoName: string })
     type: r.task.type as TaskType,
     status: r.task.status as TaskStatus,
     source: r.task.source as Task["source"],
+    workflow: r.task.workflow as Task["workflow"],
   };
 }
 

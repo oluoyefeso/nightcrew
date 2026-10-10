@@ -15,6 +15,7 @@ import {
   detectTestCommand,
   draftTasks,
   inspectRepo,
+  reflexesFromEnv,
   SdkEngine,
 } from "@nightcrew/runner";
 import { createApp, VERSION } from "./server";
@@ -76,7 +77,8 @@ const db = openDb(join(values.data, "nightcrew.db"));
 const classicRoot = values.classic ? resolve(values.classic) : undefined;
 const engine: AgentEngine = values.demo ? new DemoEngine() : new SdkEngine({ claudePath: claudeOnPath() });
 const publish = !values["no-publish"] && !values.demo;
-const crew = new Crew({ db, engine, dataDir: values.data, publish });
+const reflexes = reflexesFromEnv();
+const crew = new Crew({ db, engine, dataDir: values.data, publish, reflexes });
 
 /** In the compiled binary the SDK can't find its bundled CLI, so use Claude Code from PATH. */
 function claudeOnPath(): string | undefined {
@@ -96,7 +98,7 @@ async function sync() {
 async function serve() {
   const port = Number(values.port);
   const webDir = resolve(import.meta.dir, "../../web/dist");
-  const app = createApp({ db, cwd, classicRoot, webDir, crew, engine, dataDir: values.data });
+  const app = createApp({ db, cwd, classicRoot, webDir, crew, engine, dataDir: values.data, publish });
   const server = Bun.serve({ port, hostname: "127.0.0.1", fetch: app.fetch, idleTimeout: 0 });
   const url = `http://localhost:${server.port}`;
   crew.startSchedule();

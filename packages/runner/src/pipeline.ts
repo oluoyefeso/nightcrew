@@ -7,19 +7,25 @@ import { join } from "node:path";
 import { nightIdFor, type Repo, type Task } from "@nightcrew/core";
 import { matchesAny } from "@nightcrew/core/guard";
 import {
+  addCar,
   addRunEvent,
   countRunsForTask,
+  createTrain,
   type Db,
+  getOpenTrain,
   getRepo,
   getTask,
   listNotes,
+  markShipped,
   type RunEvent,
+  setRunTrain,
   updateTask,
   upsertRuns,
 } from "@nightcrew/db";
 import type { AgentEngine, EngineEvent, PhaseRequest, PhaseResult } from "./engine";
 import { type Evidence, gatherEvidence, summarizeEvidence } from "./evidence";
 import { changedFiles, commitAll, commitsAhead, diffStat, ensureWorktree, openOrUpdatePr, push, run } from "./git";
+import { boardTrain, canShip, shipTask, trainBranch } from "./landing";
 import {
   implementPrompt,
   type PromptContext,
@@ -30,6 +36,7 @@ import {
   researchPrompt,
   reviewPrompt,
 } from "./prompts";
+import { chooseWorkflow, NoReflexes, type Reflexes, scoreConfidence } from "./reflexes";
 
 export interface PipelineDeps {
   db: Db;
@@ -38,6 +45,8 @@ export interface PipelineDeps {
   models: { plan: string; build: string; review: string };
   /** Publish branches and PRs. Off in tests and dry runs. */
   publish: boolean;
+  /** Fast typed judgement calls (Jev, or rules). */
+  reflexes?: Reflexes;
   onEvent?: (e: RunEvent) => void;
 }
 
@@ -84,6 +93,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     verdict: null as string | null,
     prUrl: null as string | null,
     prNumber: null as number | null,
+    confidence: null as number | null,
     worktree: null as string | null,
     stat: null as { additions: number; deletions: number; files: number } | null,
   };
@@ -122,6 +132,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
           phase: state.status === "running" ? state.phase : null,
           worktree: state.worktree,
           verdict: state.verdict,
+          confidence: state.confidence,
         },
         artifacts: [...artifacts.values()],
       },
@@ -244,41 +255,51 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       return await finish("complete", null);
     }
 
-    // Plan
-    phase("plan", "Planning");
-    const pp = planPrompt(ctx);
-    const plan = await deps.engine.runPhase(
-      {
-        ...base,
-        phase: "plan",
-        prompt: pp.prompt,
-        systemPrompt: pp.system,
-        model: deps.models.plan,
-        maxBudgetUsd: Math.min(remainingBudget() * 0.3, Math.max(0.75, remainingBudget() * 0.2)),
-        maxTurns: 40,
-        guard: { ...base.guard, readOnly: true },
-      },
-      onEngine,
-    );
-    account(plan);
-    // Build in the planner's session so what it already read stays in context.
-    // Only when planner and builder are the same model; otherwise start fresh.
-    let session = plan.sessionId && deps.models.plan === (task.model ?? deps.models.build) ? plan.sessionId : undefined;
-    if (plan.text.trim()) {
-      ctx.plan = plan.text;
-      artifact("plan", "PLAN.md", plan.text);
-      if (!plan.ok) emit("info", `Planning stopped early (${plan.error}), but wrote enough of a plan to build from.`);
+    // Plan, unless the task is small enough to build directly
+    const reflexes = deps.reflexes ?? new NoReflexes();
+    const workflow = repo.level === "propose" ? "planned" : await chooseWorkflow(reflexes, task);
+    let session: string | undefined;
+    let planError: string | null = null;
+    if (workflow === "planned") {
+      // Plan
+      phase("plan", "Planning");
+      const pp = planPrompt(ctx);
+      const plan = await deps.engine.runPhase(
+        {
+          ...base,
+          phase: "plan",
+          prompt: pp.prompt,
+          systemPrompt: pp.system,
+          model: deps.models.plan,
+          maxBudgetUsd: Math.min(remainingBudget() * 0.3, Math.max(0.75, remainingBudget() * 0.2)),
+          maxTurns: 40,
+          guard: { ...base.guard, readOnly: true },
+        },
+        onEngine,
+      );
+      account(plan);
+      // Build in the planner's session so what it already read stays in context.
+      // Only when planner and builder are the same model; otherwise start fresh.
+      session = plan.sessionId && deps.models.plan === (task.model ?? deps.models.build) ? plan.sessionId : undefined;
+      if (plan.text.trim()) {
+        ctx.plan = plan.text;
+        artifact("plan", "PLAN.md", plan.text);
+        if (!plan.ok) emit("info", `Planning stopped early (${plan.error}), but wrote enough of a plan to build from.`);
+      } else {
+        // The classic runner learned this the hard way: a failed plan shouldn't sink the task.
+        planError = plan.error;
+        emit("info", `Planning didn't finish (${plan.error ?? "no plan"}). Implementing from the brief instead.`);
+        session = undefined;
+        if (stop.aborted) return await finish("timeout", "Ran out of time while planning.");
+      }
     } else {
-      // The classic runner learned this the hard way: a failed plan shouldn't sink the task.
-      emit("info", `Planning didn't finish (${plan.error ?? "no plan"}). Implementing from the brief instead.`);
-      session = undefined;
-      if (stop.aborted) return await finish("timeout", "Ran out of time while planning.");
+      emit("info", "Small, well-specified task: building directly, without a separate planning step.");
     }
 
     if (repo.level === "propose") {
       state.summary = ctx.plan ? firstSentence(ctx.plan) : null;
       state.verdict = "needs_eyes";
-      return await finish(ctx.plan ? "complete" : "failed", ctx.plan ? null : plan.error);
+      return await finish(ctx.plan ? "complete" : "failed", ctx.plan ? null : planError);
     }
 
     // Implement
@@ -379,14 +400,70 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     // The reviewer may have fixed small things; checks must still pass.
     const recheck = await validate(worktree, task, repo);
     if (!recheck.ok) return await finish("failed", `Checks failed after review: ${recheck.reason}`);
+    state.confidence = await scoreConfidence(reflexes, {
+      task,
+      review: verdict,
+      evidence: ctx.evidence ?? null,
+      checksPassed: recheck.ok,
+    });
 
     // Publish
     phase("publish", "Committing");
     await commitAll(worktree, `${task.title}\n\nNightCrew task ${task.id}, run ${runId}.`);
     state.stat = await diffStat(worktree, repo.defaultBranch);
+    const hasRemote = (await run(["git", "remote", "get-url", "origin"], worktree)).ok;
+    const files = await changedFiles(worktree, repo.defaultBranch);
+
+    // Ship to dev: the crew merges it itself, when everything lines up.
+    if (repo.level === "ship") {
+      const gate = canShip({
+        repo,
+        files,
+        verdict: state.verdict,
+        evidenceMissing: evidence?.missing ?? [],
+        confidence: state.confidence,
+      });
+      if (gate.ok) {
+        phase("publish", `Shipping to ${repo.shipBranch}`);
+        if (deps.publish && hasRemote) await push(worktree, task.branch);
+        const shipped = await shipTask(repo, task.branch, task.title, deps.publish);
+        if (shipped.ok) {
+          markShipped(db, runId, shipped.sha, repo.shipBranch as string);
+          emit(
+            "info",
+            `Shipped to ${repo.shipBranch} (${shipped.sha.slice(0, 7)}). Undo is one key in the Morning Report.`,
+          );
+          return await finish("complete", null);
+        }
+        emit("info", `Didn't ship: ${shipped.error.split("\n")[0]} Opening a draft PR instead.`);
+        state.verdict = "needs_eyes";
+      } else {
+        emit("info", `Waiting for you instead of shipping: ${gate.reasons.join(" ")}`);
+      }
+    }
+
+    // Nightly train: board tonight's integration branch; you merge one PR in the morning.
+    if (repo.level === "train" && state.verdict === "ready") {
+      phase("publish", "Boarding tonight's train");
+      const nightId = nightIdFor(startedAt);
+      const train =
+        getOpenTrain(db, repo.id, nightId) ??
+        createTrain(db, { repoId: repo.id, nightId, branch: trainBranch(nightId) });
+      if (deps.publish && hasRemote) await push(worktree, task.branch);
+      const boarded = await boardTrain(repo, train, task.branch, task.title);
+      if (boarded.ok) {
+        addCar(db, train.id, { runId, taskId: task.id, title: task.title, mergeSha: boarded.sha, state: "on" });
+        setRunTrain(db, runId, train.id);
+        emit("info", `On tonight's train (${train.branch}). The train's PR opens when the night ends.`);
+        return await finish("complete", null);
+      }
+      addCar(db, train.id, { runId, taskId: task.id, title: task.title, mergeSha: "", state: "broke" });
+      emit("info", `Couldn't board the train: ${boarded.error.split("\n")[0]} Opening its own draft PR instead.`);
+      state.verdict = "needs_eyes";
+    }
+
     if (deps.publish) {
-      const remote = (await run(["git", "remote", "get-url", "origin"], worktree)).ok;
-      if (!remote) {
+      if (!hasRemote) {
         emit("info", "No GitHub remote, so the branch stays local.");
       } else {
         phase("publish", "Pushing and opening a draft PR");
@@ -509,7 +586,7 @@ ${
 }
 ${verdict?.concerns.length ? `### Reviewer concerns\n${verdict.concerns.map((c) => `- ${c}`).join("\n")}\n` : ""}
 ${details("Plan", input.plan)}${details("Review", verdict?.report ?? null)}${details("Checks", `\`\`\`\n${input.checks.slice(-4000)}\n\`\`\``)}
----
+${task.sourceRef?.match(/\/issues\/(\d+)$/) ? `Closes #${task.sourceRef.match(/\/issues\/(\d+)$/)?.[1]}\n\n` : ""}---
 Made overnight by [NightCrew](https://github.com/oluoyefeso/nightcrew) · run \`${input.runId}\` · $${input.costUsd.toFixed(2)}`;
 }
 

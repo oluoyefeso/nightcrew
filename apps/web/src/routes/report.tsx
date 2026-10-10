@@ -8,6 +8,7 @@ import { ApiError, reportQuery } from "../api";
 import { Horizon } from "../components/horizon";
 import { RunPane } from "../components/run-pane";
 import { RunRow } from "../components/run-row";
+import { PromotionBanners, TrainCards } from "../components/trust";
 import { Kbd } from "../components/ui";
 import { BUCKET_COLOR, fmtDay, fmtWeekday, isTypingTarget } from "../lib";
 
@@ -103,6 +104,9 @@ export function ReportPage({ nightId, runId }: { nightId?: string; runId?: strin
               onSelect={select}
             />
           </header>
+
+          <PromotionBanners onToast={setToast} />
+          <TrainCards nightId={data.night.id} onOpen={select} />
 
           <div className="grid gap-7">
             {BUCKET_ORDER.map((bucket) => {

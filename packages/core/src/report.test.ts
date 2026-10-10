@@ -30,6 +30,11 @@ function run(over: Partial<Run>): Run {
     reason: null,
     verdict: null,
     phase: null,
+    confidence: null,
+    shipSha: null,
+    shipBranch: null,
+    undoneAt: null,
+    trainId: null,
     summary: null,
     triage: null,
     note: null,
@@ -48,6 +53,9 @@ describe("classify", () => {
   test("a reviewer who wants a closer look sends it to needs eyes", () => {
     expect(classify({ status: "complete", prState: "draft", prUrl: "u", verdict: "needs_eyes" })).toBe("eyes");
     expect(classify({ status: "complete", prState: "draft", prUrl: "u", verdict: "ready" })).toBe("ready");
+  });
+  test("a ready task on the nightly train is ready to merge", () => {
+    expect(classify({ status: "complete", prState: null, prUrl: null, verdict: "ready", onTrain: true })).toBe("ready");
   });
   test("a finished research task is shipped", () => {
     expect(classify({ status: "complete", prState: null, prUrl: null, type: "research" })).toBe("shipped");

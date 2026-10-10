@@ -45,13 +45,15 @@ const send = (method: string, path: string, body?: unknown) =>
 const errorOf = async (res: Response) => ((await res.json()) as { error: string }).error;
 
 describe("promote", () => {
-  // Value: protects=promote refuses Ship to dev until a ship branch and allowed paths are set, and leaves the level alone; fails_when=the ship guard in promote is dropped; why_new=promote had no route test; seam=none
+  // Value: protects=promote refuses Ship to dev until a ship branch and allowed paths are set, leaves the level alone, and tells the trust-panel user to go to Settings; fails_when=the ship guard in promote is dropped or its message loses where to fix it; why_new=promote had no route test, then W4 restored the Settings pointer; seam=none
   test("to ship without a ship branch or allowed paths → 400, level unchanged", async () => {
     const repo = addRepo(db, { name: "acme", path: "/code/acme", defaultBranch: "main" });
     updateRepo(db, repo.id, { level: "train" });
     const res = await send("POST", `/api/repos/${repo.id}/promote`, { level: "ship" });
     expect(res.status).toBe(400);
-    expect(await errorOf(res)).toContain("ship branch");
+    expect(await errorOf(res)).toBe(
+      "Set a ship branch and the paths allowed to ship in Settings before promoting to Ship to dev.",
+    );
     expect(getRepo(db, repo.id)?.level).toBe("train");
 
     updateRepo(db, repo.id, { shipBranch: "dev", allowShip: ["src/**"] });
@@ -66,7 +68,7 @@ describe("promote", () => {
     updateRepo(db, repo.id, { level: "train", shipBranch: "trunk", allowShip: ["src/**"] });
     const res = await send("POST", `/api/repos/${repo.id}/promote`, { level: "ship" });
     expect(res.status).toBe(400);
-    expect(await errorOf(res)).toBe("trunk is protected. Pick a branch like dev or staging.");
+    expect(await errorOf(res)).toBe("trunk is protected. Pick a branch like dev or staging in Settings.");
     expect(getRepo(db, repo.id)?.level).toBe("train");
   });
 });

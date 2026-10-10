@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { extname, join } from "node:path";
 import type { TriageAction } from "@nightcrew/core";
 import {
@@ -63,7 +63,8 @@ export function createApp(opts: ServerOptions) {
     if (c.req.path.startsWith("/api/")) return next();
     // The locked page styles itself, but let the dashboard's own files load.
     if (c.req.path.startsWith("/assets/") || /^\/favicon\.(svg|ico)$/.test(c.req.path) || hasKey(c)) return next();
-    return c.html(LOCKED_PAGE, 401);
+    const host = c.req.header("host") ?? url.host;
+    return c.html(lockedPage(isLocalHost(host) ? host : "localhost:3721", await interFont(opts.webDir)), 401);
   });
 
   // The API is for this machine only: refuse DNS-rebound hosts, callers without
@@ -167,17 +168,61 @@ const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const COOKIE = "nc_session";
 const TOKEN_HEADER = "x-nightcrew-token";
 const LOCKED = "Open NightCrew from the link it printed in your terminal.";
-const LOCKED_PAGE = `<!doctype html>
+/** The dashboard's own Inter (latin, variable), so the locked page matches it. Null before a build. */
+let interUrl: Promise<string | null> | undefined;
+function interFont(webDir?: string): Promise<string | null> {
+  interUrl ??= (async () => {
+    const files = await loadEmbedded();
+    let names = files && Object.keys(files).length ? Object.keys(files) : [];
+    if (!names.length && webDir) {
+      try {
+        names = readdirSync(join(webDir, "assets")).map((f) => `/assets/${f}`);
+      } catch {}
+    }
+    return names.find((f) => /^\/assets\/inter-latin-wght-normal-[\w-]+\.woff2$/.test(f)) ?? null;
+  })();
+  return interUrl;
+}
+
+const NIGHT =
+  "--bg:#0a0e16;--raised:#18202f;--line:rgb(236 232 225/.16);--fg:#ece8e1;--muted:#8b92a3;--dawn:#f2a65a;--horizon:#1a2236;color-scheme:dark";
+const MORNING =
+  "--bg:#f3f5f8;--raised:#eaeef3;--line:rgb(20 26 38/.18);--fg:#141a26;--muted:#5e6676;--dawn:#b65a12;--horizon:#c9d3e2;color-scheme:light";
+
+/** What a browser without this launch's key sees: NightCrew's look, and how to get back in. */
+function lockedPage(host: string, font: string | null): string {
+  const esc = (v: string) => v.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
+  const face = font
+    ? `@font-face{font-family:"Inter Variable";font-style:normal;font-weight:100 900;font-display:swap;src:url(${font}) format("woff2-variations")}`
+    : "";
+  return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
 <title>NightCrew</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script>try{var t=localStorage.getItem("nc-theme");if(t==="dark"||t==="light")document.documentElement.dataset.theme=t}catch(e){}</script>
 <style>
-:root{color-scheme:light dark;--bg:#f7f7f5;--fg:#1c1c1a;--muted:#6b6b66}
-@media (prefers-color-scheme:dark){:root{--bg:#141413;--fg:#ececea;--muted:#9a9a94}}
-body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif;padding:0 16px}
-main{max-width:28rem}h1{font-size:1.25rem;margin:0 0 .5rem}p{margin:0;color:var(--muted)}
+${face}
+:root{${NIGHT}}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]){${MORNING}}}
+:root[data-theme="light"]{${MORNING}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:32px 16px;background:var(--bg);color:var(--fg);font:400 16px/1.6 "Inter Variable",Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;letter-spacing:-.011em;-webkit-font-smoothing:antialiased}
+main{width:100%;max-width:34rem}
+.brand{display:flex;align-items:center;gap:10px;margin-bottom:48px;font-weight:500;font-size:15px;letter-spacing:-.02em}
+.brand svg{width:22px;height:22px;flex:none}
+h1{margin:0 0 16px;font-size:clamp(30px,6vw,40px);font-weight:500;line-height:1.12;letter-spacing:-.03em;text-wrap:balance}
+p{margin:0 0 12px;color:var(--muted)}
+code{font-family:ui-monospace,"SF Mono","SFMono-Regular",Menlo,Consolas,monospace;font-size:.86em;letter-spacing:0;color:var(--fg);background:var(--raised);border-radius:6px;padding:2px 6px;display:inline-block;max-width:100%;line-height:1.4;overflow-wrap:anywhere}
 </style></head>
-<body><main><h1>NightCrew</h1><p>${LOCKED}</p></main></body></html>
+<body><main>
+<div class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><defs><clipPath id="m"><circle cx="16" cy="16" r="15"/></clipPath></defs><g clip-path="url(#m)"><rect width="32" height="32" fill="var(--horizon)"/><rect y="17" width="32" height="15" fill="var(--dawn)"/></g><circle cx="16" cy="16" r="15" fill="none" stroke="var(--line)"/></svg>NightCrew</div>
+<h1>This dashboard needs its launch link.</h1>
+<p>Each time <code>nightcrew</code> starts it prints a link like <code>http://${esc(host)}/?t=…</code>; open that one.</p>
+<p>Lost it, or restarted? Run <code>nightcrew</code> again and use the new link.</p>
+</main></body></html>
 `;
+}
 
 /** Constant-time compare of a presented key with the real one. */
 function sameSecret(given: string | undefined, secret: string): boolean {

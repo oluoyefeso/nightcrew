@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addRepo, createTask, type Db, getRepo, openDb, updateRepo } from "@nightcrew/db";
 import { gatherEvidence, summarizeEvidence } from "./evidence";
-import { ensureWorktree, git } from "./git";
+import { git } from "./git";
+import { ensureWorkspace } from "./workspace";
 
 let dir: string;
 let repoPath: string;
@@ -23,6 +24,13 @@ beforeEach(async () => {
   db = openDb(":memory:");
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+/** A task clone of the app on `branch`, at main. */
+async function clone(repoId: string, branch: string) {
+  const base = (await git(repoPath, "rev-parse", "main")).stdout.trim();
+  const task = { id: branch.replace(/\W+/g, "-"), branch };
+  return (await ensureWorkspace({ dataDir: join(dir, "data"), repo: { id: repoId, path: repoPath }, task, base })).dir;
+}
 
 const opts = (taskId: string, worktree: string, repoId: string) => {
   const repo = getRepo(db, repoId);
@@ -56,7 +64,7 @@ describe("fail-then-pass", () => {
       defaultBranch: "main",
       testCommand: "sh -c 'for t in tests/*.test.sh; do sh $t || exit 1; done'",
     });
-    const wt = await ensureWorktree(repoPath, "fix/add", "main");
+    const wt = await clone(repo.id, "fix/add");
     writeFileSync(join(wt, "math.sh"), "add() { echo $(( $1 + $2 )); }\n");
     writeFileSync(join(wt, "tests", "add.test.sh"), '. ./math.sh; [ "$(add 2 3)" = "5" ]\n');
     mkdirSync(join(dir, "artifacts"), { recursive: true });
@@ -77,7 +85,7 @@ describe("fail-then-pass", () => {
       defaultBranch: "main",
       testCommand: "sh -c 'for t in tests/*.test.sh; do sh $t || exit 1; done'",
     });
-    const wt = await ensureWorktree(repoPath, "fix/weak", "main");
+    const wt = await clone(repo.id, "fix/weak");
     writeFileSync(join(wt, "tests", "weak.test.sh"), "true\n");
     mkdirSync(join(dir, "artifacts"), { recursive: true });
     const ev = await gatherEvidence(opts("bug: weak test", wt, repo.id));
@@ -87,7 +95,7 @@ describe("fail-then-pass", () => {
 
   test("no test at all is flagged", async () => {
     const repo = addRepo(db, { name: "app", path: repoPath, defaultBranch: "main", testCommand: "true" });
-    const wt = await ensureWorktree(repoPath, "fix/none", "main");
+    const wt = await clone(repo.id, "fix/none");
     writeFileSync(join(wt, "math.sh"), "add() { echo $(( $1 + $2 )); }\n");
     mkdirSync(join(dir, "artifacts"), { recursive: true });
     const ev = await gatherEvidence(opts("bug: no test", wt, repo.id));
@@ -106,7 +114,7 @@ describe("screenshots", () => {
       await commit("init");
       const repo = addRepo(db, { name: "app", path: repoPath, defaultBranch: "main" });
       updateRepo(db, repo.id, { previewCommand: "static", previewUrl: "http://localhost:{port}", previewPaths: ["/"] });
-      const wt = await ensureWorktree(repoPath, "crew/button", "main");
+      const wt = await clone(repo.id, "crew/button");
       writeFileSync(
         join(wt, "index.html"),
         // Adds a button with no accessible name: a new accessibility issue.
@@ -135,7 +143,7 @@ describe("screenshots", () => {
     writeFileSync(join(repoPath, "README.md"), "x");
     await commit("init");
     const repo = addRepo(db, { name: "app", path: repoPath, defaultBranch: "main" });
-    const wt = await ensureWorktree(repoPath, "crew/x", "main");
+    const wt = await clone(repo.id, "crew/x");
     mkdirSync(join(dir, "artifacts"), { recursive: true });
     const ev = await gatherEvidence(opts("ui: no preview", wt, repo.id));
     expect(ev.missing[0]).toContain("No preview command");

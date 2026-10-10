@@ -155,17 +155,28 @@ export class Crew {
       const s = getSettings(db);
       if (this.halted || !s.dispatch || this.pausedUntil > Date.now()) return this.emitStatus();
 
+      // A task whose budget is above the whole daily budget can never start:
+      // step past it so it doesn't hold up everything behind it.
+      const tooBig = new Set<string>();
+      let tooBigNote: string | null = null;
+      let holdNote: string | null = null;
       for (;;) {
         if (this.running.size >= s.maxAgents) break;
-        const next = this.nextRunnable(s.maxPerRepo);
+        const next = this.nextRunnable(s.maxPerRepo, tooBig);
         if (!next) break;
+        if (next.tokenBudget > s.dailyTokenBudget) {
+          tooBig.add(next.id);
+          tooBigNote ??= `"${next.title}" needs a bigger daily budget than ${formatTokens(s.dailyTokenBudget)} tokens; raise one of them.`;
+          continue;
+        }
         const used = tokensOnDay(db, nightIdFor(new Date().toISOString())) + this.inFlightBudget();
         if (used + next.tokenBudget > s.dailyTokenBudget) {
-          this.message = `Holding "${next.title}": it could take today past the ${formatTokens(s.dailyTokenBudget)}-token budget.`;
+          holdNote = `Holding "${next.title}": it could take today past the ${formatTokens(s.dailyTokenBudget)}-token budget.`;
           break;
         }
         this.launch(next.id);
       }
+      if (tooBigNote || holdNote) this.message = [tooBigNote, holdNote].filter(Boolean).join(" ");
       this.emitStatus();
     } finally {
       this.pumping = false;
@@ -173,7 +184,7 @@ export class Crew {
   }
 
   /** The highest-priority queued task that can start now. */
-  private nextRunnable(maxPerRepo: number) {
+  private nextRunnable(maxPerRepo: number, skip: ReadonlySet<string> = new Set()) {
     const { db } = this.deps;
     const all = listTasks(db);
     const byId = new Map(all.map((t) => [t.id, t]));
@@ -182,7 +193,7 @@ export class Crew {
     for (const r of this.running.values()) perRepo.set(r.agent.repoId, (perRepo.get(r.agent.repoId) ?? 0) + 1);
     for (const id of planQueue(all).order) {
       const t = byId.get(id);
-      if (!t || this.running.has(id)) continue;
+      if (!t || this.running.has(id) || skip.has(id)) continue;
       if (t.runAt && new Date(t.runAt).getTime() > now) continue;
       // Dependencies must have finished, not just started.
       if (t.dependsOn.some((d) => byId.get(d) && !["done", "archived"].includes(byId.get(d)?.status ?? ""))) continue;
@@ -239,11 +250,18 @@ export class Crew {
       .catch((e) => {
         // A crash must not strand the task in "running". It waits a while
         // before the next try so a task that always crashes can't spin.
-        if (getTask(db, taskId)?.status === "running") {
+        const requeued = getTask(db, taskId)?.status === "running";
+        if (requeued) {
           const runAt = new Date(Date.now() + CRASH_RETRY_MS).toISOString();
           updateTask(db, taskId, { status: "queued", runAt });
         }
-        this.message = `"${task.title}" crashed: ${e instanceof Error ? e.message : String(e)} It goes back in the queue and tries again in ${CRASH_RETRY_MS / 60_000} minutes.`;
+        // Only the dashboard keeps a schedule running; `nightcrew run` exits once drained.
+        const next = !requeued
+          ? ""
+          : this.timer && !this.halted
+            ? ` It goes back in the queue and tries again in ${CRASH_RETRY_MS / 60_000} minutes.`
+            : " It goes back in the queue and tries again on the next `nightcrew run` or dashboard start.";
+        this.message = `"${task.title}" crashed: ${e instanceof Error ? e.message : String(e)}${next}`;
       })
       .finally(() => {
         this.running.delete(taskId);
@@ -384,13 +402,14 @@ interface LockInfo {
  * that pid now belongs to some other program (pids get reused after a
  * reboot); a stale lock is taken over.
  */
-export function takeCrewLock(dataDir: string): CrewLock {
+export function takeCrewLock(dataDir: string, probe: ProcessProbe = processInfo): CrewLock {
   const file = join(dataDir, "crew.lock");
+  const self = probe(process.pid);
   const mine: LockInfo = {
     pid: process.pid,
     startedAt: new Date().toISOString(),
     nonce: crypto.randomUUID(),
-    command: processInfo(process.pid)?.command ?? "",
+    command: self?.command ?? "",
   };
   const body = JSON.stringify(mine);
   const held = (): CrewLock => {
@@ -418,7 +437,8 @@ export function takeCrewLock(dataDir: string): CrewLock {
 
   const raw = readRaw(file);
   const owner = readLock(file);
-  if (owner && owner.pid !== process.pid && ownsLock(owner)) return { ok: false, pid: owner.pid, file };
+  if (owner && owner.pid !== process.pid && ownsLock(owner, self ? probe : null))
+    return { ok: false, pid: owner.pid, file };
 
   // Stale. Swap our lock in with one rename (no unlink-then-create gap), then
   // read it back: if two processes raced, only the one whose nonce is there won.
@@ -439,16 +459,26 @@ export function takeCrewLock(dataDir: string): CrewLock {
   return { ok: false, pid: now?.pid ?? owner?.pid ?? 0, file };
 }
 
-/** Is the lock's owner still alive and still a NightCrew process? */
-function ownsLock(owner: LockInfo): boolean {
-  try {
-    process.kill(owner.pid, 0);
-  } catch {
-    // ESRCH: gone. EPERM: another user's process, so not a NightCrew of ours.
-    return false;
-  }
-  const info = processInfo(owner.pid);
-  if (!info) return false;
+/**
+ * Is the lock's owner still alive and still a NightCrew process? With no way
+ * to look at processes (probe is null: no `ps` and no /proc), a live pid is
+ * trusted, so two dispatchers never run at once.
+ */
+function ownsLock(owner: LockInfo, probe: ProcessProbe | null): boolean {
+  const alive = () => {
+    try {
+      process.kill(owner.pid, 0);
+      return true;
+    } catch {
+      // ESRCH: gone. EPERM: another user's process, so not a NightCrew of ours.
+      return false;
+    }
+  };
+  if (!alive()) return false;
+  if (!probe) return true;
+  // The probe came up empty: either the process just exited, or it can't be read. Trust it if it's still there.
+  const info = probe(owner.pid);
+  if (!info) return alive();
   // A process that started after the lock was written can't have written it.
   const lockedAt = Date.parse(owner.startedAt);
   if (info.startedAt !== null && Number.isFinite(lockedAt) && info.startedAt > lockedAt + 5_000) return false;
@@ -456,18 +486,26 @@ function ownsLock(owner: LockInfo): boolean {
   return /nightcrew/i.test(info.command) || (Boolean(Bun.main) && info.command.includes(Bun.main));
 }
 
-/** The command line and start time of a live process, from `ps`. */
-function processInfo(pid: number): { command: string; startedAt: number | null } | null {
+/** Looks up a live process: its command line and start time (ms), or null when it can't tell. */
+export type ProcessProbe = (pid: number) => { command: string; startedAt: number | null } | null;
+
+/** The command line and start time of a live process, from `ps`, else Linux's /proc (command only). */
+function processInfo(pid: number): ReturnType<ProcessProbe> {
   try {
     const ps = Bun.spawnSync(["ps", "-o", "etime=", "-o", "command=", "-p", String(pid)], {
       stdout: "pipe",
       stderr: "ignore",
     });
     const line = ps.stdout.toString().trim();
-    if (!ps.success || !line) return null;
-    const [etime = "", ...rest] = line.split(/\s+/);
-    const secs = elapsedSeconds(etime);
-    return { command: rest.join(" "), startedAt: secs === null ? null : Date.now() - secs * 1000 };
+    if (ps.success && line) {
+      const [etime = "", ...rest] = line.split(/\s+/);
+      const secs = elapsedSeconds(etime);
+      return { command: rest.join(" "), startedAt: secs === null ? null : Date.now() - secs * 1000 };
+    }
+  } catch {}
+  try {
+    const command = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean).join(" ");
+    return command ? { command, startedAt: null } : null;
   } catch {
     return null;
   }

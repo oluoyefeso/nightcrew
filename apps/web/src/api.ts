@@ -16,8 +16,35 @@ import { useEffect } from "react";
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { ...init, headers: { "content-type": "application/json", ...init?.headers } });
   const body = await res.json().catch(() => null);
+  if (res.status === 401) lockedOut();
   if (!res.ok) throw new ApiError(body?.error ?? `Request failed (${res.status}).`, res.status);
+  try {
+    sessionStorage.removeItem(RELOADED);
+  } catch {}
   return body as T;
+}
+
+const RELOADED = "nc-reloaded-for-key";
+
+/**
+ * Each launch of `nightcrew` mints a new key, so a tab left open across a
+ * restart gets 401s. Reload once: the server then shows its locked page,
+ * which says how to get back in. A flag (cleared by the next good request)
+ * keeps this from looping.
+ */
+export function lockedOut() {
+  try {
+    if (sessionStorage.getItem(RELOADED)) return;
+    sessionStorage.setItem(RELOADED, "1");
+  } catch {
+    return;
+  }
+  window.location.reload();
+}
+
+/** React Query's usual three retries, but never on a 401: a new key won't appear by retrying. */
+export function shouldRetry(count: number, err: unknown) {
+  return !(err instanceof ApiError && err.status === 401) && count < 3;
 }
 
 export class ApiError extends Error {
@@ -38,7 +65,7 @@ export const reportQuery = (nightId?: string) =>
   queryOptions({
     queryKey: ["report", nightId ?? "latest"],
     queryFn: () => request<NightReport>(`/api/report${nightId ? `?night=${encodeURIComponent(nightId)}` : ""}`),
-    retry: (count, err) => !(err instanceof ApiError && err.status === 404) && count < 2,
+    retry: (count, err) => shouldRetry(count, err) && !(err instanceof ApiError && err.status === 404) && count < 2,
   });
 
 export const runQuery = (id: string) =>
@@ -211,11 +238,21 @@ export function useCrewStream() {
       });
       es.onerror = () => {
         es?.close();
-        retry = setTimeout(connect, 3000);
+        // EventSource hides the status code, so ask once: locked out means stop reconnecting.
+        void fetch("/api/health")
+          .then((r) => r.status)
+          .catch(() => 0)
+          .then((status) => {
+            if (stopped) return;
+            if (status === 401) lockedOut();
+            else retry = setTimeout(connect, 3000);
+          });
       };
     };
+    let stopped = false;
     connect();
     return () => {
+      stopped = true;
       clearTimeout(retry);
       es?.close();
     };

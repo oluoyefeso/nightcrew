@@ -1,4 +1,14 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { slugify } from "@nightcrew/core";
 
@@ -56,7 +66,37 @@ export async function run(
   }
 }
 
-export const git = (cwd: string, ...args: string[]) => run(["git", ...args], cwd);
+/**
+ * Flags on every git command NightCrew runs: no hooks (a repo's own
+ * core.hooksPath, like husky's, would otherwise run planted scripts during
+ * NightCrew's commits, merges and pushes) and no fsmonitor daemon. `-c`
+ * reaches child git processes too (submodules, a local receive-pack).
+ */
+export const GIT_HARDEN = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
+/** And its environment: replace refs never swap objects, and nothing prompts. */
+export const GIT_ENV: Record<string, string> = { GIT_NO_REPLACE_OBJECTS: "1", GIT_TERMINAL_PROMPT: "0" };
+
+/** Hardened git. Every git command NightCrew runs on the host goes through here. */
+export function gitRun(cwd: string, args: string[], opts: { timeoutMs?: number; signal?: AbortSignal } = {}) {
+  return run(["git", ...GIT_HARDEN, ...args], cwd, { ...opts, env: GIT_ENV });
+}
+
+export const git = (cwd: string, ...args: string[]) => gitRun(cwd, args);
+
+/** One shell word. */
+export function shellQuote(s: string): string {
+  return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Hardened git as a shell command, for running inside the check sandbox. */
+export function gitShell(...args: string[]): string {
+  return ["git", ...GIT_HARDEN, ...args].map(shellQuote).join(" ");
+}
+
+/** The last line of a command's error output, for messages. */
+export function lastLine(s: string): string {
+  return s.trim().split("\n").pop() ?? "";
+}
 
 const repoLocks = new Map<string, Promise<unknown>>();
 
@@ -207,33 +247,6 @@ export function detectPreview(path: string): { command: string; url: string } | 
   return null;
 }
 
-/**
- * Create (or reuse) the worktree for a task branch under <repo>/.worktrees.
- * A branch that already exists, from a sent-back task, is checked out as-is
- * so the crew continues where it left off.
- */
-export function ensureWorktree(repoPath: string, branch: string, base: string): Promise<string> {
-  return withRepoLock(repoPath, () => ensureWorktreeUnlocked(repoPath, branch, base));
-}
-
-async function ensureWorktreeUnlocked(repoPath: string, branch: string, base: string): Promise<string> {
-  const dir = join(repoPath, ".worktrees", slugify(branch.replace(/\//g, "-"), 64));
-  excludeWorktrees(repoPath);
-  if (existsSync(join(dir, ".git"))) {
-    const current = (await git(dir, "branch", "--show-current")).stdout.trim();
-    if (current === branch) return dir;
-    throw new Error(`Worktree ${dir} is on ${current || "a detached HEAD"}, not ${branch}.`);
-  }
-  mkdirSync(join(repoPath, ".worktrees"), { recursive: true });
-  await git(repoPath, "worktree", "prune");
-  const exists = (await git(repoPath, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`)).ok;
-  const add = exists
-    ? await git(repoPath, "worktree", "add", dir, branch)
-    : await git(repoPath, "worktree", "add", "-b", branch, dir, base);
-  if (!add.ok) throw new Error(`Couldn't create a worktree for ${branch}: ${add.stderr.trim()}`);
-  return dir;
-}
-
 /** A throwaway checkout of the base branch, for before-screenshots and fail-then-pass. */
 export function baseWorktree(
   repoPath: string,
@@ -275,33 +288,43 @@ function excludeWorktrees(repoPath: string) {
   } catch {}
 }
 
-export async function currentBranch(dir: string): Promise<string> {
-  return (await git(dir, "branch", "--show-current")).stdout.trim();
+/** Paths from `-z` output. */
+export function nulList(out: string): string[] {
+  return out.split("\0").filter(Boolean);
 }
 
-/** Every file the task changed: committed on the branch, staged, unstaged or new. */
-export async function changedFiles(dir: string, base: string): Promise<string[]> {
-  const committed = (await git(dir, "diff", "--name-only", `${base}...HEAD`)).stdout;
-  const working = (await git(dir, "status", "--porcelain", "--untracked-files=all")).stdout
-    .split("\n")
-    .filter(Boolean)
-    .map((l) => {
-      const p = l.slice(3);
-      return p.includes(" -> ") ? (p.split(" -> ")[1] ?? p) : p;
-    });
-  return [...new Set([...committed.split("\n").filter(Boolean), ...working.map(unquote)])].sort();
+/**
+ * Every file a fetched task commit changes against the pinned base, read by
+ * your repo's own git. The commit must build on the base. Throws rather than
+ * guess: a check that can't run is a failed check.
+ */
+export async function taskChangedFiles(repoPath: string, base: string, sha: string): Promise<string[]> {
+  const anc = await git(repoPath, "merge-base", "--is-ancestor", base, sha);
+  if (anc.code === 1)
+    throw new Error("The task's work doesn't build on the commit it started from, so NightCrew won't trust its diff.");
+  if (!anc.ok) throw new Error(`Couldn't check the task's history: ${lastLine(anc.stderr)}`);
+  // --no-renames: a rename would otherwise list only the new path and hide the old one.
+  const d = await git(repoPath, "diff", "--name-only", "-z", "--no-renames", base, sha);
+  if (!d.ok) throw new Error(`Couldn't list the task's changed files: ${lastLine(d.stderr)}`);
+  return [...new Set(nulList(d.stdout))].sort();
 }
 
-function unquote(p: string) {
-  return p.startsWith('"') && p.endsWith('"') ? JSON.parse(p) : p;
-}
-
-/** Content hash of each file (or "missing"), to tell setup's changes from the agent's. */
+/** Content hash of each file (or "missing"), to tell setup's changes from the agent's. Never follows a symlink. */
 export async function fingerprints(dir: string, files: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   for (const f of files) {
-    const r = await git(dir, "hash-object", "--", f);
-    out.set(f, r.ok ? r.stdout.trim() : "missing");
+    if (isAbsolute(f) || f.split("/").includes("..")) {
+      out.set(f, "missing");
+      continue;
+    }
+    try {
+      const p = join(dir, f);
+      const st = lstatSync(p);
+      const hash = (data: string | Uint8Array) => new Bun.CryptoHasher("sha1").update(data).digest("hex");
+      out.set(f, st.isSymbolicLink() ? `link:${hash(readlinkSync(p))}` : st.isFile() ? hash(readFileSync(p)) : "other");
+    } catch {
+      out.set(f, "missing");
+    }
   }
   return out;
 }
@@ -316,20 +339,13 @@ export async function untouchedSetupFiles(dir: string, setup: Map<string, string
   return new Set([...setup].filter(([f, hash]) => now.get(f) === hash).map(([f]) => f));
 }
 
-/** Put setup-only files back: restore tracked ones, delete new ones. */
-export async function dropSetupFiles(dir: string, setup: Map<string, string>): Promise<void> {
-  for (const f of await untouchedSetupFiles(dir, setup)) {
-    const tracked = (await git(dir, "ls-files", "--error-unmatch", "--", f)).ok;
-    if (tracked) await git(dir, "checkout", "--", f);
-    else await run(["rm", "-f", "--", f], dir);
-  }
-}
-
+/** Lines added and removed between two commits. */
 export async function diffStat(
   dir: string,
   base: string,
+  head: string,
 ): Promise<{ additions: number; deletions: number; files: number }> {
-  const out = (await git(dir, "diff", "--numstat", base)).stdout;
+  const out = (await git(dir, "diff", "--numstat", "--no-renames", base, head)).stdout;
   let additions = 0;
   let deletions = 0;
   let files = 0;
@@ -342,51 +358,38 @@ export async function diffStat(
   return { additions, deletions, files };
 }
 
-export async function commitAll(dir: string, message: string): Promise<boolean> {
-  await git(dir, "add", "-A");
-  const staged = await git(dir, "diff", "--cached", "--quiet");
-  if (staged.ok) return false; // nothing to commit
-  const c = await git(
-    dir,
-    "-c",
-    "user.name=NightCrew",
-    "-c",
-    "user.email=crew@nightcrew.dev",
-    "commit",
-    "-m",
-    message,
-    "--no-verify",
-  );
-  if (!c.ok) throw new Error(`git commit failed: ${c.stderr.trim()}`);
-  return true;
+export async function commitsAhead(dir: string, base: string, head = "HEAD"): Promise<number> {
+  return Number((await git(dir, "rev-list", "--count", `${base}..${head}`)).stdout.trim()) || 0;
 }
 
-export async function commitsAhead(dir: string, base: string): Promise<number> {
-  return Number((await git(dir, "rev-list", "--count", `${base}..HEAD`)).stdout.trim()) || 0;
+/** The commit a ref points at, or null. */
+export async function resolveSha(dir: string, ref: string): Promise<string | null> {
+  const r = await git(dir, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`);
+  return r.ok ? r.stdout.trim() : null;
 }
 
 /**
  * The commit a task branch forked from. Diffs and scope checks use this sha,
  * not the default branch's name, so moving the local default branch can't
- * hide a change. Computed on the host before any agent runs.
+ * hide a change. Computed in your repo before any agent runs. `head` is the
+ * task's tip, or null for a task that hasn't started.
  */
-export async function forkPoint(dir: string, defaultBranch: string): Promise<string> {
-  const sha = async (ref: string) => {
-    const r = await git(dir, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`);
-    return r.ok ? r.stdout.trim() : null;
-  };
-  const head = await sha("HEAD");
+export async function forkPoint(dir: string, defaultBranch: string, head: string | null = "HEAD"): Promise<string> {
+  const tip = head ? await resolveSha(dir, head) : null;
+  const local = await resolveSha(dir, `refs/heads/${defaultBranch}`);
+  const remote = await resolveSha(dir, `refs/remotes/origin/${defaultBranch}`);
   // A fresh branch sits exactly on the default branch it was made from.
-  if (head && head === (await sha(`refs/heads/${defaultBranch}`))) return head;
+  if (!tip || tip === local) return local ?? remote ?? defaultBranch;
   for (const ref of [`refs/remotes/origin/${defaultBranch}`, `refs/heads/${defaultBranch}`]) {
-    const mb = await git(dir, "merge-base", ref, "HEAD");
+    const mb = await git(dir, "merge-base", ref, tip);
     if (mb.ok && mb.stdout.trim()) return mb.stdout.trim();
   }
-  return (await sha(defaultBranch)) ?? defaultBranch;
+  return local ?? remote ?? defaultBranch;
 }
 
-export async function push(dir: string, branch: string, timeoutMs?: number): Promise<Exec> {
-  return run(["git", "push", "-u", "origin", branch], dir, { timeoutMs });
+/** Push a commit (by sha) or ref to origin's `branch`, never by a short name git could resolve elsewhere. */
+export async function pushTo(dir: string, src: string, branch: string, timeoutMs?: number): Promise<Exec> {
+  return gitRun(dir, ["push", "--quiet", "--no-verify", "origin", `${src}:refs/heads/${branch}`], { timeoutMs });
 }
 
 export interface PrRef {
@@ -404,7 +407,8 @@ export async function openOrUpdatePr(
     dir,
   );
   const list = existing.ok ? (JSON.parse(existing.stdout || "[]") as PrRef[]) : [];
-  const bodyFile = join(dir, "..", `.pr-body-${slugify(input.branch)}.md`);
+  const tmp = mkdtempSync(join(tmpdir(), "nightcrew-pr-"));
+  const bodyFile = join(tmp, `${slugify(input.branch)}.md`);
   await Bun.write(bodyFile, input.body);
   try {
     if (list[0]) {
@@ -432,9 +436,7 @@ export async function openOrUpdatePr(
     const url = created.stdout.trim().split("\n").pop() ?? "";
     return { url, number: Number(url.split("/").pop()) || 0 };
   } finally {
-    await Bun.file(bodyFile)
-      .delete()
-      .catch(() => {});
+    rmSync(tmp, { recursive: true, force: true });
   }
 }
 

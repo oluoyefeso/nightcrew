@@ -18,7 +18,7 @@ nightcrew repo add
 NightCrew reads the repo and fills in what it can:
 
 - **tests**: `bun run test`, `npm test`, `cargo test`, `go test ./...`, `pytest -q` or `make test`
-- **install**: `bun install --frozen-lockfile`, `npm ci` and so on, run in each fresh worktree
+- **install**: `bun install --frozen-lockfile`, `npm ci` and so on, run in each task's fresh clone
 - **preview**: how to start the app for UI screenshots (Vite, Next, Astro, any `dev` script, or `static` for plain HTML)
 
 Check them in **Settings → Repos**. Without a test command, NightCrew can't verify the crew's work. Without a preview command, UI tasks have no screenshots and always land in Needs your eyes.
@@ -29,7 +29,9 @@ Check them in **Settings → Repos**. Without a test command, NightCrew can't ve
 nightcrew
 ```
 
-It opens at `http://localhost:3721`. While it runs, agents pick up work as soon as it's queued. Your data lives in `~/.nightcrew`.
+It prints a link like `http://localhost:3721/?t=…` and opens it in your browser. The link carries a key that changes every launch, so only it opens the dashboard. With `--no-open`, or after a restart, open the link it just printed; an old tab shows a page saying so.
+
+While it runs, agents pick up work as soon as it's queued. Your data lives in `~/.nightcrew`. Each task runs in its own clone of the repo under `~/.nightcrew/work` and lands back in your repo as a commit.
 
 ## 4. Give the agents work
 

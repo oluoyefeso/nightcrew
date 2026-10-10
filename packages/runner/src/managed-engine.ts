@@ -1,7 +1,9 @@
 // Runs a phase on Claude Managed Agents: an Anthropic-hosted agent working in
-// a cloud sandbox with the task's GitHub repo mounted. The agent pushes its
-// commits to the task branch; afterwards the local worktree fast-forwards to
-// them, so the rest of the pipeline (checks, evidence, landing) is unchanged.
+// a cloud sandbox with the task's GitHub repo mounted. NightCrew pushes the
+// task's starting point from your repo, by sha; the agent pushes its commits
+// to the task branch; afterwards they're fetched into your repo and the
+// task's clone is updated from there (inside the check sandbox), so the rest
+// of the pipeline (checks, evidence, landing) is unchanged.
 
 import Anthropic from "@anthropic-ai/sdk";
 import type {
@@ -37,8 +39,9 @@ import {
   STOPPED,
   stoppedResult,
 } from "./engine";
-import { git, run } from "./git";
+import { git, gitRun, pushTo, resolveSha } from "./git";
 import { withRepoInstructions } from "./sdk-engine";
+import { fetchTask, pullIntoClone, taskRef, type Workspace, workspaceFor } from "./workspace";
 
 /** The slice of the Anthropic client this engine uses. Tests pass a fake. */
 export interface ManagedAgentsClient {
@@ -125,19 +128,33 @@ export class ManagedEngine implements AgentEngine {
       req.outputSchema && req.phase === "compose" ? "no-tools" : req.guard.readOnly ? "read-only" : "write";
     const writes = kind === "write";
 
-    // Where the work happens: the task's GitHub repo and branch.
+    // Where the work happens: the task's GitHub repo and branch. A task's
+    // clone has no remote and NightCrew runs no git in it, so all of this goes
+    // through your repo. Only a folder NightCrew didn't set up (a plain
+    // checkout) is used directly.
     let repo: { url: string; mountPath: string; branch: string } | null = null;
+    const ws = workspaceFor(req.cwd);
+    let startSha: string | null = null;
     if (req.phase !== "compose") {
-      const url = await githubRepoUrl(req.cwd);
+      const gitDir = ws?.repoPath ?? req.cwd;
+      const url = await githubRepoUrl(gitDir);
       if (!url) return fail(result, "The cloud engine needs the repo to have a GitHub remote named origin.");
-      const branch = (await git(req.cwd, "branch", "--show-current")).stdout.trim();
+      const branch = ws ? ws.branch : (await git(req.cwd, "branch", "--show-current")).stdout.trim();
       if (!branch) return fail(result, "The cloud engine needs the worktree to be on a branch, not a detached HEAD.");
       if (req.guard.protectedBranches.includes(branch))
         return fail(result, `Branch "${branch}" is protected. The cloud engine only works on task branches.`);
+      if (ws) {
+        try {
+          startSha = await fetchTask(ws);
+        } catch (e) {
+          return fail(
+            result,
+            `Couldn't push the task branch for the cloud session: ${e instanceof Error ? e.message : e}`,
+          );
+        }
+      }
       // The sandbox clones from GitHub, so it can only check out what's there.
-      const push = await run(["git", "push", "origin", `HEAD:refs/heads/${branch}`], req.cwd, {
-        timeoutMs: GIT_TIMEOUT_MS,
-      });
+      const push = await pushTo(gitDir, startSha ?? "HEAD", branch, GIT_TIMEOUT_MS);
       if (!push.ok)
         return fail(result, `Couldn't push the task branch for the cloud session: ${lastLine(push.stderr)}`);
       repo = { url, mountPath: `/workspace/${url.split("/").pop()}`, branch };
@@ -330,11 +347,12 @@ export class ManagedEngine implements AgentEngine {
       }
     }
 
-    // Bring the cloud's commits into the local worktree.
+    // Bring the cloud's commits into the task's clone.
     if (writes && repo && sessionId) {
-      const fetched = await run(["git", "fetch", "origin", repo.branch], req.cwd, { timeoutMs: GIT_TIMEOUT_MS });
-      const merged = fetched.ok ? await git(req.cwd, "merge", "--ff-only", `origin/${repo.branch}`) : fetched;
-      if (!merged.ok && result.ok) {
+      const pulled = ws
+        ? await pullCloudWork(ws, repo.branch, startSha)
+        : await pullCloudWorkHere(req.cwd, repo.branch);
+      if (!pulled && result.ok) {
         result.ok = false;
         result.error = "The cloud session's changes couldn't be pulled cleanly.";
       }
@@ -559,6 +577,37 @@ function describeSessionError(err: BetaManagedAgentsSessionErrorEvent["error"] |
 function fail(result: PhaseResult, error: string): PhaseResult {
   result.error = error;
   return result;
+}
+
+/**
+ * Fetch the cloud's commits on the task branch into your repo, refuse
+ * anything that doesn't build on where the session started, then move the
+ * clone there from inside the sandbox.
+ */
+async function pullCloudWork(ws: Workspace, branch: string, startSha: string | null): Promise<boolean> {
+  const ref = taskRef(ws.taskId);
+  const fetched = await gitRun(
+    ws.repoPath,
+    ["fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "origin", `+refs/heads/${branch}:${ref}`],
+    { timeoutMs: GIT_TIMEOUT_MS },
+  );
+  if (!fetched.ok) return false;
+  const sha = await resolveSha(ws.repoPath, ref);
+  if (!sha || (startSha && !(await git(ws.repoPath, "merge-base", "--is-ancestor", startSha, sha)).ok)) {
+    // Put back the last good copy of the clone's work.
+    if (startSha) await git(ws.repoPath, "update-ref", ref, startSha);
+    return false;
+  }
+  return (await pullIntoClone(ws, ref)).ok;
+}
+
+/** The same for a plain checkout NightCrew didn't set up: fetch and fast-forward in place. */
+async function pullCloudWorkHere(cwd: string, branch: string): Promise<boolean> {
+  const tracking = `refs/remotes/origin/${branch}`;
+  const fetched = await gitRun(cwd, ["fetch", "--quiet", "--no-tags", "origin", `+refs/heads/${branch}:${tracking}`], {
+    timeoutMs: GIT_TIMEOUT_MS,
+  });
+  return fetched.ok && (await git(cwd, "merge", "--ff-only", "--quiet", tracking)).ok;
 }
 
 /**

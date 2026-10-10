@@ -56,7 +56,7 @@ export function AgentsPage() {
         <section className="grid gap-4 rounded-2xl bg-surface p-6 ring-1 ring-line">
           <h2 className="t-h3">Where should the crew work?</h2>
           <p className="text-[14px] text-muted">
-            Add a git repository on this machine. Each agent works in its own worktree and never touches your checkout.
+            Add a git repository on this machine. Each agent works in its own clone and never touches your checkout.
           </p>
           <AddRepo />
         </section>

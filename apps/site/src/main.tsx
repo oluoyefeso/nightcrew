@@ -411,7 +411,7 @@ function Site() {
                 [
                   "In parallel · Agents work",
                   "Inside guardrails",
-                  "Several agents at once, each in its own git worktree and isolated Claude session, within your per-repo limits and daily budget. Every tool call passes a guard: no pushes, no secrets, nothing outside scope.",
+                  "Several agents at once, each in its own clone of the repo and an isolated, sandboxed Claude session, within your per-repo limits and daily budget. Every tool call passes a guard: no pushes, no secrets, nothing outside scope.",
                 ],
                 [
                   "As they finish · Report back",

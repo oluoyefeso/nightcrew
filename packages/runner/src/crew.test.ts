@@ -127,6 +127,26 @@ describe("dispatcher", () => {
     }
   });
 
+  test("when processes can't be inspected (no ps), a live owner keeps its lock", async () => {
+    // Value: protects=on a box without ps (busybox, slim containers) a live dashboard's lock is honoured, so two dispatchers never run the same queue; fails_when=ownsLock treats an empty process probe as stale again; why_new=W2 a null probe marked every live owner stale; seam=none
+    const data = join(dir, "lockdata");
+    mkdirSync(data, { recursive: true });
+    const lockFile = join(data, "crew.lock");
+    const noPs = () => null;
+    const owner = Bun.spawn(["sleep", "30"]);
+    try {
+      writeFileSync(lockFile, JSON.stringify({ pid: owner.pid, startedAt: new Date().toISOString(), nonce: "theirs" }));
+      expect(takeCrewLock(data, noPs)).toEqual({ ok: false, pid: owner.pid, file: lockFile });
+    } finally {
+      owner.kill();
+      await owner.exited;
+    }
+    // Once the owner is gone, the lock is stale even without ps.
+    const mine = takeCrewLock(data, noPs);
+    expect(mine.ok).toBe(true);
+    if (mine.ok) mine.release();
+  });
+
   test("shutting down puts in-flight work back in the queue and publishes nothing", async () => {
     // Value: protects=Ctrl-C requeues the running task, starts nothing new and never pushes a train on the way out; fails_when=Crew.finished treats a shutdown stop like a finished run (task marked done, retry or publishTrains runs); why_new=the first Ctrl-C used to mark in-flight tasks done and could git push during shutdown; seam=none
     const a = await repo("a");
@@ -182,7 +202,24 @@ describe("dispatcher", () => {
     expect(after?.status).toBe("queued");
     expect(new Date(after?.runAt ?? 0).getTime()).toBeGreaterThan(Date.now());
     expect(crew.getStatus().message).toContain("crashed");
+    expect(crew.getStatus().message).toContain("next `nightcrew run` or dashboard start");
     expect(crew.getStatus().scheduled).toBe(1);
+  });
+
+  test("a crash under the dashboard's schedule promises the 10-minute retry", async () => {
+    // Value: protects=the crash message only promises a retry in 10 minutes when a schedule will actually pick it up; fails_when=the message ignores whether the crew keeps ticking, telling `nightcrew run` users it retries in 10 minutes after the process has exited; why_new=W3 the message was the same for both modes; seam=none
+    const r = await repo("a");
+    createTask(db, { repoId: r.id, title: "Crashy", scope: ["src/**"], status: "queued" });
+    const dataDir = join(dir, "data-file");
+    writeFileSync(dataDir, "not a folder");
+    const crew = new Crew({ db, engine: new ScriptedEngine({}), dataDir, publish: false });
+    crew.startSchedule();
+    try {
+      await crew.drain();
+      expect(crew.getStatus().message).toContain("tries again in 10 minutes");
+    } finally {
+      crew.stopSchedule();
+    }
   });
 
   test("runs agents in parallel across repos, one per repo by default", async () => {
@@ -255,6 +292,27 @@ describe("dispatcher", () => {
     await crew.drain();
     expect(log.order).toHaveLength(1);
     expect(crew.getStatus().message).toContain("budget");
+  });
+
+  test("a task whose budget is above the whole daily budget is skipped, not held in front of the rest", async () => {
+    // Value: protects=one task that can never fit the daily budget doesn't stall the queue behind it, and the crew says which task and what to change; fails_when=pump breaks on the oversized task (holding everything forever) or launches it anyway; why_new=W1 the hold path broke on a task that could never start; seam=none
+    updateSettings(db, { dailyTokenBudget: 600_000, maxAgents: 1 });
+    const a = await repo("a");
+    // The API refuses this, but an old task or a since-lowered budget can leave one behind.
+    const big = createTask(db, {
+      repoId: a.id,
+      title: "Huge",
+      scope: ["src/**"],
+      status: "queued",
+      tokenBudget: 2_000_000,
+    });
+    createTask(db, { repoId: a.id, title: "Small", scope: ["src/**"], status: "queued", tokenBudget: 100_000 });
+    const log = { concurrent: 0, peak: 0, order: [] as string[] };
+    const crew = crewWith(slowEngine(10, log));
+    await crew.drain();
+    expect(log.order).toEqual(["Small"]);
+    expect(getTask(db, big.id)?.status).toBe("queued");
+    expect(crew.getStatus().message).toBe('"Huge" needs a bigger daily budget than 600k tokens; raise one of them.');
   });
 
   test("paused dispatch starts nothing", async () => {

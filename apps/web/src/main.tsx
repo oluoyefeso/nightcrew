@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, createRoute, createRouter, RouterProvider, redirect } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { shouldRetry } from "./api";
 import { Shell } from "./components/shell";
 import { AgentsPage } from "./routes/agents";
 import { LaterPage } from "./routes/later";
@@ -86,7 +87,7 @@ declare module "@tanstack/react-router" {
 }
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: true } },
+  defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: true, retry: shouldRetry } },
 });
 
 const root = document.getElementById("root");

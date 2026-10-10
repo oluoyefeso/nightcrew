@@ -4,15 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as realSdk from "@anthropic-ai/claude-agent-sdk";
 import { type PhaseRequest, STOPPED } from "./engine";
+import { cacheDirs } from "./env";
 import { git, run } from "./git";
 import { agentEnv, SdkEngine, sandboxFor } from "./sdk-engine";
 
 // query() can be swapped for a scripted stream. Unset, it is the real SDK, so
-// other test files sharing this process are unaffected.
+// other test files sharing this process are unaffected. mock.module patches
+// the imported namespace in place, so the real exports are copied first;
+// calling realSdk.query inside the mock would call the mock again.
+const real = { ...realSdk };
 let scripted: ((args: unknown) => AsyncGenerator<unknown>) | null = null;
 mock.module("@anthropic-ai/claude-agent-sdk", () => ({
-  ...realSdk,
-  query: (args: Parameters<typeof realSdk.query>[0]) => (scripted ? scripted(args) : realSdk.query(args)),
+  ...real,
+  query: (args: Parameters<typeof real.query>[0]) => (scripted ? scripted(args) : real.query(args)),
 }));
 
 let root: string;
@@ -124,7 +128,7 @@ describe("SdkEngine", () => {
     expect((await run(["git", "remote", "get-url", "origin"], repo, { env })).stdout.trim()).toBe("gh:acme/widgets");
   });
 
-  // Value: protects=GitHub, cloud and registry tokens from the agent's shell; fails_when=agentEnv copies credentials or drops the Anthropic sign-in; why_new=the env was copied wholesale before; seam=none
+  // Value: protects=GitHub, cloud and registry tokens from the agent's shell, while config like AWS_PROFILE stays; fails_when=agentEnv copies credentials or drops the Anthropic sign-in; why_new=the env was copied wholesale before; seam=none
   test("the agent's environment drops credentials and keeps the Anthropic sign-in", () => {
     const env = agentEnv({
       PATH: "/bin",
@@ -148,7 +152,7 @@ describe("SdkEngine", () => {
     });
     const kept = Object.keys(env).filter((k) => !k.startsWith("GIT_"));
     expect(kept.sort()).toEqual(
-      ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN", "HOME", "PATH"].sort(),
+      ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "AWS_PROFILE", "CLAUDE_CODE_OAUTH_TOKEN", "HOME", "PATH"].sort(),
     );
     expect(env.ANTHROPIC_API_KEY).toBe("sk-ant");
   });
@@ -223,6 +227,19 @@ describe("SdkEngine", () => {
       expect(deny).toContain(p);
     expect(deny.filter((p) => p.includes("crew/x"))).toEqual([]);
     expect(existsSync(join(common, "refs/heads/crew"))).toBe(true);
+  });
+
+  // Value: protects=git in a task's standalone clone (commit, stash, submodules, lfs), which shares nothing writable with the host repo; fails_when=a clone still gets the linked-worktree deny list, or the host repo it borrows objects from becomes writable; why_new=design point 9, clones replace linked worktrees; seam=none
+  test("in a standalone clone the sandbox allows all of it, with no git denies", async () => {
+    const clone = join(root, "work", "task-1");
+    await git(root, "clone", "-q", "--shared", repo, clone);
+    const artifacts = join(root, "artifacts");
+    const guard = { ...request().guard, worktree: clone, writableDirs: [artifacts] };
+    const s = sandboxFor(request({ cwd: clone, guard }), "/home/me");
+    const allow = s.filesystem?.allowWrite ?? [];
+    expect(allow).toEqual([clone, artifacts, tmpdir(), ...cacheDirs("/home/me")]);
+    expect(s.filesystem?.denyWrite).toBeUndefined();
+    expect(allow.some((p) => p.startsWith(join(repo, ".git")))).toBe(false);
   });
 
   // Value: protects=the repo's own refs when a phase runs in the main checkout; fails_when=the main checkout's .git is left writable under cwd; why_new=only hooks and config were denied there before; seam=none

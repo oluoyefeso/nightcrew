@@ -210,6 +210,18 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
       return c.json({ error: "Pick a repo for the task." }, 400);
     const err = validateLimits(db, clean);
     if (err) return c.json({ error: err }, 400);
+    // Queueing (or Run now) a task that can never fit the daily budget would only stall it.
+    if (clean.status === "queued" || (clean.runAt !== undefined && (clean.status ?? current.status) === "queued")) {
+      const budget = clean.tokenBudget ?? current.tokenBudget;
+      const daily = getSettings(db).dailyTokenBudget;
+      if (budget > daily)
+        return c.json(
+          {
+            error: `This task's budget (${formatTokens(budget)} tokens) is above the daily budget of ${formatTokens(daily)}, so it could never start. Lower it, or raise the daily budget in Settings.`,
+          },
+          400,
+        );
+    }
     const updated = updateTask(db, id, clean);
     void crew.pump();
     return c.json(updated);
@@ -334,12 +346,13 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
     )
       return c.json({ error: "The daily token budget must be a whole number of at least 100k." }, 400);
     if (patch.dailyTokenBudget !== undefined) {
-      // A task whose budget is above the daily budget could never start.
+      // A task whose budget is above the daily budget could never start. Done
+      // and running tasks count too: they can be queued again.
       const daily = patch.dailyTokenBudget;
-      const over = listTasks(db, ["draft", "queued", "later"]).filter((t) => t.tokenBudget > daily);
+      const over = listTasks(db).filter((t) => t.status !== "archived" && t.tokenBudget > daily);
       if (over.length) {
         const most = Math.max(...over.map((t) => t.tokenBudget));
-        const n = over.length === 1 ? "1 waiting task has" : `${over.length} waiting tasks have`;
+        const n = over.length === 1 ? "1 task has" : `${over.length} tasks have`;
         return c.json(
           {
             error: `${n} a budget above ${formatTokens(daily)} tokens. Lower ${over.length === 1 ? "it" : "them"} first, or keep the daily budget at ${formatTokens(most)} or more.`,
@@ -403,14 +416,22 @@ export function isProtectedBranch(repo: Pick<Repo, "defaultBranch" | "protectedB
   return [repo.defaultBranch, "main", "master", ...(repo.protectedBranches ?? [])].includes(branch);
 }
 
-/** Why a repo can't use Ship to dev yet, or null when it can. Settings and promote share this rule. */
+/**
+ * Why a repo can't use Ship to dev yet, or null when it can. Settings and
+ * promote share this rule; from promote (the trust panel) the message says
+ * where to fix it.
+ */
 export function shipBlocker(
   repo: Pick<Repo, "defaultBranch" | "protectedBranches" | "shipBranch" | "allowShip">,
+  from: "settings" | "promote" = "settings",
 ): string | null {
+  const where = from === "promote" ? " in Settings" : "";
   if (repo.shipBranch && isProtectedBranch(repo, repo.shipBranch))
-    return `${repo.shipBranch} is protected. Pick a branch like dev or staging.`;
+    return `${repo.shipBranch} is protected. Pick a branch like dev or staging${where}.`;
   if (!repo.shipBranch || !repo.allowShip?.length)
-    return "Set a ship branch and the paths allowed to ship before choosing Ship to dev.";
+    return from === "promote"
+      ? "Set a ship branch and the paths allowed to ship in Settings before promoting to Ship to dev."
+      : "Set a ship branch and the paths allowed to ship before choosing Ship to dev.";
   return null;
 }
 

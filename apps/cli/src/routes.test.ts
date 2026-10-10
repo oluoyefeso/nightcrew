@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addRepo, createTask, type Db, getRepo, getSettings, getTask, openDb } from "@nightcrew/db";
+import { addRepo, createTask, type Db, getRepo, getSettings, getTask, openDb, updateTask } from "@nightcrew/db";
 import { Crew, ScriptedEngine } from "@nightcrew/runner";
 import { Hono } from "hono";
 import { mountTaskRoutes } from "./routes";
@@ -121,20 +121,22 @@ describe("PATCH /api/settings budgets, dispatch and models", () => {
     }
   });
 
-  // Value: protects=the daily budget can't drop below a waiting task's budget, and the refusal names how many tasks are in the way; fails_when=the waiting-task check is dropped and those tasks are held forever; why_new=lowering the daily budget silently stranded tasks; seam=none
-  test("a daily budget below a waiting task's budget is refused", async () => {
+  // Value: protects=the daily budget can't drop below any non-archived task's budget (done tasks can be queued again), and the refusal names how many tasks are in the way; fails_when=the check is dropped or narrowed back to waiting tasks, so a requeued done task is held forever; why_new=lowering the daily budget silently stranded tasks, then W1 widened it past draft/queued/later; seam=none
+  test("a daily budget below a task's budget is refused", async () => {
     const repo = addRepo(db, { name: "acme", path: "/code/acme", defaultBranch: "main" });
     createTask(db, { repoId: repo.id, title: "A", status: "queued", tokenBudget: 1_000_000 });
     createTask(db, { repoId: repo.id, title: "B", status: "later", tokenBudget: 800_000 });
-    createTask(db, { repoId: repo.id, title: "C", status: "done", tokenBudget: 5_000_000 });
+    createTask(db, { repoId: repo.id, title: "C", status: "done", tokenBudget: 1_200_000 });
+    createTask(db, { repoId: repo.id, title: "D", status: "archived", tokenBudget: 5_000_000 });
     const before = getSettings(db);
     const res = await patch({ dailyTokenBudget: 500_000 });
     expect(res.status).toBe(400);
     expect(await errorOf(res)).toBe(
-      "2 waiting tasks have a budget above 500k tokens. Lower them first, or keep the daily budget at 1M or more.",
+      "3 tasks have a budget above 500k tokens. Lower them first, or keep the daily budget at 1.2M or more.",
     );
     expect(getSettings(db)).toEqual(before);
-    expect((await patch({ dailyTokenBudget: 1_000_000 })).status).toBe(200);
+    expect((await patch({ dailyTokenBudget: 1_000_000 })).status).toBe(400);
+    expect((await patch({ dailyTokenBudget: 1_200_000 })).status).toBe(200);
   });
 
   test("model names are saved trimmed", async () => {
@@ -273,6 +275,33 @@ describe("task status, budgets and timing", () => {
     expect((await send("PATCH", `/api/tasks/${t.id}`, { runAt: "tomorrow-ish" })).status).toBe(400);
     expect((await send("PATCH", `/api/tasks/${t.id}`, { workflow: "fast" })).status).toBe(400);
     expect(getTask(db, t.id)).toMatchObject({ runAt: at, workflow: "quick" });
+  });
+
+  // Value: protects=Run now or requeue can't put a task in the queue whose budget is above the daily budget (it would never start); fails_when=the PATCH queue check is dropped or checks the stored budget instead of the one in the patch; why_new=W1 such a task could be queued and sit there forever; seam=none
+  test("queueing a task whose budget is above the daily budget is refused", async () => {
+    // Paused, so the crew doesn't pick the task up between requests.
+    await patch({ dailyTokenBudget: 1_200_000, dispatch: false });
+    const r = repo();
+    // The API refuses this budget, but an old task can still have one.
+    const big = createTask(db, { repoId: r.id, title: "Big", status: "done", tokenBudget: 3_000_000 });
+
+    const requeue = await send("PATCH", `/api/tasks/${big.id}`, { status: "queued" });
+    expect(requeue.status).toBe(400);
+    expect(await errorOf(requeue)).toBe(
+      "This task's budget (3M tokens) is above the daily budget of 1.2M, so it could never start. Lower it, or raise the daily budget in Settings.",
+    );
+    expect(getTask(db, big.id)?.status).toBe("done");
+
+    // Lowering the budget in the same patch is fine.
+    const fixed = await send("PATCH", `/api/tasks/${big.id}`, { status: "queued", tokenBudget: 1_000_000 });
+    expect(fixed.status).toBe(200);
+    expect(getTask(db, big.id)).toMatchObject({ status: "queued", tokenBudget: 1_000_000 });
+
+    // Run now on an already-queued task is checked too.
+    updateTask(db, big.id, { tokenBudget: 3_000_000 });
+    expect((await send("PATCH", `/api/tasks/${big.id}`, { runAt: null })).status).toBe(400);
+    // Other edits still save.
+    expect((await send("PATCH", `/api/tasks/${big.id}`, { title: "Renamed" })).status).toBe(200);
   });
 
   // Value: protects=moving a task to a missing repo is a 400 and notes on a missing task are a 404, not foreign-key 500s; fails_when=either existence check is dropped; why_new=both crashed in sqlite; seam=none

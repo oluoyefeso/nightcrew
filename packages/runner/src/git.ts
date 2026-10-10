@@ -69,12 +69,35 @@ export async function run(
 /**
  * Flags on every git command NightCrew runs: no hooks (a repo's own
  * core.hooksPath, like husky's, would otherwise run planted scripts during
- * NightCrew's commits, merges and pushes) and no fsmonitor daemon. `-c`
- * reaches child git processes too (submodules, a local receive-pack).
+ * NightCrew's commits, merges and pushes), no fsmonitor daemon, no git-lfs
+ * downloads on checkout or merge, and no submodule recursion. `-c` reaches
+ * child git processes in the same repo, submodules included. It does not
+ * reach a local upload-pack or receive-pack: git starts those with the other
+ * repo's own config.
  */
-export const GIT_HARDEN = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
-/** And its environment: replace refs never swap objects, and nothing prompts. */
-export const GIT_ENV: Record<string, string> = { GIT_NO_REPLACE_OBJECTS: "1", GIT_TERMINAL_PROMPT: "0" };
+export const GIT_HARDEN = [
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "filter.lfs.process=",
+  "-c",
+  "filter.lfs.smudge=cat",
+  "-c",
+  "filter.lfs.required=false",
+  "-c",
+  "submodule.recurse=false",
+];
+/** And its environment: replace refs never swap objects, git-lfs never downloads, and nothing prompts. */
+export const GIT_ENV: Record<string, string> = {
+  GIT_NO_REPLACE_OBJECTS: "1",
+  GIT_LFS_SKIP_SMUDGE: "1",
+  GIT_TERMINAL_PROMPT: "0",
+};
+
+/** For fetches of commits NightCrew didn't make: check every object that comes in. */
+export const FETCH_FSCK = ["-c", "fetch.fsckObjects=true", "-c", "transfer.fsckObjects=true"];
 
 /** Hardened git. Every git command NightCrew runs on the host goes through here. */
 export function gitRun(cwd: string, args: string[], opts: { timeoutMs?: number; signal?: AbortSignal } = {}) {
@@ -102,16 +125,32 @@ const repoLocks = new Map<string, Promise<unknown>>();
 
 /**
  * Run git admin work (worktrees, trains, ships) for one repo at a time, so
- * parallel agents never race on .git/worktrees or an integration branch.
+ * parallel agents never race on .git/worktrees or an integration branch. A
+ * stop while waiting gives up the wait, and `fn` never runs.
  */
-export function withRepoLock<T>(repoPath: string, fn: () => Promise<T>): Promise<T> {
+export function withRepoLock<T>(repoPath: string, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   const prev = repoLocks.get(repoPath) ?? Promise.resolve();
-  const next = prev.then(fn, fn);
+  let started = false;
+  const go = () => {
+    if (signal?.aborted) return Promise.reject(new Error("Stopped."));
+    started = true;
+    return fn();
+  };
+  const next = prev.then(go, go);
   repoLocks.set(
     repoPath,
     next.catch(() => {}),
   );
-  return next;
+  if (!signal) return next;
+  return new Promise<T>((resolve, reject) => {
+    // Once `fn` has the lock it finishes; only the wait is given up.
+    const onAbort = () => {
+      if (!started) reject(new Error("Stopped."));
+    };
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+    next.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
 }
 
 export interface RepoInfo {

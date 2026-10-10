@@ -7,6 +7,11 @@ import { type GuardContext, guardToolCall } from "@nightcrew/core/guard";
 export interface PhaseRequest {
   phase: "plan" | "implement" | "repair" | "review" | "compose" | "research";
   cwd: string;
+  /**
+   * cwd is a task's standalone clone. Set by NightCrew from its own records,
+   * never by looking at files in cwd, which the agent can change.
+   */
+  isolated?: boolean;
   prompt: string;
   systemPrompt: string;
   model: string;

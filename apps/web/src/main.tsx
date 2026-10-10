@@ -5,6 +5,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { shouldRetry } from "./api";
 import { Shell } from "./components/shell";
+import { resumeReturnPath } from "./pending";
 import { AgentsPage } from "./routes/agents";
 import { LaterPage } from "./routes/later";
 import { ReportPage } from "./routes/report";
@@ -65,6 +66,9 @@ const runRoute = createRoute({
     return <RunPage runId={runId} />;
   },
 });
+
+// Back to the page a restart's reload left edits on, before the router reads the URL.
+resumeReturnPath();
 
 const router = createRouter({
   routeTree: rootRoute.addChildren([

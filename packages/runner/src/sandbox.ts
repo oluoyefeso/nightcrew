@@ -1,9 +1,9 @@
 // Repo commands (setup, tests, previews) and NightCrew's git inside a task's
 // clone run in a sandbox: they can write to their own clone or worktree, temp
-// dirs and package caches, and nowhere else. They also get an environment
-// without credentials (see env.ts).
+// dirs and package caches, and nowhere else. They start without NightCrew's
+// terminal and get an environment without credentials (see env.ts).
 
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { cacheDirs, childEnv } from "./env";
@@ -35,68 +35,20 @@ function real(p: string): string {
   }
 }
 
-interface GitPaths {
-  /** The linked worktree's .git pointer file. */
-  pointer: string | null;
-  /** The linked worktree's own git dir, `<common>/worktrees/<name>`. */
-  gitdir: string | null;
-  /** The shared git dir of a linked worktree's repo. */
-  common: string | null;
-  /** Object dirs a clone borrows through alternates (`git clone --shared`). */
-  alternates: string[];
+/** Where a check runs. A task's clone is decided by NightCrew's records, never by files in the dir. */
+export interface CheckPlace {
+  /** The dir is a task's clone: the agent owns all of it, `.git` included. */
+  clone?: boolean;
 }
 
 /**
- * Where a worktree's git data lives. A standalone clone (`.git` is a folder)
- * owns all of it, inside the worktree. A linked worktree (`.git` is a pointer
- * file) shares the repo's git dir with the host.
+ * Paths a check may not write inside its dir. A task's clone has none. In a
+ * worktree NightCrew owns (integration, `_base`), the `.git` pointer file
+ * stays put, so the next host git command there can't be aimed at another
+ * repo. Its git data outside the dir isn't writable at all.
  */
-function gitPaths(worktree: string): GitPaths {
-  const dotGit = join(worktree, ".git");
-  const none: GitPaths = { pointer: null, gitdir: null, common: null, alternates: [] };
-  try {
-    if (statSync(dotGit).isDirectory()) {
-      let alternates: string[] = [];
-      try {
-        const objects = join(dotGit, "objects");
-        alternates = readFileSync(join(objects, "info", "alternates"), "utf8")
-          .split("\n")
-          .map((l) => l.trim())
-          .filter((l) => l && !l.startsWith("#"))
-          .map((l) => real(resolve(objects, l)));
-      } catch {}
-      return { ...none, alternates };
-    }
-    const m = readFileSync(dotGit, "utf8").match(/^gitdir:\s*(.+)$/m);
-    if (!m?.[1]) return { ...none, pointer: dotGit };
-    const gitdir = real(resolve(worktree, m[1].trim()));
-    const commondir = join(gitdir, "commondir");
-    const common = existsSync(commondir) ? real(resolve(gitdir, readFileSync(commondir, "utf8").trim())) : gitdir;
-    return { pointer: dotGit, gitdir: common === gitdir ? null : gitdir, common, alternates: [] };
-  } catch {
-    return none;
-  }
-}
-
-/**
- * Git paths a check in a linked worktree may write beyond the worktree: its
- * own git dir (index, logs, stash refs), and the repo's lfs and modules dirs.
- * The denies win: the pointer file and the files that tie the worktree to a
- * repo and a branch, plus the shared hooks and config.
- */
-function linkedGit(git: GitPaths): { allow: string[]; deny: string[] } {
-  if (!git.pointer) return { allow: [], deny: [] };
-  const allow: string[] = [];
-  const deny = [git.pointer];
-  if (git.gitdir) {
-    allow.push(git.gitdir);
-    deny.push(...["HEAD", "commondir", "gitdir", "config.worktree"].map((f) => join(git.gitdir as string, f)));
-  }
-  if (git.common) {
-    allow.push(join(git.common, "lfs"), join(git.common, "modules"));
-    deny.push(join(git.common, "hooks"), join(git.common, "config"));
-  }
-  return { allow, deny };
+function denies(dir: string, place: CheckPlace): string[] {
+  return place.clone ? [] : [join(dir, ".git")];
 }
 
 /** A path as a Seatbelt string literal. */
@@ -124,23 +76,33 @@ const LAUNCH_SERVICES = [
 ];
 
 /**
- * The macOS Seatbelt profile for a command in `worktree`. Seatbelt applies the
- * last matching rule, so the git denies come after the allows.
+ * Device files a check may write. Not the rest of /dev, which includes the
+ * terminals NightCrew was started from.
  */
-export function seatbeltProfile(worktree: string): string {
-  const wt = real(worktree);
-  const git = linkedGit(gitPaths(wt));
+const DEVICES = [
+  '(literal "/dev/null")',
+  '(literal "/dev/zero")',
+  '(literal "/dev/random")',
+  '(literal "/dev/urandom")',
+  '(literal "/dev/dtracehelper")',
+  '(subpath "/dev/fd")',
+];
+
+/**
+ * The macOS Seatbelt profile for a command in `dir`. Seatbelt applies the
+ * last matching rule, so the denies come after the allows.
+ */
+export function seatbeltProfile(dir: string, place: CheckPlace = {}): string {
+  const wt = real(dir);
   const allow = [
     `(subpath ${sbString(wt)})`,
-    ...git.allow.map((p) => `(subpath ${sbString(p)})`),
     `(subpath ${sbString(real(tmpdir()))})`,
     '(subpath "/private/tmp")',
     '(subpath "/private/var/folders")',
-    '(literal "/dev/null")',
-    '(subpath "/dev")',
+    ...DEVICES,
     ...cacheDirs().map((d) => `(subpath ${sbString(real(d))})`),
   ];
-  const deny = git.deny.map((p) => (p.endsWith("/hooks") ? `(subpath ${sbString(p)})` : `(literal ${sbString(p)})`));
+  const deny = denies(wt, place).map((p) => `(literal ${sbString(p)})`);
   const launchers = [...new Set(LAUNCHERS.flatMap((p) => [p, real(p)]))];
   return [
     "(version 1)",
@@ -150,16 +112,19 @@ export function seatbeltProfile(worktree: string): string {
     ...(deny.length ? [`(deny file-write*\n  ${deny.join("\n  ")})`] : []),
     `(deny process-exec\n  ${launchers.map((p) => `(literal ${sbString(p)})`).join("\n  ")})`,
     `(deny mach-lookup\n  ${LAUNCH_SERVICES.join("\n  ")})`,
+    // No typing into a terminal through an inherited descriptor (TIOCSTI).
+    '(deny file-ioctl (literal "/dev/tty") (regex #"^/dev/ttys"))',
   ].join("\n");
 }
 
 /**
- * The bubblewrap arguments for a command in `worktree`. A new session (no
+ * The bubblewrap arguments for a command in `dir`. A new session (no
  * TIOCSTI into the caller's terminal), its own pid namespace, and it dies
- * with NightCrew. Network stays on.
+ * with NightCrew. Network stays on. A repo or clone under /tmp is hidden by
+ * the private /tmp; NightCrew keeps clones under its data dir.
  */
-export function bwrapArgs(worktree: string): string[] {
-  const wt = real(worktree);
+export function bwrapArgs(dir: string, place: CheckPlace = {}): string[] {
+  const wt = real(dir);
   const args = [
     "--ro-bind",
     "/",
@@ -176,16 +141,10 @@ export function bwrapArgs(worktree: string): string[] {
   ];
   const tmp = real(tmpdir());
   if (tmp !== "/tmp" && existsSync(tmp)) args.push("--bind", tmp, tmp);
-  const paths = gitPaths(wt);
-  // Shared git data stays readable even when the repo lives under /tmp.
-  for (const ro of [paths.common, ...paths.alternates])
-    if (ro && existsSync(ro) && !ro.startsWith(`${wt}/`)) args.push("--ro-bind", ro, ro);
-  const git = linkedGit(paths);
   args.push("--bind", wt, wt);
-  for (const p of git.allow) if (existsSync(p)) args.push("--bind", p, p);
   for (const d of cacheDirs()) if (existsSync(d)) args.push("--bind", real(d), real(d));
   // Later mounts win, so the denies go last.
-  for (const p of git.deny) if (existsSync(p)) args.push("--ro-bind", p, p);
+  for (const p of denies(wt, place)) if (existsSync(p)) args.push("--ro-bind", p, p);
   return [...args, "--chdir", wt];
 }
 
@@ -243,14 +202,29 @@ export const NO_SANDBOX_WARNING =
     : "Checks run without a sandbox on this machine";
 
 /**
- * The argv that runs shell command `cmd` sandboxed to `worktree`. With no
- * sandbox available, `warn` hears about it once per process.
+ * `argv` started in a new session, so it has no controlling terminal and
+ * can't open /dev/tty. macOS has no setsid binary; perl ships with it. The
+ * exec keeps the pid, so stopping the check still works. Without perl or
+ * python3 the argv runs as is, and Seatbelt's ioctl deny still applies.
  */
-export function sandboxed(cmd: string, worktree: string, warn?: (text: string) => void): string[] {
+function newSession(argv: string[]): string[] {
+  const perl = existsSync("/usr/bin/perl") ? "/usr/bin/perl" : onPath("perl");
+  if (perl) return [perl, "-e", "use POSIX qw(setsid); setsid(); exec @ARGV or die", "--", ...argv];
+  const python = onPath("python3");
+  if (python) return [python, "-c", "import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])", ...argv];
+  return argv;
+}
+
+/**
+ * The argv that runs shell command `cmd` sandboxed to `dir`. With no
+ * sandbox available, `warn` hears about it once per process. `place.clone`
+ * comes from NightCrew's records for a task's clone.
+ */
+export function sandboxed(cmd: string, dir: string, warn?: (text: string) => void, place: CheckPlace = {}): string[] {
   const plain = ["sh", "-c", cmd];
   if (process.env[UNSANDBOXED_ENV] === "1") return plain;
   const k = sandboxKind();
-  if (k === "seatbelt") return ["/usr/bin/sandbox-exec", "-p", seatbeltProfile(worktree), "--", ...plain];
+  if (k === "seatbelt") return ["/usr/bin/sandbox-exec", "-p", seatbeltProfile(dir, place), "--", ...newSession(plain)];
   if (k === "bwrap") {
     // bwrap can only bind what exists. Made here, a first install fills the
     // real cache instead of failing on a read-only one.
@@ -259,22 +233,29 @@ export function sandboxed(cmd: string, worktree: string, warn?: (text: string) =
         mkdirSync(d, { recursive: true });
       } catch {}
     }
-    return ["bwrap", ...bwrapArgs(worktree), "--", ...plain];
+    return ["bwrap", ...bwrapArgs(dir, place), "--", ...plain];
   }
   if (warn && !warned) {
     warned = true;
     warn(NO_SANDBOX_WARNING);
   }
-  return plain;
+  return newSession(plain);
 }
 
-/** Run a repo command (setup, tests, git in a clone) in its worktree, sandboxed and without credentials. */
+/** Run a repo command (setup, tests, git in a clone) in its dir, sandboxed and without credentials. */
 export function runCheck(
   cmd: string,
-  worktree: string,
-  opts: { timeoutMs?: number; signal?: AbortSignal; env?: Record<string, string>; warn?: (text: string) => void } = {},
+  dir: string,
+  opts: {
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    env?: Record<string, string>;
+    warn?: (text: string) => void;
+    /** `dir` is a task's clone (from NightCrew's records). */
+    clone?: boolean;
+  } = {},
 ): Promise<Exec> {
-  return run(sandboxed(cmd, worktree, opts.warn), worktree, {
+  return run(sandboxed(cmd, dir, opts.warn, { clone: opts.clone }), dir, {
     timeoutMs: opts.timeoutMs,
     signal: opts.signal,
     baseEnv: checkEnv(opts.env),

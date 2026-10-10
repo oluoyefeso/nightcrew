@@ -40,6 +40,12 @@ Everything is set in the dashboard. This page explains what each setting does.
 | Also protect | Branches the crew never touches. The default branch, `main` and `master` always are. |
 | Autonomy | See [the trust ladder](trust-ladder.md). |
 
+### Where tasks run
+
+Each task works in its own clone at `<data>/work/<repo id>/<task id>`. The data folder is `~/.nightcrew` unless you set `NIGHTCREW_HOME` or pass `--data`. Settings → Repos shows the real path. If you delete a clone, the task starts a new one from its last saved work.
+
+Repos that use git-lfs, git-crypt or sparse checkout are refused for now. Support is coming.
+
 ## Guardrails that aren't settings
 
 Some limits can't be switched off. Every tool call passes a guard that keeps the crew inside its clone and scope, away from secrets, workflows and protected branches, and away from pushing or opening PRs itself. The agent's own pushes are blocked, and on the local engine its commands run in the OS sandbox. [Security](security.md) has the full list and what each layer does and doesn't catch.

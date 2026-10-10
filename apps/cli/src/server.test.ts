@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addRepo, type Db, getSettings, listTasks, openDb } from "@nightcrew/db";
 import { Crew, ScriptedEngine } from "@nightcrew/runner";
-import { createApp } from "./server";
+import { createApp, tildePath } from "./server";
 
 let db: Db;
 let app: ReturnType<typeof createApp>;
@@ -86,6 +86,26 @@ describe("local API guard", () => {
     const res = await app.request("/api/boom");
     expect(res.status).toBe(500);
     expect(await error(res)).toBe("Something broke.");
+  });
+});
+
+describe("GET /api/info", () => {
+  // Value: protects=Settings shows where task clones really live; fails_when=/api/info drops dataDir/workDir or workDir stops ending in /work; why_new=H6, the clone path was hard-coded copy; seam=none
+  test("returns the data dir and the clone folder", async () => {
+    const res = await app.request("/api/info", { headers: { host: "localhost:3721" } });
+    expect(res.status).toBe(200);
+    const info = (await res.json()) as { dataDir: string; workDir: string };
+    expect(info.dataDir).toBe(join(tmpdir(), "nc-server"));
+    expect(info.workDir).toBe(tildePath(join(tmpdir(), "nc-server", "work")));
+    expect((await locked.request("/api/info", { headers: { host: "localhost:3721" } })).status).toBe(401);
+  });
+
+  // Value: protects=$HOME shows as ~ and look-alike prefixes don't; fails_when=tildePath matches /Users/me2 for home /Users/me or drops the separator check; why_new=H6; seam=none
+  test("tildePath abbreviates only paths under home", () => {
+    expect(tildePath("/Users/me/.nightcrew/work", "/Users/me")).toBe("~/.nightcrew/work");
+    expect(tildePath("/Users/me", "/Users/me")).toBe("~");
+    expect(tildePath("/Users/me2/x", "/Users/me")).toBe("/Users/me2/x");
+    expect(tildePath("/srv/nc/work", "/Users/me")).toBe("/srv/nc/work");
   });
 });
 

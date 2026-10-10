@@ -1,9 +1,9 @@
 // Runs a phase through the Claude Agent SDK on this machine. Uses
 // ANTHROPIC_API_KEY when it's set, otherwise the local Claude Code login.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { join } from "node:path";
 import {
   type HookCallback,
   type Options,
@@ -33,6 +33,7 @@ export class SdkEngine implements AgentEngine {
   async runPhase(req: PhaseRequest, onEvent: (e: EngineEvent) => void): Promise<PhaseResult> {
     // Stopped before it started: don't spend anything.
     if (req.signal.aborted) return stoppedResult();
+    if (req.isolated && !cloneIntact(req.cwd)) return { ...stoppedResult(), error: TAMPERED };
     const abort = new AbortController();
     const onAbort = () => abort.abort();
     req.signal.addEventListener("abort", onAbort, { once: true });
@@ -247,16 +248,15 @@ export function agentEnv(base: NodeJS.ProcessEnv): Record<string, string | undef
  * the guard handles network writes. Where the sandbox can't start (Linux
  * without bubblewrap), Bash runs unsandboxed with the guard only.
  *
- * In a task's standalone clone (`.git` is a folder with alternates, as `git
- * clone --shared` makes it) the agent may write all of it, its own `.git`
- * included: nothing there is shared with the host repo, and NightCrew reads
- * results back by commit SHA. Plus the artifact folder, temp and package
- * caches. In a legacy linked worktree or the repo's main checkout, the git
- * denies below still apply.
+ * In a task's clone (`req.isolated`, from NightCrew's records) the agent may
+ * write all of it, its own `.git` included: nothing there is shared with the
+ * host repo, and NightCrew reads results back by commit SHA. Plus the
+ * artifact folder, temp and package caches. Nothing in the clone is read to
+ * decide this. Anywhere else (compose, in the repo's main checkout) its git
+ * plumbing and refs are denied.
  */
 export function sandboxFor(req: PhaseRequest, home = homedir()): SandboxSettings {
-  const git = isClone(req.cwd) ? null : gitWrites(req.cwd, req.guard.protectedBranches);
-  const allowWrite = [req.cwd, ...req.guard.writableDirs, tmpdir(), ...(git?.allow ?? []), ...cacheDirs(home)];
+  const allowWrite = [req.cwd, ...req.guard.writableDirs, tmpdir(), ...cacheDirs(home)];
   return {
     enabled: true,
     failIfUnavailable: false,
@@ -264,141 +264,49 @@ export function sandboxFor(req: PhaseRequest, home = homedir()): SandboxSettings
     allowUnsandboxedCommands: false,
     filesystem: {
       allowWrite: [...new Set(allowWrite)],
-      ...(git ? { denyWrite: git.deny } : {}),
+      ...(req.isolated ? {} : { denyWrite: mainCheckoutDenies(req.cwd) }),
     },
     network: { allowedDomains: ["*"], allowLocalBinding: true },
   };
 }
 
 /**
- * A standalone clone: `.git` is a folder that borrows objects through
- * alternates. The repo's own main checkout has a `.git` folder too, but no
- * alternates, and keeps the deny list.
+ * The repo's main checkout: its .git sits inside the writable cwd, so deny
+ * every ref and the files git would act on (hooks, config, remotes,
+ * submodules, alternates). Denies win over the cwd allow.
  */
-function isClone(cwd: string): boolean {
+function mainCheckoutDenies(cwd: string): string[] {
+  const git = join(cwd, ".git");
+  return [
+    "HEAD",
+    "index",
+    "hooks",
+    "config",
+    "config.worktree",
+    "info",
+    "commondir",
+    "packed-refs",
+    "remotes",
+    "branches",
+    "modules",
+    "refs",
+    join("objects", "info", "alternates"),
+  ].map((p) => join(git, p));
+}
+
+/**
+ * True when a clone's `.git` is still a real folder. A pointer file or a
+ * symlink there would aim git, and anything that trusts it, at another repo.
+ */
+export function cloneIntact(cwd: string): boolean {
   try {
-    return statSync(join(cwd, ".git")).isDirectory() && existsSync(join(cwd, ".git", "objects", "info", "alternates"));
+    return lstatSync(join(cwd, ".git")).isDirectory();
   } catch {
     return false;
   }
 }
 
-/**
- * The git paths the agent may write, and the ones it may not. A commit in a
- * linked worktree writes the worktree's own git dir (index, logs/HEAD, a
- * short-lived HEAD.lock), new objects, and the task branch's ref through
- * `<ref>.lock` then a rename; stash writes refs/stash. Those are allowed.
- *
- * Claude Code's sandbox also opens the whole shared .git to a linked
- * worktree, so the denies are the real boundary, and they win over any allow:
- * every other branch that exists now and every protected branch (main, the
- * ship and train branches) even if it doesn't exist yet, tags, packed-refs,
- * the other worktrees, the main checkout's HEAD and index, this worktree's
- * HEAD (so it can't be pointed at another branch for NightCrew's next git
- * command), the pointer files (so another repo can't be swapped in), and
- * hooks, config, legacy remotes, submodules and alternates (code or URLs this
- * machine's git would act on). A branch the agent creates under a new name is
- * not covered; it can't move one NightCrew relies on.
- */
-function gitWrites(cwd: string, protectedBranches: string[]): { allow: string[]; deny: string[] } | null {
-  const git = gitDirs(cwd);
-  if (!git) return null;
-  const { dir, common, branch } = git;
-  const deny = [
-    join(dir, "HEAD"),
-    join(common, "HEAD"),
-    join(common, "index"),
-    join(common, "hooks"),
-    join(common, "config"),
-    join(common, "config.worktree"),
-    join(common, "info"),
-    join(common, "commondir"),
-    join(common, "packed-refs"),
-    join(common, "remotes"),
-    join(common, "branches"),
-    join(common, "modules"),
-    join(common, "objects", "info", "alternates"),
-    join(common, "refs", "tags"),
-  ];
-  // The repo's main checkout: its .git sits inside the writable cwd, so deny
-  // every ref. Tasks run in clones; this covers compose.
-  if (dir === common) return { allow: [], deny: [...new Set([...deny, join(common, "refs")])] };
-
-  deny.push(join(cwd, ".git"), join(dir, "commondir"), join(dir, "gitdir"), join(dir, "config.worktree"));
-  for (const other of [...new Set([...localBranches(common), ...protectedBranches])]) {
-    if (other === branch && !protectedBranches.includes(other)) continue;
-    const ref = join(common, "refs", "heads", other);
-    deny.push(ref, `${ref}.lock`);
-  }
-  for (const wt of listDir(join(common, "worktrees"))) {
-    if (join(common, "worktrees", wt) !== dir) deny.push(join(common, "worktrees", wt));
-  }
-
-  const allow = [dir, join(common, "objects")];
-  for (const ref of ["refs/stash", ...(branch ? [`refs/heads/${branch}`] : [])]) {
-    const file = join(common, ref);
-    const log = join(common, "logs", ref);
-    allow.push(file, `${file}.lock`, log);
-    // A branch with a slash lives in a nested folder, and a packed branch has
-    // none; make it here, on the host, in case the sandbox can't.
-    for (const d of [dirname(file), dirname(log)]) {
-      try {
-        mkdirSync(d, { recursive: true });
-      } catch {}
-    }
-  }
-  return { allow, deny: [...new Set(deny)] };
-}
-
-/** Local branch names: loose ref files under refs/heads plus packed ones. */
-function localBranches(common: string): string[] {
-  const heads = join(common, "refs", "heads");
-  const loose = listDir(heads, true).filter((f) => !f.endsWith(".lock"));
-  let packed: string[] = [];
-  try {
-    packed = [...readFileSync(join(common, "packed-refs"), "utf8").matchAll(/^[0-9a-f]+ refs\/heads\/(.+)$/gm)].map(
-      (m) => m[1] as string,
-    );
-  } catch {}
-  return [...new Set([...loose, ...packed])];
-}
-
-/** File names in a folder (relative paths when recursive). Empty if it can't be read. */
-function listDir(path: string, recursive = false): string[] {
-  try {
-    return readdirSync(path, { withFileTypes: true, recursive })
-      .filter((e) => (recursive ? e.isFile() : true))
-      .map((e) => relative(path, join(e.parentPath, e.name)));
-  } catch {
-    return [];
-  }
-}
-
-/** The worktree's own git dir, the repo's shared one and the checked out branch. Null if cwd isn't a repo root. */
-function gitDirs(cwd: string): { dir: string; common: string; branch: string | null } | null {
-  const dotGit = join(cwd, ".git");
-  try {
-    let dir = dotGit;
-    let common = dotGit;
-    if (!statSync(dotGit).isDirectory()) {
-      const pointer = readFileSync(dotGit, "utf8")
-        .match(/^gitdir:\s*(.+)$/m)?.[1]
-        ?.trim();
-      if (!pointer) return null;
-      dir = resolve(cwd, pointer);
-      const commondir = join(dir, "commondir");
-      common = existsSync(commondir) ? resolve(dir, readFileSync(commondir, "utf8").trim()) : dir;
-    }
-    const head = readFileSync(join(dir, "HEAD"), "utf8")
-      .match(/^ref:\s*refs\/heads\/(.+)$/m)?.[1]
-      ?.trim();
-    // A name that climbs out of refs/heads gets no ref at all.
-    const branch = head && !head.split("/").includes("..") ? head : null;
-    return { dir, common, branch };
-  } catch {
-    return null;
-  }
-}
+export const TAMPERED = "The task's workspace was tampered with: its .git is no longer a folder.";
 
 const INSTRUCTION_FILES = ["CLAUDE.md", "AGENTS.md", ".claude/CLAUDE.md"];
 const MAX_INSTRUCTIONS = 24_000;

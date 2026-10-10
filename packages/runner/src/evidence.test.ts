@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addRepo, createTask, type Db, getRepo, openDb, updateRepo } from "@nightcrew/db";
@@ -91,6 +91,26 @@ describe("fail-then-pass", () => {
     const ev = await gatherEvidence(opts("bug: weak test", wt, repo.id));
     expect(ev.testProof?.failsOnBase).toBe(false);
     expect(ev.missing[0]).toContain("also passes without the fix");
+  });
+
+  // Value: protects=fail-then-pass only takes plain files from the clone's (agent-controlled) changed list, so a test file that's a symlink to something outside the clone is never copied into your repo's base checkout or counted as proof; fails_when=plainFile is dropped or goes back to existsSync, which follows links; why_new=afca3f3 added the plain-file rule with no test; seam=none
+  test("a symlinked test file is not copied or counted as proof", async () => {
+    const repo = addRepo(db, {
+      name: "app",
+      path: repoPath,
+      defaultBranch: "main",
+      testCommand: "sh -c 'for t in tests/*.test.sh; do sh $t || exit 1; done'",
+    });
+    const wt = await clone(repo.id, "fix/link");
+    const outside = join(dir, "outside-secret.test.sh");
+    writeFileSync(outside, "echo SECRET\n");
+    symlinkSync(outside, join(wt, "tests", "link.test.sh"));
+    writeFileSync(join(wt, "math.sh"), "add() { echo $(( $1 + $2 )); }\n");
+    writeFileSync(join(wt, "tests", "add.test.sh"), '. ./math.sh; [ "$(add 2 3)" = "5" ]\n');
+    mkdirSync(join(dir, "artifacts"), { recursive: true });
+    const ev = await gatherEvidence(opts("bug: linked test", wt, repo.id));
+    expect(ev.testProof?.testFiles).toEqual(["tests/add.test.sh"]);
+    expect(ev.testProof?.failsOnBase).toBe(true);
   });
 
   test("no test at all is flagged", async () => {

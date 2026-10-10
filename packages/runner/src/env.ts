@@ -12,7 +12,6 @@ const SECRET_NAMES = new Set([
   "GITHUB_TOKEN",
   "GH_ENTERPRISE_TOKEN",
   "GITHUB_ENTERPRISE_TOKEN",
-  "GITHUB_PAT",
   "NPM_TOKEN",
   "NODE_AUTH_TOKEN",
   "AWS_ACCESS_KEY_ID",
@@ -20,7 +19,6 @@ const SECRET_NAMES = new Set([
   "AWS_SESSION_TOKEN",
   "AZURE_CLIENT_SECRET",
   "GOOGLE_APPLICATION_CREDENTIALS",
-  "DATABASE_URL",
   "SSH_AUTH_SOCK",
   "GIT_ASKPASS",
   "SSH_ASKPASS",
@@ -29,10 +27,25 @@ const SECRET_NAMES = new Set([
 
 /**
  * Names that carry a secret. `_AUTH` only as a whole word, so NPM_CONFIG__AUTH
- * and SSH_AUTH_SOCK go and GIT_AUTHOR_NAME stays. Prefixes like AWS_ aren't
- * stripped wholesale: AWS_REGION, AWS_PROFILE and AWS_ENDPOINT_URL are config.
+ * and SSH_AUTH_SOCK go and GIT_AUTHOR_NAME stays. `_KEY`, `_DSN`, `_PAT` and
+ * `_PWD` only at the end (MYSQL_PWD goes, PWD and OLDPWD stay). Connection
+ * URLs for databases and queues carry their password. Prefixes like AWS_
+ * aren't stripped wholesale: AWS_REGION and AWS_PROFILE are config.
  */
-const SECRET_PATTERN = /TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|PRIVATE_KEY|ACCESS_KEY|CREDENTIAL|WEBHOOK|_AUTH(_|$)/i;
+const SECRET_PATTERNS = [
+  /TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|PRIVATE_KEY|ACCESS_KEY|CREDENTIAL|WEBHOOK|CONNECTION_STRING|_AUTH(_|$)/i,
+  /_(KEY|DSN|PAT|PWD)$/i,
+  /(^|_)(DATABASE|DB|REDIS|MONGO|MONGODB|AMQP|POSTGRES|POSTGRESQL|MYSQL|RABBITMQ)_UR[LI]$/i,
+];
+
+/** Config names a pattern above would catch. Kept on purpose. */
+const CONFIG_NAMES = new Set([
+  "AWS_REGION",
+  "AWS_DEFAULT_REGION",
+  "AWS_PROFILE",
+  "AWS_ENDPOINT_URL",
+  "TOKENIZERS_PARALLELISM",
+]);
 
 /**
  * Git variables that point at a repo. Inherited from a hook or a shell, they
@@ -52,7 +65,9 @@ const GIT_LOCATION = new Set([
 const SIGN_IN_PREFIXES = ["ANTHROPIC_", "CLAUDE_"];
 
 export function isSecretVar(name: string): boolean {
-  return SECRET_NAMES.has(name.toUpperCase()) || SECRET_PATTERN.test(name);
+  const upper = name.toUpperCase();
+  if (CONFIG_NAMES.has(upper)) return false;
+  return SECRET_NAMES.has(upper) || SECRET_PATTERNS.some((p) => p.test(name));
 }
 
 /** Prefixes of real remote URLs. Pushes to them are rewritten to a scheme git can't speak. */

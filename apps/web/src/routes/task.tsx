@@ -8,6 +8,7 @@ import { ApiError, api, reposQuery, settingsQuery, taskQuery, useInvalidateTasks
 import { ChipsEditor, Field, inlineEdit, ListEditor, Select, TextArea, TextInput } from "../components/form";
 import { Button, Pill } from "../components/ui";
 import { fmtDay, fmtTime } from "../lib";
+import { dropStash, RESTORED_NOTE, unstash, useStashOnReload } from "../pending";
 
 const STATUS_COPY: Record<Task["status"], { label: string; color: string }> = {
   draft: { label: "Draft", color: "var(--muted)" },
@@ -32,6 +33,12 @@ const CONTENT_FIELDS = [
   "repoId",
 ] as const satisfies readonly (keyof Task)[];
 
+function contentOf(patch: Partial<Task> | null): Partial<Task> {
+  const content: Partial<Task> = {};
+  for (const k of CONTENT_FIELDS) if (patch && k in patch) Object.assign(content, { [k]: patch[k] });
+  return content;
+}
+
 export function TaskPage({ taskId }: { taskId: string }) {
   const { data, error } = useQuery(taskQuery(taskId));
   if (error) return <p className="p-10 text-bad">{error.message}</p>;
@@ -48,7 +55,12 @@ function TaskEditor({
   notes: { id: number; author: string; body: string; at: string }[];
   runs: { id: string; status: string; startedAt: string | null; reason: string | null }[];
 }) {
-  const [t, setT] = useState(initial);
+  // Edits a restart's reload stashed (pending.ts) go back in the form and the save queue.
+  const [restored] = useState(() => {
+    const content = contentOf(unstash<Partial<Task>>(initial.id));
+    return Object.keys(content).length ? content : null;
+  });
+  const [t, setT] = useState(() => ({ ...initial, ...restored }));
   const [saved, setSaved] = useState(false);
   const repos = useQuery(reposQuery);
   const settings = useQuery(settingsQuery);
@@ -58,15 +70,24 @@ function TaskEditor({
   const navigate = useNavigate();
   const locked = initial.status === "running";
 
-  useEffect(() => setT(initial), [initial]);
+  // A refetch keeps edits that haven't saved yet.
+  useEffect(() => setT({ ...initial, ...pending.current }), [initial]);
 
   const save = useMutation({
-    mutationFn: (patch: Partial<Task>) => api.patch<Task>(`/api/tasks/${t.id}`, patch),
+    mutationFn: (patch: Partial<Task>) => {
+      inflight.current = patch;
+      return api.patch<Task>(`/api/tasks/${t.id}`, patch);
+    },
+    onSettled: () => {
+      inflight.current = {};
+    },
     onSuccess: (next) => {
       // Keep anything typed while this save was in flight.
       setT({ ...next, ...pending.current });
       invalidate();
-      setSaved(Object.keys(pending.current).length === 0);
+      const done = Object.keys(pending.current).length === 0;
+      setSaved(done);
+      if (done) dropStash(initial.id);
     },
     // A save that didn't get through (offline, a server error, locked out) puts its
     // text back in the queue so it isn't lost; newer edits win, and the next save
@@ -74,10 +95,8 @@ function TaskEditor({
     // later would be a surprise. A refusal (400, 409) shows its error instead.
     onError: (err, patch) => {
       setSaved(false);
-      if (err instanceof ApiError && err.status !== 401 && err.status < 500) return;
-      const content: Partial<Task> = {};
-      for (const k of CONTENT_FIELDS) if (k in patch) Object.assign(content, { [k]: patch[k] });
-      pending.current = { ...content, ...pending.current };
+      if (err instanceof ApiError && err.status !== 401 && err.status < 500) return dropStash(initial.id);
+      pending.current = { ...contentOf(patch), ...pending.current };
     },
   });
   const remove = useMutation({
@@ -91,7 +110,13 @@ function TaskEditor({
   // Autosave edits after a short pause. Edits within the pause merge, so a
   // quick title-then-brief change saves both; leaving the page saves the rest.
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const pending = useRef<Partial<Task>>({});
+  const pending = useRef<Partial<Task>>(restored ?? {});
+  /** The patch on the wire. A 401 reloads before onError can queue it again, so the stash reads it here. */
+  const inflight = useRef<Partial<Task>>({});
+  useStashOnReload(initial.id, () => {
+    const content = contentOf({ ...inflight.current, ...pending.current });
+    return Object.keys(content).length ? content : null;
+  });
   const flush = useRef((_extra?: Partial<Task>) => {});
   // Run now and Move to Later go through here too, so the agent gets the latest text.
   flush.current = (extra = {}) => {
@@ -107,7 +132,10 @@ function TaskEditor({
     clearTimeout(timer.current);
     timer.current = setTimeout(() => flush.current(), 600);
   };
-  useEffect(() => () => flush.current(), []);
+  useEffect(() => {
+    if (restored) timer.current = setTimeout(() => flush.current(), 600);
+    return () => flush.current();
+  }, [restored]);
 
   const status = STATUS_COPY[t.status];
 
@@ -134,6 +162,7 @@ function TaskEditor({
       </div>
 
       <header className="grid gap-3">
+        {restored && <p className="text-[13px] text-muted">{RESTORED_NOTE}</p>}
         <div className="flex flex-wrap items-center gap-2">
           <Pill color={status.color}>{status.label}</Pill>
           <span className="font-mono text-[11.5px] text-faint">

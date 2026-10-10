@@ -3,7 +3,17 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git, run, taskChangedFiles } from "./git";
-import { cloneChangedFiles, commitInClone, ensureWorkspace, fetchTask, taskRef, workspaceFor } from "./workspace";
+import {
+  cloneChangedFiles,
+  commitInClone,
+  ensureWorkspace,
+  fetchTask,
+  repoSupport,
+  resolveRelativeUrl,
+  taskRef,
+  updateLocalBranch,
+  workspaceFor,
+} from "./workspace";
 
 let dir: string;
 let repoPath: string;
@@ -76,7 +86,10 @@ describe("task workspaces", () => {
     const ws = await workspace();
     rmSync(join(ws.dir, ".git"), { recursive: true, force: true });
     writeFileSync(join(ws.dir, ".git"), `gitdir: ${join(repoPath, ".git")}\n`);
-    await expect(workspace()).rejects.toThrow("isn't a NightCrew clone");
+    const refused = workspace();
+    await expect(refused).rejects.toThrow("isn't a NightCrew clone");
+    // Deleting the folder resumes from the fetched work; starting over takes the ref and the pinned base too.
+    await expect(refused).rejects.toThrow(`picks up from ${taskRef("task_1")}. To start the task over from scratch`);
   });
 
   // Value: protects=clone-side commits run through the check sandbox without hooks, and say whether anything was committed; fails_when=commitInClone runs the clone's hooks or reports a commit when nothing changed; why_new=D12 no host git in clones; seam=none
@@ -154,5 +167,206 @@ describe("fetch, then check in your repo", () => {
     expect(await taskChangedFiles(repoPath, base, fetched)).toEqual(["src/index.ts", "src/renamed.ts"]);
     await expect(taskChangedFiles(repoPath, base, "0".repeat(40))).rejects.toThrow("Couldn't");
     await expect(cloneChangedFiles(ws.dir, "not-a-commit")).rejects.toThrow("Couldn't list");
+  });
+});
+
+describe("starting and refreshing a clone", () => {
+  // Value: protects=a task whose clone is gone (deleted, as the refusal message advises, or a new data folder) starts its new clone from the work last fetched into refs/nightcrew/tasks/<id>, ahead of a stale local branch and the base; fails_when=ensureWorkspace drops the taskRef lookup or reorders it, so a WIP-only task restarts from main and loses its work; why_new=only the legacy-branch start was covered; seam=none
+  test("a new clone starts from the last fetched work, ahead of the task branch and the base", async () => {
+    const first = await workspace();
+    await agentCommit(first.dir, "src/wip.ts", "half\n");
+    const fetched = await fetchTask(first);
+    // A stale local branch from an earlier version sits at the base.
+    await git(repoPath, "branch", "crew/one", base);
+    rmSync(first.dir, { recursive: true, force: true });
+    const again = await workspace();
+    expect(again.fresh).toBe(true);
+    expect(await sha(again.dir, "HEAD")).toBe(fetched);
+    expect(readFileSync(join(again.dir, "src", "wip.ts"), "utf8")).toBe("half\n");
+  });
+
+  // Value: protects=a leftover half-made clone from an earlier crash is cleared, and the next call builds a whole clone at the base; fails_when=ensureWorkspace reuses or trips over ${dir}.new instead of clearing it; why_new=G11 split the weak combined test; seam=none
+  test("a leftover half-made clone is cleared and a fresh one is built", async () => {
+    const target = join(dir, "data", "work", "repo_1", "task_1");
+    mkdirSync(`${target}.new`, { recursive: true });
+    writeFileSync(join(`${target}.new`, "junk"), "x");
+    const ws = await workspace();
+    expect(ws.fresh).toBe(true);
+    expect(await sha(ws.dir, "HEAD")).toBe(base);
+    expect(existsSync(`${target}.new`)).toBe(false);
+    expect(existsSync(join(ws.dir, "junk"))).toBe(false);
+  });
+
+  // Value: protects=a clone that fails to set up leaves nothing behind to be reused as if it were whole; fails_when=ensureWorkspace clones straight into the final folder or skips cleanup on failure, so the next call reuses a broken clone (fresh=false); why_new=the build-aside-then-rename path was untested; seam=none
+  test("a clone that fails to set up leaves nothing to reuse", async () => {
+    const target = join(dir, "data", "work", "repo_1", "task_1");
+    await expect(
+      ensureWorkspace({
+        dataDir: join(dir, "data"),
+        repo: { id: "repo_1", path: repoPath },
+        task: { id: "task_1", branch: "crew/one" },
+        base: "f".repeat(40),
+      }),
+    ).rejects.toThrow("Couldn't set up the task's workspace");
+    expect(existsSync(target)).toBe(false);
+    expect(existsSync(`${target}.new`)).toBe(false);
+    const ws = await workspace();
+    expect(ws.fresh).toBe(true);
+    expect(await sha(ws.dir, "HEAD")).toBe(base);
+  });
+
+  // Value: protects=a fetch from a clone with no commit checked out fails loudly and leaves the last good copy in refs/nightcrew/tasks/<id> and no stray incoming ref; fails_when=fetchTask resolves the task ref after a failed fetch and hands back the stale sha as current, or swallows the error; why_new=only the shallow-file refusal touched this path, and it accepts either outcome; seam=none
+  test("a fetch from a clone with nothing checked out fails and keeps the last copy", async () => {
+    const ws = await workspace();
+    await agentCommit(ws.dir, "src/a.ts");
+    const good = await fetchTask(ws);
+    await git(ws.dir, "checkout", "-q", "--orphan", "empty");
+    await expect(fetchTask(ws)).rejects.toThrow("Couldn't take the task's work from its workspace");
+    expect(await sha(repoPath, taskRef("task_1"))).toBe(good);
+    expect((await git(repoPath, "for-each-ref", "refs/nightcrew/incoming")).stdout).toBe("");
+  });
+
+  // Value: protects=the fetch takes the clone's checked-out commit (what NightCrew just tested), so switching branches in the clone can't hand over a different, untested tip; fails_when=fetchTask goes back to refs/heads/<branch>; why_new=G4 branch switch landed an older tip; seam=none
+  test("the fetch takes the checked-out commit, whatever branch it's on", async () => {
+    const ws = await workspace();
+    await agentCommit(ws.dir, "src/old.ts");
+    const old = await sha(ws.dir, "HEAD");
+    await git(ws.dir, "checkout", "-q", "-b", "side", base);
+    await agentCommit(ws.dir, "src/tested.ts");
+    const tested = await sha(ws.dir, "HEAD");
+    expect(await sha(ws.dir, "refs/heads/crew/one")).toBe(old);
+    expect(await fetchTask(ws)).toBe(tested);
+  });
+
+  // Value: protects=the convenience copy of the task branch in your repo only fast-forwards, so it never overwrites commits you made on that branch yourself, and says why when it can't update; fails_when=updateLocalBranch force-moves the branch regardless of ancestry, or reports success when git refused; why_new=updateLocalBranch had no direct test; seam=none
+  test("the local task branch fast-forwards, but a branch you moved elsewhere is left alone", async () => {
+    const ws = await workspace();
+    await agentCommit(ws.dir, "src/a.ts");
+    const first = await fetchTask(ws);
+    expect(await updateLocalBranch(repoPath, "crew/one", first)).toEqual({ ok: true });
+    expect(await sha(repoPath, "refs/heads/crew/one")).toBe(first);
+    await agentCommit(ws.dir, "src/b.ts");
+    const second = await fetchTask(ws);
+    expect(await updateLocalBranch(repoPath, "crew/one", second)).toEqual({ ok: true });
+    expect(await sha(repoPath, "refs/heads/crew/one")).toBe(second);
+
+    // You commit on the branch yourself; the next run's commit doesn't descend from yours.
+    const mine = join(dir, "mine");
+    await git(repoPath, "worktree", "add", "-q", mine, "crew/one");
+    await agentCommit(mine, "src/mine.ts");
+    const yours = await sha(mine, "HEAD");
+    await git(repoPath, "worktree", "remove", "--force", mine);
+    await agentCommit(ws.dir, "src/c.ts");
+    const moved = await updateLocalBranch(repoPath, "crew/one", await fetchTask(ws));
+    expect(moved).toEqual({ ok: false, reason: "crew/one has commits that aren't in the task's work" });
+    expect(await sha(repoPath, "refs/heads/crew/one")).toBe(yours);
+  });
+
+  // Value: protects=a task branch checked out in your repo isn't updated, and the caller hears why so it can point you at refs/nightcrew/tasks/<id>; fails_when=updateLocalBranch ignores git branch's exit code and reports the branch as holding the work; why_new=G7 the result of git branch --force was never checked; seam=none
+  test("a checked-out task branch isn't updated, and says so", async () => {
+    const ws = await workspace();
+    await git(repoPath, "checkout", "-q", "-b", "crew/one");
+    await agentCommit(ws.dir, "src/a.ts");
+    const fetched = await fetchTask(ws);
+    expect(await updateLocalBranch(repoPath, "crew/one", fetched)).toEqual({
+      ok: false,
+      reason: "crew/one is checked out",
+    });
+    expect(await sha(repoPath, "refs/heads/crew/one")).toBe(base);
+  });
+
+  // Value: protects=a task branch you moved past the work NightCrew last fetched (locally, or on origin as last fetched) stops the task with what to do, instead of being ignored; fails_when=ensureWorkspace drops the moved-branch check and quietly resumes from refs/nightcrew/tasks/<id>; why_new=G8 user-moved branch was silently ignored; seam=none
+  test("a task branch you moved since the last run stops the task with what to do", async () => {
+    const first = await workspace();
+    await agentCommit(first.dir, "src/wip.ts");
+    const fetched = await fetchTask(first);
+    // Behind the fetched work is fine: the clone carries on.
+    await git(repoPath, "branch", "crew/one", base);
+    expect((await workspace()).fresh).toBe(false);
+    // You commit on top of the fetched work.
+    const mine = join(dir, "mine");
+    await git(repoPath, "worktree", "add", "-q", mine, "crew/one");
+    await git(mine, "reset", "-q", "--hard", fetched);
+    await agentCommit(mine, "src/mine.ts");
+    await git(repoPath, "worktree", "remove", "--force", mine);
+    await expect(workspace()).rejects.toThrow(
+      `You moved crew/one since NightCrew last worked on it. Reset it to ${taskRef("task_1")}, or delete that ref and the task's workspace at ${first.dir} to start from your branch.`,
+    );
+    rmSync(first.dir, { recursive: true, force: true });
+    await expect(workspace()).rejects.toThrow("or delete that ref to start from your branch.");
+
+    // Origin's copy, as last fetched, counts too.
+    await git(repoPath, "branch", "-f", "crew/one", fetched);
+    await agentCommit(repoPath, "src/theirs.ts");
+    await git(repoPath, "update-ref", "refs/remotes/origin/crew/one", await sha(repoPath, "HEAD"));
+    await expect(workspace()).rejects.toThrow("crew/one on origin has commits NightCrew hasn't seen.");
+  });
+
+  // Value: protects=a new clone has the default branch at the pinned base, so the agent's `git diff main...HEAD` works even when your checkout is on another branch; fails_when=ensureWorkspace leaves only the branch your repo had checked out (or none) in the clone; why_new=G4 prompts diff against the default branch by name; seam=none
+  test("a new clone has the default branch at the pinned base, whatever your checkout is on", async () => {
+    await git(repoPath, "checkout", "-q", "-b", "feature");
+    await agentCommit(repoPath, "src/feature.ts");
+    await git(repoPath, "checkout", "-q", "main");
+    await agentCommit(repoPath, "src/later.ts");
+    await git(repoPath, "checkout", "-q", "feature");
+    const ws = await ensureWorkspace({
+      dataDir: join(dir, "data"),
+      repo: { id: "repo_1", path: repoPath, defaultBranch: "main" },
+      task: { id: "task_1", branch: "crew/one" },
+      base,
+    });
+    expect(await sha(ws.dir, "refs/heads/main")).toBe(base);
+    expect((await git(ws.dir, "diff", "--name-only", "main...HEAD")).ok).toBe(true);
+  });
+
+  // Value: protects=a clone of a repo with a relative-URL submodule can still init it after its origin is removed, because the URL is resolved against your repo first; fails_when=ensureWorkspace removes origin without copying submodule URLs, so `../sub` resolves against the clone's own folder; why_new=G5 probed submodule failure in clones; seam=none
+  test("a relative-URL submodule still initializes in the clone", async () => {
+    const sub = join(dir, "sub");
+    mkdirSync(sub);
+    writeFileSync(join(sub, "lib.txt"), "lib\n");
+    await git(sub, "init", "-q", "-b", "main");
+    await git(sub, "add", "-A");
+    await git(sub, ...ID, "commit", "-qm", "lib");
+    await git(repoPath, "-c", "protocol.file.allow=always", "submodule", "add", "-q", "../sub", "sub");
+    await git(repoPath, ...ID, "commit", "-qm", "add sub");
+    // Rely on .gitmodules alone, the way a repo that never ran `submodule init` looks.
+    await git(repoPath, "config", "--unset", "submodule.sub.url");
+    const ws = await ensureWorkspace({
+      dataDir: join(dir, "data"),
+      repo: { id: "repo_1", path: repoPath },
+      task: { id: "task_1", branch: "crew/one" },
+      base: await sha(repoPath, "HEAD"),
+    });
+    expect((await git(ws.dir, "config", "--get", "submodule.sub.url")).stdout.trim()).toBe(sub);
+    const init = await run(
+      ["git", "-c", "protocol.file.allow=always", "submodule", "update", "--init", "--quiet"],
+      ws.dir,
+    );
+    expect(init.stderr).toBe("");
+    expect(readFileSync(join(ws.dir, "sub", "lib.txt"), "utf8")).toBe("lib\n");
+  });
+
+  // Value: protects=relative submodule URLs resolve the way git does, against a path, an https URL or an scp-style remote; fails_when=resolveRelativeUrl drops a component too many or too few, or mangles host:path remotes; why_new=G5; seam=none
+  test("relative submodule URLs resolve like git's", () => {
+    expect(resolveRelativeUrl("/x/acme", "../sub")).toBe("/x/sub");
+    expect(resolveRelativeUrl("/x/acme/", "./sub")).toBe("/x/acme/sub");
+    expect(resolveRelativeUrl("https://github.com/o/r.git", "../lib.git")).toBe("https://github.com/o/lib.git");
+    expect(resolveRelativeUrl("git@github.com:o/r.git", "../../p/lib")).toBe("git@github.com:p/lib");
+  });
+});
+
+describe("repos a clone can't reproduce", () => {
+  // Value: protects=repos that rely on local git setup (git-lfs, git-crypt, sparse checkout) are refused with a clear reason before any clone, and an ordinary repo isn't; fails_when=repoSupport misses one of the three or flags a plain repo; why_new=G6 (D15) repos that rely on local git setup; seam=none
+  test("git-lfs, git-crypt and sparse checkout are named; a plain repo is fine", async () => {
+    expect(repoSupport(repoPath)).toBeNull();
+    writeFileSync(join(repoPath, ".gitattributes"), "*.png filter=lfs diff=lfs merge=lfs -text\n");
+    expect(repoSupport(repoPath)).toBe(
+      "NightCrew can't work in this repo yet: it uses git-lfs. Support is coming; see docs/security.md.",
+    );
+    writeFileSync(join(repoPath, ".gitattributes"), "secrets/** filter=git-crypt diff=git-crypt\n");
+    expect(repoSupport(repoPath)).toContain("it uses git-crypt.");
+    rmSync(join(repoPath, ".gitattributes"));
+    await git(repoPath, "config", "core.sparseCheckout", "true");
+    expect(repoSupport(repoPath)).toContain("it uses sparse checkout.");
   });
 });

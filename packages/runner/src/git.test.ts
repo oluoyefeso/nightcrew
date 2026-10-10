@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { run, withRepoLock } from "./git";
+import { join } from "node:path";
+import { baseWorktree, git, run, withRepoLock } from "./git";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -62,5 +64,62 @@ describe("run with a stop signal", () => {
       code: 3,
       stdout: "ran\n",
     });
+  });
+});
+
+describe("withRepoLock with a stop signal", () => {
+  // Value: protects=a stopped task stops waiting for the repo lock at once and its work never runs, while work that already holds the lock finishes; fails_when=withRepoLock ignores the signal (a stopped task queues behind a long clone or merge) or abandons a holder mid-way; why_new=G10 lock waits ignored stops; seam=none
+  test("a stop gives up the wait, and the queued work never runs", async () => {
+    const repo = `/repos/s-${crypto.randomUUID()}`;
+    const ran: string[] = [];
+    const stop = new AbortController();
+    const holder = withRepoLock(
+      repo,
+      async () => {
+        await sleep(80);
+        ran.push("holder");
+        return "held";
+      },
+      stop.signal,
+    );
+    await sleep(10);
+    const waiter = new AbortController();
+    const queued = withRepoLock(
+      repo,
+      async () => {
+        ran.push("queued");
+      },
+      waiter.signal,
+    );
+    waiter.abort();
+    stop.abort();
+    await expect(queued).rejects.toThrow("Stopped.");
+    expect(await holder).toBe("held");
+    await withRepoLock(repo, async () => {});
+    expect(ran).toEqual(["holder"]);
+  });
+});
+
+describe("hardened host git", () => {
+  // Value: protects=checkouts NightCrew makes in your repo (base and integration worktrees) never run a git-lfs filter, even one your repo's config points at a command; fails_when=GIT_HARDEN loses the filter.lfs overrides and a checkout of agent-written trees runs the smudge or process filter; why_new=G3 lane checkouts ran LFS filters; seam=none
+  test("a base checkout runs no lfs filter", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nc-git-"));
+    try {
+      const marker = join(dir, "filter-ran");
+      await git(dir, "init", "-q", "-b", "main");
+      writeFileSync(join(dir, ".gitattributes"), "*.bin filter=lfs\n");
+      writeFileSync(join(dir, "a.bin"), "data\n");
+      await git(dir, "add", "-A");
+      await git(dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
+      await git(dir, "config", "filter.lfs.smudge", `sh -c 'echo smudge >> ${marker}; cat'`);
+      await git(dir, "config", "filter.lfs.process", `sh -c 'echo process >> ${marker}; exit 1'`);
+      await git(dir, "config", "filter.lfs.required", "true");
+      const base = await baseWorktree(dir, "main", "lfs");
+      expect(readFileSync(join(base.dir, "a.bin"), "utf8")).toBe("data\n");
+      await base.remove();
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

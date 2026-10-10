@@ -2,7 +2,7 @@ import { AUTONOMY_LABEL, type AutonomyLevel, type Repo, type Settings } from "@n
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 import { useState } from "react";
-import { api, crewQuery, reposQuery, settingsQuery } from "../api";
+import { api, crewQuery, infoQuery, reposQuery, settingsQuery } from "../api";
 import { AddRepo } from "../components/add-repo";
 import { ChipsEditor, Field, Select, TextInput } from "../components/form";
 
@@ -17,6 +17,7 @@ export function SettingsPage() {
   const settings = useQuery(settingsQuery);
   const repos = useQuery(reposQuery);
   const crew = useQuery(crewQuery);
+  const info = useQuery(infoQuery);
   const qc = useQueryClient();
   const save = useMutation({
     mutationFn: (patch: Partial<Settings>) => api.patch<Settings>("/api/settings", patch),
@@ -161,8 +162,9 @@ export function SettingsPage() {
         <div className="grid gap-1">
           <h2 className="font-medium text-[16px] tracking-[-0.02em]">Repos</h2>
           <p className="text-[13.5px] text-muted">
-            Where the crew may work. Each task gets its own clone under NightCrew's{" "}
-            <span className="font-mono">work</span> folder, and its result lands in your repo by commit.
+            Where the crew may work. Each task gets its own clone in{" "}
+            <span className="font-mono">{info.data?.workDir ?? "NightCrew's work folder"}</span>, and its result lands
+            in your repo by commit.
           </p>
         </div>
         <div className="grid gap-3">
@@ -187,11 +189,13 @@ function RepoCard({ repo }: { repo: Repo }) {
   const shipReady = (r: Pick<Repo, "shipBranch" | "allowShip">) => Boolean(r.shipBranch && r.allowShip.length);
   const update = useMutation({
     mutationFn: (patch: Partial<Repo>) => api.patch<Repo>(`/api/repos/${repo.id}`, patch),
-    onSuccess: (saved, patch) => {
-      if (patch.level) setPicked(null);
+    onSuccess: async (saved, patch) => {
       // Ship was picked and this save completed its branch and paths: save the level now.
-      else if (picked === "ship" && saved.level !== "ship" && shipReady(saved)) update.mutate({ level: "ship" });
-      return qc.invalidateQueries({ queryKey: ["repos"] });
+      if (!patch.level && picked === "ship" && saved.level !== "ship" && shipReady(saved))
+        update.mutate({ level: "ship" });
+      await qc.invalidateQueries({ queryKey: ["repos"] });
+      // Only once the list shows the saved level, so the select and ship fields don't flick back.
+      if (patch.level) setPicked((p) => (p === patch.level ? null : p));
     },
   });
   const pickLevel = (l: AutonomyLevel) => {
@@ -227,7 +231,7 @@ function RepoCard({ repo }: { repo: Repo }) {
           htmlFor={`level-${repo.id}`}
           hintId={`level-hint-${repo.id}`}
           hint={
-            picked === "ship" && repo.level !== "ship" ? (
+            picked === "ship" && repo.level !== "ship" && !shipReady(repo) ? (
               <>
                 <span className="font-medium text-dawn">Not saved yet.</span>{" "}
                 <span className="text-muted">Set a ship branch and the paths allowed to ship below.</span>

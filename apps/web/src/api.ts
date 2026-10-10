@@ -12,12 +12,25 @@ import type {
 import { formatTokens } from "@nightcrew/core";
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
+import { stashBeforeReload } from "./pending";
+
+/** Writes on the wire. A forced reload waits for them so a save isn't cut off mid-flight. */
+let writes = 0;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, { ...init, headers: { "content-type": "application/json", ...init?.headers } });
-  const body = await res.json().catch(() => null);
+  const write = (init?.method ?? "GET") !== "GET";
+  if (write) writes++;
+  let res: Response;
+  let body: unknown;
+  try {
+    res = await fetch(path, { ...init, headers: { "content-type": "application/json", ...init?.headers } });
+    body = await res.json().catch(() => null);
+  } finally {
+    if (write) writes--;
+  }
   if (res.status === 401) lockedOut();
-  if (!res.ok) throw new ApiError(body?.error ?? `Request failed (${res.status}).`, res.status);
+  if (!res.ok)
+    throw new ApiError((body as { error?: string } | null)?.error ?? `Request failed (${res.status}).`, res.status);
   try {
     sessionStorage.removeItem(RELOADED);
   } catch {}
@@ -30,7 +43,8 @@ const RELOADED = "nc-reloaded-for-key";
  * Each launch of `nightcrew` mints a new key, so a tab left open across a
  * restart gets 401s. Reload once: the server then shows its locked page,
  * which says how to get back in. A flag (cleared by the next good request)
- * keeps this from looping.
+ * keeps this from looping. Unsaved edits are stashed first (see pending.ts),
+ * and a save still on the wire gets a few seconds to finish.
  */
 export function lockedOut() {
   try {
@@ -39,7 +53,17 @@ export function lockedOut() {
   } catch {
     return;
   }
-  window.location.reload();
+  const reload = () => {
+    stashBeforeReload();
+    window.location.reload();
+  };
+  if (writes === 0) return reload();
+  const since = Date.now();
+  const wait = setInterval(() => {
+    if (writes > 0 && Date.now() - since < 5000) return;
+    clearInterval(wait);
+    reload();
+  }, 100);
 }
 
 /** React Query's usual three retries, but never on a 401: a new key won't appear by retrying. */
@@ -182,6 +206,11 @@ export const reposQuery = queryOptions({ queryKey: ["repos"], queryFn: () => api
 export const settingsQuery = queryOptions({
   queryKey: ["settings"],
   queryFn: () => api.get<Settings>("/api/settings"),
+});
+export const infoQuery = queryOptions({
+  queryKey: ["info"],
+  queryFn: () => api.get<{ version: string; dataDir: string; workDir: string }>("/api/info"),
+  staleTime: Number.POSITIVE_INFINITY,
 });
 export const crewQuery = queryOptions({ queryKey: ["crew"], queryFn: () => api.get<CrewStatus>("/api/crew") });
 export const eventsQuery = (runId: string) =>

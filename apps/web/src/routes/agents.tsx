@@ -20,13 +20,28 @@ import { AgentBoard, CrewSummary } from "../components/agent-board";
 import { ChipsEditor, inlineEdit, ListEditor, Select, TextInput } from "../components/form";
 import { Button } from "../components/ui";
 import { isTypingTarget } from "../lib";
+import { dropStash, RESTORED_NOTE, unstash, useStashOnReload } from "../pending";
 
 export function AgentsPage() {
   const repos = useQuery(reposQuery);
   const crew = useQuery(crewQuery);
   const queued = useQuery(tasksQuery(["queued"]));
   const waiting = useQuery(tasksQuery(["draft"]));
-  const [drafts, setDrafts] = useState<DraftTask[] | null>(null);
+  // Composer text and unsaved drafts a restart's reload stashed (pending.ts).
+  const [restored] = useState(() => {
+    const text = unstash<string>("composer");
+    const drafts = unstash<DraftTask[]>("drafts");
+    return {
+      text: typeof text === "string" ? text : "",
+      drafts: Array.isArray(drafts) && drafts.length ? drafts : null,
+    };
+  });
+  const [drafts, setDrafts] = useState<DraftTask[] | null>(restored.drafts);
+  useStashOnReload("drafts", () => drafts);
+  useEffect(() => {
+    dropStash("composer");
+    dropStash("drafts");
+  }, []);
 
   const now = Date.now();
   const all = queued.data ?? [];
@@ -61,8 +76,9 @@ export function AgentsPage() {
           <AddRepo />
         </section>
       ) : (
-        <Composer repos={repos.data ?? []} onDrafts={setDrafts} />
+        <Composer repos={repos.data ?? []} onDrafts={setDrafts} initialText={restored.text} />
       )}
+      {(restored.text || restored.drafts) && <p className="-mt-5 text-[13px] text-muted">{RESTORED_NOTE}</p>}
 
       {drafts && (
         <Drafts drafts={drafts} repos={repos.data ?? []} onChange={setDrafts} onDone={() => setDrafts(null)} />
@@ -146,8 +162,17 @@ function ScheduledRow({ task }: { task: Task }) {
 
 // ── Composer ────────────────────────────────────────────────────────────────
 
-function Composer({ repos, onDrafts }: { repos: Repo[]; onDrafts: (d: DraftTask[]) => void }) {
-  const [text, setText] = useState("");
+function Composer({
+  repos,
+  onDrafts,
+  initialText,
+}: {
+  repos: Repo[];
+  onDrafts: (d: DraftTask[]) => void;
+  initialText: string;
+}) {
+  const [text, setText] = useState(initialText);
+  useStashOnReload("composer", () => text);
   const [repoId, setRepoId] = useState<string | undefined>(undefined);
   const ref = useRef<HTMLTextAreaElement>(null);
   const compose = useMutation({

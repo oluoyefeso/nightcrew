@@ -58,6 +58,7 @@ import {
   dropSetupFiles,
   ensureWorkspace,
   fetchTask,
+  repoSupport,
   taskRef,
   updateLocalBranch,
   type Workspace,
@@ -256,9 +257,14 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
 
   try {
     phase("setup", "Preparing the workspace");
+    const unsupported = repoSupport(repo.path);
+    if (unsupported) return await finish("failed", unsupported);
     // Pinned before any agent runs, from your repo's refs: the base every diff is taken against.
-    const forkSha = await pinnedBase(deps.dataDir, task.id, repo.path, task.branch, repo.defaultBranch);
-    const ws = await ensureWorkspace({ dataDir: deps.dataDir, repo, task, base: forkSha });
+    const forkSha = await pinnedBase(deps.dataDir, task.id, repo.path, task.branch, repo.defaultBranch, [
+      repo.defaultBranch,
+      ...integrationBranches(db, repo, startedAt),
+    ]);
+    const ws = await ensureWorkspace({ dataDir: deps.dataDir, repo, task, base: forkSha, signal: stop });
     workspace = ws;
     const worktree = ws.dir;
     state.worktree = worktree;
@@ -272,7 +278,12 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     ) {
       emit("info", `Installing dependencies: ${repo.setupCommand}`);
       const before = new Set(await cloneChangedFiles(worktree, forkSha, { signal: stop, warn }));
-      const setup = await runCheck(repo.setupCommand, worktree, { timeoutMs: 10 * 60_000, signal: stop, warn });
+      const setup = await runCheck(repo.setupCommand, worktree, {
+        timeoutMs: 10 * 60_000,
+        signal: stop,
+        warn,
+        clone: true,
+      });
       if (!setup.ok) {
         const tail = `${setup.stdout}\n${setup.stderr}`.trim().split("\n").slice(-3).join(" ").slice(-300);
         emit(
@@ -286,7 +297,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       setupFiles = await fingerprints(worktree, touched);
     }
     if (stop.aborted) return await halt("while preparing the workspace");
-    const startSha = await fetchTask(ws);
+    const startSha = await fetchTask(ws, stop);
     const ctx: PromptContext = {
       task,
       repo,
@@ -296,6 +307,8 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     };
     const base = {
       cwd: worktree,
+      // Every phase works in the task's own clone.
+      isolated: true,
       guard: {
         worktree,
         writableDirs: [artifactsDir],
@@ -511,7 +524,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     await dropSetupFiles(worktree, setupFiles, { signal: stop, warn });
     await commitInClone(worktree, `${task.title}\n\nNightCrew task ${task.id}, run ${runId}.`, { signal: stop, warn });
     // The final gate: the commit fetched into your repo, checked by your repo's git.
-    const sha = await fetchTask(ws);
+    const sha = await fetchTask(ws, stop);
     const gate = scopeCheck(await taskChangedFiles(repo.path, forkSha, sha), task);
     if (gate.noChanges) return await finish("failed", "The crew finished without changing anything.");
     if (!gate.ok) {
@@ -520,7 +533,12 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     }
     const files = gate.files;
     state.stat = await diffStat(repo.path, forkSha, sha);
-    await updateLocalBranch(repo.path, task.branch, sha);
+    const local = await updateLocalBranch(repo.path, task.branch, sha);
+    if (!local.ok)
+      emit(
+        "info",
+        `Couldn't update your ${task.branch} branch (${local.reason}). The work is at ${taskRef(task.id)}; to get it, run: git checkout -b <name> ${taskRef(task.id)}`,
+      );
     const hasRemote = (await git(repo.path, "remote", "get-url", "origin")).ok;
     /** The task branch on origin, pushed from your repo by sha. */
     const pushTask = async () => {
@@ -542,7 +560,23 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         const pushFailed = deps.publish && hasRemote ? await pushTask() : null;
         const shipped = pushFailed
           ? { ok: false as const, error: `Couldn't push ${task.branch}: ${pushFailed}` }
-          : await shipTask(repo, sha, task.title, deps.publish);
+          : await shipTask(repo, sha, task.title, deps.publish, {
+              base: forkSha,
+              files,
+              // What actually lands goes through the same checks again.
+              recheck: (landed) => {
+                const scope = scopeCheck(landed, task, { allowEmpty: true });
+                if (!scope.ok) return scope.reason;
+                const again = canShip({
+                  repo,
+                  files: landed,
+                  verdict: state.verdict,
+                  evidenceMissing: evidence?.missing ?? [],
+                  confidence: state.confidence,
+                });
+                return again.ok ? null : again.reasons.join(" ");
+              },
+            });
         if (shipped.ok) {
           markShipped(db, runId, shipped.sha, repo.shipBranch as string);
           emit(
@@ -568,7 +602,14 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       const pushFailed = deps.publish && hasRemote ? await pushTask() : null;
       const boarded = pushFailed
         ? { ok: false as const, error: `Couldn't push ${task.branch}: ${pushFailed}` }
-        : await boardTrain(repo, train, sha, task.title, deps.publish);
+        : await boardTrain(repo, train, sha, task.title, deps.publish, {
+            base: forkSha,
+            files,
+            recheck: (landed) => {
+              const scope = scopeCheck(landed, task, { allowEmpty: true });
+              return scope.ok ? null : scope.reason;
+            },
+          });
       if (boarded.ok) {
         addCar(db, train.id, { runId, taskId: task.id, title: task.title, mergeSha: boarded.sha, state: "on" });
         setRunTrain(db, runId, train.id);
@@ -585,7 +626,12 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
 
     if (deps.publish) {
       if (!hasRemote) {
-        emit("info", "No GitHub remote, so the branch stays local.");
+        emit(
+          "info",
+          local.ok
+            ? `No GitHub remote, so the work stays local, on your ${task.branch} branch.`
+            : `No GitHub remote, so the work stays local, at ${taskRef(task.id)}.`,
+        );
       } else {
         if (stop.aborted) return await halt("before opening the PR");
         phase("publish", "Pushing and opening a draft PR");
@@ -651,7 +697,7 @@ export async function validate(
   const lines = [scope.log];
   const cmd = task.testCommand ?? repo.testCommand;
   if (cmd) {
-    const t = await runCheck(cmd, worktree, { timeoutMs: 15 * 60_000, signal, warn });
+    const t = await runCheck(cmd, worktree, { timeoutMs: 15 * 60_000, signal, warn, clone: true });
     const out = `${t.stdout}\n${t.stderr}`.trim();
     lines.push("", `$ ${cmd}  (exit ${t.code})`, out.length > 8000 ? `…\n${out.slice(-8000)}` : out);
     if (!t.ok)
@@ -668,25 +714,30 @@ export async function validate(
   return { ok: true, noChanges: false, reason: null, log: lines.join("\n"), files: scope.files };
 }
 
+/** Where NightCrew keeps its own checkouts in your repo. No task may commit there. */
+const NIGHTCREW_PATHS = [".worktrees", ".worktrees/**"];
+
 /** Changed files against the task's scope and the paths no task may touch. */
-export function scopeCheck(changed: string[], task: Task): CheckResult {
-  const files = changed.filter((f) => !f.startsWith(".worktrees/"));
+export function scopeCheck(changed: string[], task: Task, o: { allowEmpty?: boolean } = {}): CheckResult {
+  const files = [...changed];
   const lines: string[] = [`Changed files (${files.length}):`, ...files.map((f) => `  ${f}`)];
-  if (files.length === 0)
+  if (files.length === 0 && !o.allowEmpty)
     return { ok: false, noChanges: true, reason: "No files changed.", log: lines.join("\n"), files };
+  const refuse = (reason: string, line = reason) => {
+    lines.push("", line);
+    return { ok: false, noChanges: false, reason, log: lines.join("\n"), files };
+  };
+  const ours = files.filter((f) => matchesAny(f, NIGHTCREW_PATHS));
+  if (ours.length)
+    return refuse(`Changed files in .worktrees, where NightCrew keeps its own checkouts: ${ours.join(", ")}`);
   const outOfScope = files.filter(
     (f) => matchesAny(f, ALWAYS_PROTECTED) || (task.scope.length > 0 && !matchesAny(f, task.scope)),
   );
-  if (outOfScope.length) {
-    lines.push("", `Outside the task's scope: ${outOfScope.join(", ")}`);
-    return {
-      ok: false,
-      noChanges: false,
-      reason: `Changed files outside scope: ${outOfScope.join(", ")}`,
-      log: lines.join("\n"),
-      files,
-    };
-  }
+  if (outOfScope.length)
+    return refuse(
+      `Changed files outside scope: ${outOfScope.join(", ")}`,
+      `Outside the task's scope: ${outOfScope.join(", ")}`,
+    );
   return { ok: true, noChanges: false, reason: null, log: lines.join("\n"), files };
 }
 
@@ -704,10 +755,19 @@ async function pinnedBase(
   repoPath: string,
   branch: string,
   defaultBranch: string,
+  lanes: string[],
 ): Promise<string> {
   const file = join(dataDir, "bases", `${taskId}.sha`);
   const saved = existsSync(file) ? readFileSync(file, "utf8").trim() : "";
+  const save = (sha: string) => {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${sha}\n`);
+    return sha;
+  };
   const tip = (await resolveSha(repoPath, taskRef(taskId))) ?? (await resolveSha(repoPath, `refs/heads/${branch}`));
+  // Work that already landed (on the ship branch, a train or the default branch) passed its checks:
+  // a new run builds on it and is checked from there, so its merge base stays inside what was checked.
+  if (tip && tip !== saved && (await landedOn(repoPath, tip, lanes))) return save(tip);
   if (
     SHA.test(saved) &&
     (await git(repoPath, "cat-file", "-e", `${saved}^{commit}`)).ok &&
@@ -716,9 +776,18 @@ async function pinnedBase(
     return saved;
   const sha = await forkPoint(repoPath, defaultBranch, tip);
   if (!SHA.test(sha)) throw new Error(`Couldn't find ${defaultBranch} in ${repoPath} to start the task from.`);
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, `${sha}\n`);
-  return sha;
+  return save(sha);
+}
+
+/** Whether `sha` is already on one of these branches in your repo (local or origin's copy). */
+async function landedOn(repoPath: string, sha: string, lanes: string[]): Promise<boolean> {
+  for (const lane of new Set(lanes)) {
+    for (const ref of [`refs/heads/${lane}`, `refs/remotes/origin/${lane}`]) {
+      if (!(await resolveSha(repoPath, ref))) continue;
+      if ((await git(repoPath, "merge-base", "--is-ancestor", sha, ref)).ok) return true;
+    }
+  }
+  return false;
 }
 
 /** The repo's ship branch and its train branches: tasks may never move them. */

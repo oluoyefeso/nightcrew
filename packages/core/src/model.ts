@@ -9,7 +9,7 @@ export type RunSource = "classic" | "local" | "managed";
 
 export type PrState = "open" | "draft" | "merged" | "closed";
 
-export type ArtifactKind = "plan" | "decisions" | "review" | "log";
+export type ArtifactKind = "plan" | "decisions" | "review" | "tests" | "report" | "log";
 
 export type TriageAction = "merge" | "send_back" | "close" | "tonight" | "undo";
 
@@ -38,6 +38,10 @@ export interface Run {
   deletions: number | null;
   changedFiles: number | null;
   reason: string | null;
+  /** The reviewer's verdict: ready, needs_eyes or not_done. */
+  verdict: string | null;
+  /** plan | implement | review | validate | publish while running. */
+  phase: string | null;
   /** One-line crew note: what the agent says it did. */
   summary: string | null;
   /** The user's latest triage decision, if it hasn't been undone. */

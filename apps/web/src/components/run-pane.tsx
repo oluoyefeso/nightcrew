@@ -19,6 +19,8 @@ const TAB_LABEL: Record<ArtifactKind, string> = {
   plan: "Plan",
   decisions: "Decisions",
   review: "Review",
+  tests: "Checks",
+  report: "Report",
   log: "Logs",
 };
 

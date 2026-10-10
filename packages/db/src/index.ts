@@ -16,13 +16,18 @@ import {
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { type BunSQLiteDatabase, drizzle } from "drizzle-orm/bun-sqlite";
 import init from "../migrations/0000_init.sql" with { type: "text" };
+import tasksMigration from "../migrations/0001_tasks.sql" with { type: "text" };
 import * as schema from "./schema";
 
+export * from "./tasks";
 export { schema };
 
 // Migrations are embedded so the compiled binary carries them. Append new
 // drizzle-kit output here in order.
-const MIGRATIONS: [name: string, sql: string][] = [["0000_init", init]];
+const MIGRATIONS: [name: string, sql: string][] = [
+  ["0000_init", init],
+  ["0001_tasks", tasksMigration],
+];
 
 export type Db = BunSQLiteDatabase<typeof schema> & { $client: Database };
 
@@ -154,7 +159,7 @@ export function getRun(db: Db, id: string): RunDetail | null {
   return { run: { ...run, attempt: attempts.length }, artifacts, attempts };
 }
 
-const ARTIFACT_ORDER: ArtifactKind[] = ["plan", "decisions", "review", "log"];
+const ARTIFACT_ORDER: ArtifactKind[] = ["report", "plan", "decisions", "review", "tests", "log"];
 
 function hydrate(db: Db, rows: (typeof schema.runs.$inferSelect)[]): Run[] {
   if (rows.length === 0) return [];
@@ -189,7 +194,7 @@ function hydrate(db: Db, rows: (typeof schema.runs.$inferSelect)[]): Run[] {
       repo: r.repo,
       type: r.type,
       status,
-      bucket: classify({ status, prState, prUrl: r.prUrl, triage }),
+      bucket: classify({ status, prState, prUrl: r.prUrl, triage, verdict: r.verdict, type: r.type }),
       source: r.source as RunSource,
       startedAt: r.startedAt,
       endedAt: r.endedAt,
@@ -207,6 +212,8 @@ function hydrate(db: Db, rows: (typeof schema.runs.$inferSelect)[]): Run[] {
       changedFiles: r.changedFiles,
       reason: r.reason,
       summary: r.summary,
+      verdict: r.verdict,
+      phase: r.phase,
       triage,
       note: triage ? (t?.note ?? null) : null,
       artifactKinds: (kinds.get(r.id) ?? []).sort((a, b) => ARTIFACT_ORDER.indexOf(a) - ARTIFACT_ORDER.indexOf(b)),

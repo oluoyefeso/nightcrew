@@ -28,6 +28,8 @@ function run(over: Partial<Run>): Run {
     deletions: null,
     changedFiles: null,
     reason: null,
+    verdict: null,
+    phase: null,
     summary: null,
     triage: null,
     note: null,
@@ -42,6 +44,13 @@ describe("classify", () => {
   });
   test("merged PR counts as shipped", () => {
     expect(classify({ status: "complete", prState: "merged", prUrl: "u" })).toBe("shipped");
+  });
+  test("a reviewer who wants a closer look sends it to needs eyes", () => {
+    expect(classify({ status: "complete", prState: "draft", prUrl: "u", verdict: "needs_eyes" })).toBe("eyes");
+    expect(classify({ status: "complete", prState: "draft", prUrl: "u", verdict: "ready" })).toBe("ready");
+  });
+  test("a finished research task is shipped", () => {
+    expect(classify({ status: "complete", prState: null, prUrl: null, type: "research" })).toBe("shipped");
   });
   test("completed without a PR needs eyes", () => {
     expect(classify({ status: "complete", prState: null, prUrl: null })).toBe("eyes");

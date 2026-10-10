@@ -211,14 +211,20 @@ function EmptyState() {
     <div className="mx-auto grid max-w-[620px] gap-5 px-4 pt-24 sm:px-8">
       <h1 className="font-serif text-[44px] leading-[1.05] tracking-[-0.01em]">No nights yet.</h1>
       <p className="text-[15px] text-muted leading-relaxed">
-        NightCrew didn't find any runs. If you used the classic runner, point the dashboard at it and your history will
-        appear here.
+        Queue some work for tonight and the crew's results land here in the morning: what shipped, what needs you, and
+        the evidence for each.
       </p>
-      <pre className="overflow-x-auto rounded-xl bg-surface px-4 py-3 font-mono text-[13px] ring-1 ring-line">
-        nightcrew import --classic ~/path/to/nightcrew
-      </pre>
+      <div>
+        <Link
+          to="/tonight"
+          className="inline-flex h-9 items-center gap-2 rounded-full bg-dawn px-4 font-medium text-[13.5px] text-on-dawn"
+        >
+          Plan tonight
+        </Link>
+      </div>
       <p className="text-[13px] text-faint">
-        The Tonight composer for queueing new work arrives in the next milestone.
+        Used the classic runner? Import its history with{" "}
+        <span className="font-mono">nightcrew import --classic ~/path/to/nightcrew</span>
       </p>
     </div>
   );

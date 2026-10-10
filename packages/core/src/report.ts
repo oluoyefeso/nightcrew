@@ -19,6 +19,8 @@ export function classify(input: {
   prState: PrState | null;
   prUrl: string | null;
   triage?: "merge" | "send_back" | "close" | "tonight" | "undo" | null;
+  verdict?: string | null;
+  type?: string | null;
 }): Bucket {
   if (input.triage === "send_back" || input.triage === "tonight") return "back";
   if (input.triage === "merge" || input.prState === "merged") return "shipped";
@@ -26,7 +28,11 @@ export function classify(input: {
   if (input.status === "failed" || input.status === "timeout" || input.status === "blocked") {
     return "failed";
   }
-  if (input.status === "complete" && input.prUrl) return "ready";
+  if (input.status === "running" || input.status === "pending") return "eyes";
+  // A research report is the deliverable; there's nothing to merge.
+  if (input.type === "research" && input.status === "complete") return "shipped";
+  if (input.status === "complete" && input.prUrl && (input.verdict == null || input.verdict === "ready"))
+    return "ready";
   return "eyes";
 }
 
@@ -135,6 +141,7 @@ export function formatCost(cents: number): string {
 }
 
 export function formatDuration(ms: number): string {
+  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
   const m = Math.round(ms / 60_000);
   const h = Math.floor(m / 60);
   return h ? `${h}h ${m % 60}m` : `${m}m`;

@@ -15,11 +15,13 @@ export const RunRow = forwardRef<
   }
 >(function RunRow({ run, selected, highlighted, onSelect, onHover }, ref) {
   const note =
-    run.bucket === "back" && run.note
-      ? `You: ${run.note}`
-      : run.status !== "complete"
-        ? (run.reason ?? run.summary)
-        : run.summary;
+    run.status === "running"
+      ? `Working now${run.phase ? `: ${run.phase}` : ""}…`
+      : run.bucket === "back" && run.note
+        ? `You: ${run.note}`
+        : run.status !== "complete"
+          ? (run.reason ?? run.summary)
+          : run.summary;
   return (
     <button
       ref={ref}

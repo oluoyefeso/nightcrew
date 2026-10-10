@@ -4,7 +4,12 @@ import { createRootRoute, createRoute, createRouter, RouterProvider } from "@tan
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { Shell } from "./components/shell";
+import { LaterPage } from "./routes/later";
 import { ReportPage } from "./routes/report";
+import { RunPage } from "./routes/run";
+import { SettingsPage } from "./routes/settings";
+import { TaskPage } from "./routes/task";
+import { TonightPage } from "./routes/tonight";
 
 type ReportSearch = { run?: string };
 const validateSearch = (s: Record<string, unknown>): ReportSearch => (typeof s.run === "string" ? { run: s.run } : {});
@@ -32,8 +37,36 @@ const nightRoute = createRoute({
   },
 });
 
+const tonightRoute = createRoute({ getParentRoute: () => rootRoute, path: "/tonight", component: TonightPage });
+const laterRoute = createRoute({ getParentRoute: () => rootRoute, path: "/later", component: LaterPage });
+const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage });
+const taskRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/task/$taskId",
+  component: function Task() {
+    const { taskId } = taskRoute.useParams();
+    return <TaskPage taskId={taskId} />;
+  },
+});
+const runRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/run/$runId",
+  component: function Run() {
+    const { runId } = runRoute.useParams();
+    return <RunPage runId={runId} />;
+  },
+});
+
 const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, nightRoute]),
+  routeTree: rootRoute.addChildren([
+    indexRoute,
+    nightRoute,
+    tonightRoute,
+    laterRoute,
+    settingsRoute,
+    taskRoute,
+    runRoute,
+  ]),
   defaultPreload: "intent",
 });
 

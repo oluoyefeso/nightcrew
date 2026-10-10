@@ -1,10 +1,22 @@
 import { existsSync } from "node:fs";
 import { extname, join } from "node:path";
 import type { TriageAction } from "@nightcrew/core";
-import { type Db, getReport, getRun, listNights, recordTriage, schema } from "@nightcrew/db";
+import {
+  addNote,
+  type Db,
+  getReport,
+  getRun,
+  getTask,
+  listNights,
+  recordTriage,
+  schema,
+  updateTask,
+} from "@nightcrew/db";
+import type { AgentEngine, Crew } from "@nightcrew/runner";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { mergePr } from "./github";
+import { mountTaskRoutes } from "./routes";
 import { syncClassic } from "./sync";
 
 const ACTIONS: TriageAction[] = ["merge", "send_back", "close", "tonight", "undo"];
@@ -14,6 +26,8 @@ export interface ServerOptions {
   cwd: string;
   classicRoot?: string;
   webDir?: string;
+  crew: Crew;
+  engine: AgentEngine;
 }
 
 export function createApp(opts: ServerOptions) {
@@ -50,9 +64,23 @@ export function createApp(opts: ServerOptions) {
       if (!merged.ok) return c.json({ error: merged.error }, 502);
       db.update(schema.runs).set({ prState: "merged" }).where(eq(schema.runs.id, id)).run();
     }
-    recordTriage(db, id, action, body.note?.trim() || null);
+    const note = body.note?.trim() || null;
+    recordTriage(db, id, action, note);
+
+    // Morning decisions feed back into the task itself.
+    const task = getTask(db, detail.run.taskId);
+    if (task && task.status !== "running") {
+      if (action === "send_back") {
+        if (note) addNote(db, task.id, "you", note, id);
+        updateTask(db, task.id, { status: "queued" });
+      } else if (action === "tonight") updateTask(db, task.id, { status: "queued" });
+      else if (action === "close" || action === "merge") updateTask(db, task.id, { status: "archived" });
+      else if (action === "undo") updateTask(db, task.id, { status: "done" });
+    }
     return c.json(getRun(db, id));
   });
+
+  mountTaskRoutes(app, { db, crew: opts.crew, engine: opts.engine });
 
   app.post("/api/sync", async (c) => {
     const result = await syncClassic(db, { root: opts.classicRoot, cwd: opts.cwd, github: true });

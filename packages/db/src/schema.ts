@@ -74,6 +74,12 @@ export const repos = sqliteTable("repos", {
   testCommand: text("test_command"),
   level: text("level").notNull().default("draft_pr"),
   createdAt: text("created_at").notNull(),
+  /** Installs dependencies in a fresh worktree (bun install, npm ci…). */
+  setupCommand: text("setup_command"),
+  /** Starts the app for screenshots. $PORT is set; {port} in the URL is replaced. */
+  previewCommand: text("preview_command"),
+  previewUrl: text("preview_url"),
+  previewPaths: text("preview_paths", { mode: "json" }).$type<string[]>().notNull().default(["/"]),
 });
 
 export const tasks = sqliteTable(

@@ -13,9 +13,11 @@ import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import { runQuery, useTriage } from "../api";
 import { BUCKET_COLOR, durationMs, fmtModel, fmtTime, fmtTokens, isTypingTarget } from "../lib";
+import { EvidenceView, parseEvidence } from "./evidence";
 import { Button, Chip, Kbd, Pill } from "./ui";
 
 const TAB_LABEL: Record<ArtifactKind, string> = {
+  evidence: "Evidence",
   plan: "Plan",
   decisions: "Decisions",
   review: "Review",
@@ -151,11 +153,16 @@ export function RunPane({
                 </button>
               ))}
             </div>
-            {artifact && (
+            {artifact?.kind === "evidence" ? (
+              (() => {
+                const ev = parseEvidence(artifact.content);
+                return ev ? <EvidenceView runId={run.id} evidence={ev} /> : null;
+              })()
+            ) : artifact ? (
               <div className="prose-nc">
                 <Markdown>{artifact.content}</Markdown>
               </div>
-            )}
+            ) : null}
           </div>
         )}
       </div>

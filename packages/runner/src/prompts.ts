@@ -12,6 +12,8 @@ export interface PromptContext {
   /** Commits already on the branch from an earlier attempt. */
   resumeCommits: number;
   plan?: string;
+  /** Summary of the evidence NightCrew gathered itself. */
+  evidence?: string;
 }
 
 const scopeLine = (t: Task) => (t.scope.length ? t.scope.join(", ") : "anything in the repository (no scope was set)");
@@ -132,9 +134,19 @@ export const REVIEW_SCHEMA = {
       },
     },
     concerns: { type: "array", items: { type: "string" } },
+    challenges: {
+      type: "array",
+      description:
+        "Each way you tried to show the work is wrong or incomplete, and whether that challenge held (found a real problem) or failed (the work survived it).",
+      items: {
+        type: "object",
+        properties: { challenge: { type: "string" }, held: { type: "boolean" }, detail: { type: "string" } },
+        required: ["challenge", "held", "detail"],
+      },
+    },
     report: { type: "string", description: "The full review in markdown." },
   },
-  required: ["verdict", "summary", "criteria", "concerns", "report"],
+  required: ["verdict", "summary", "criteria", "concerns", "challenges", "report"],
 } as const;
 
 export interface ReviewOutput {
@@ -142,17 +154,21 @@ export interface ReviewOutput {
   summary: string;
   criteria: { criterion: string; met: boolean; evidence: string }[];
   concerns: string[];
+  challenges?: { challenge: string; held: boolean; detail: string }[];
   report: string;
 }
 
 export function reviewPrompt(ctx: PromptContext): { system: string; prompt: string } {
   return {
-    system: `You are NightCrew's reviewer. The implementer was a different agent; don't take its word for anything. Your job is to try to show the task is NOT done. Read the diff, run the tests, and check each acceptance criterion against real evidence.
+    system: `You are NightCrew's Skeptic. The implementer was a different agent; don't take its word for anything. Your job is to try to show the task is NOT done. Read the diff, run the tests, and check each acceptance criterion against real evidence. Make at least five concrete challenges (an edge case, a criterion, a test that might pass for the wrong reason, a regression, a scope problem) and record whether each one held.
 
 You may fix small mechanical problems (typos, lint, a missing import) inside the task's scope. Anything bigger goes in your concerns.`,
     prompt: `${taskBlock(ctx)}
 
 Review the work: \`git diff ${ctx.repo.defaultBranch}...HEAD\` plus anything uncommitted (\`git status\`, \`git diff\`).
+
+## Evidence NightCrew gathered itself (trust this over the implementer's claims)
+${ctx.evidence ?? "- None for this task type."}
 
 Check:
 1. Each acceptance criterion: met or not, with the evidence (a test name, a command and its output, a file and line).

@@ -97,6 +97,77 @@ export function detectTestCommand(path: string): string | null {
   return null;
 }
 
+type PackageJson = {
+  scripts?: Record<string, string>;
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+};
+
+function readPackage(path: string): PackageJson | null {
+  try {
+    return JSON.parse(readFileSync(join(path, "package.json"), "utf8")) as PackageJson;
+  } catch {
+    return null;
+  }
+}
+
+function packageManager(path: string): "bun" | "pnpm" | "yarn" | "npm" {
+  const has = (f: string) => existsSync(join(path, f));
+  return has("bun.lock") || has("bun.lockb")
+    ? "bun"
+    : has("pnpm-lock.yaml")
+      ? "pnpm"
+      : has("yarn.lock")
+        ? "yarn"
+        : "npm";
+}
+
+/** How to install dependencies in a fresh worktree. */
+export function detectSetupCommand(path: string): string | null {
+  const has = (f: string) => existsSync(join(path, f));
+  if (has("package.json")) {
+    const pm = packageManager(path);
+    return pm === "bun"
+      ? "bun install --frozen-lockfile"
+      : pm === "pnpm"
+        ? "pnpm install --frozen-lockfile"
+        : pm === "yarn"
+          ? "yarn install --frozen-lockfile"
+          : has("package-lock.json")
+            ? "npm ci"
+            : "npm install";
+  }
+  if (has("uv.lock")) return "uv sync";
+  if (has("requirements.txt")) return "pip install -r requirements.txt";
+  return null;
+}
+
+/**
+ * How to run the app for screenshots. "static" means NightCrew serves the
+ * folder itself. $PORT is set in the environment.
+ */
+export function detectPreview(path: string): { command: string; url: string } | null {
+  const pkg = readPackage(path);
+  if (pkg?.scripts) {
+    const pm = packageManager(path);
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    const run = (script: string, args = "") => `${pm} run ${script}${args ? ` -- ${args}` : ""}`;
+    const script = pkg.scripts.dev ? "dev" : pkg.scripts.start ? "start" : pkg.scripts.preview ? "preview" : null;
+    if (script) {
+      const body = pkg.scripts[script] ?? "";
+      if (deps.vite || /\bvite\b/.test(body))
+        return { command: run(script, "--port $PORT --strictPort"), url: "http://localhost:{port}" };
+      if (deps.next || /\bnext\b/.test(body))
+        return { command: run(script, "-p $PORT"), url: "http://localhost:{port}" };
+      if (deps.astro || /\bastro\b/.test(body))
+        return { command: run(script, "--port $PORT"), url: "http://localhost:{port}" };
+      return { command: run(script), url: "http://localhost:{port}" };
+    }
+  }
+  if (existsSync(join(path, "index.html"))) return { command: "static", url: "http://localhost:{port}" };
+  return null;
+}
+
 /**
  * Create (or reuse) the worktree for a task branch under <repo>/.worktrees.
  * A branch that already exists, from a sent-back task, is checked out as-is
@@ -118,6 +189,25 @@ export async function ensureWorktree(repoPath: string, branch: string, base: str
     : await git(repoPath, "worktree", "add", "-b", branch, dir, base);
   if (!add.ok) throw new Error(`Couldn't create a worktree for ${branch}: ${add.stderr.trim()}`);
   return dir;
+}
+
+/** A throwaway checkout of the base branch, for before-screenshots and fail-then-pass. */
+export async function baseWorktree(
+  repoPath: string,
+  base: string,
+  label: string,
+): Promise<{ dir: string; remove: () => Promise<void> }> {
+  const dir = join(repoPath, ".worktrees", `_base-${slugify(label, 40)}`);
+  excludeWorktrees(repoPath);
+  if (existsSync(dir)) await git(repoPath, "worktree", "remove", "--force", dir);
+  const add = await git(repoPath, "worktree", "add", "--detach", dir, base);
+  if (!add.ok) throw new Error(`Couldn't check out ${base} for comparison: ${add.stderr.trim()}`);
+  return {
+    dir,
+    remove: async () => {
+      await git(repoPath, "worktree", "remove", "--force", dir);
+    },
+  };
 }
 
 /** Keep .worktrees out of `git status` without touching the repo's .gitignore. */

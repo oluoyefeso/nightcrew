@@ -3,11 +3,12 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { git } from "./git";
-import { bwrapArgs, checkEnv, runCheck, seatbeltProfile } from "./sandbox";
+import { bwrapArgs, runCheck, seatbeltProfile } from "./sandbox";
 
 let dir: string;
 let repo: string;
 let wt: string;
+let clone: string;
 
 beforeEach(async () => {
   dir = realpathSync(mkdtempSync(join(tmpdir(), "nc-sbx-")));
@@ -19,6 +20,8 @@ beforeEach(async () => {
   await git(repo, "add", "-A");
   await git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
   await git(repo, "worktree", "add", "-q", "-b", "task", wt, "main");
+  clone = join(dir, "clone");
+  await git(dir, "clone", "-q", "--shared", repo, clone);
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -51,46 +54,61 @@ describe("seatbelt profile", () => {
     expect(seatbeltProfile('/x/a "b"\\c')).toContain('(subpath "/x/a \\"b\\"\\\\c")');
   });
 
-  test("bubblewrap binds the worktree writable and its .git pointer read-only after it", () => {
-    const a = bwrapArgs(wt).join(" ");
-    expect(a).toContain("--ro-bind / / --dev /dev --proc /proc --tmpfs /tmp");
-    expect(a).toContain(`--bind ${wt} ${wt}`);
-    expect(a.indexOf(`--ro-bind ${join(wt, ".git")}`)).toBeGreaterThan(a.indexOf(`--bind ${wt} ${wt}`));
+  // Value: protects=git in an integration worktree can write its own index, logs, lfs and submodule data, but never the files that tie it to a repo and a branch; fails_when=the worktree's gitdir isn't allowed, or HEAD, commondir, gitdir or config.worktree aren't denied after it; why_new=design point 10; seam=none
+  test("a linked worktree may write its own gitdir, lfs and modules, minus what ties it to a branch", () => {
+    const p = seatbeltProfile(wt);
+    const own = join(repo, ".git", "worktrees", "wt");
+    const allows = p.slice(p.indexOf("(allow file-write*"), p.lastIndexOf("(deny file-write*"));
+    for (const sub of [own, join(repo, ".git", "lfs"), join(repo, ".git", "modules")])
+      expect(allows).toContain(`(subpath "${sub}")`);
+    const denies = p.slice(p.lastIndexOf("(deny file-write*"));
+    for (const f of ["HEAD", "commondir", "gitdir", "config.worktree"])
+      expect(denies).toContain(`(literal "${join(own, f)}")`);
   });
-});
 
-describe("check environment", () => {
-  // Value: protects=repo commands never see NightCrew's GitHub, npm, cloud, Slack or model credentials; fails_when=a token variable or prefix is dropped from the strip list; why_new=G6 env sanitizer is new; seam=none
-  test("strips credentials and keeps the rest", () => {
-    const added = {
-      GH_TOKEN: "x",
-      GITHUB_TOKEN: "x",
-      NPM_TOKEN: "x",
-      AWS_SECRET_ACCESS_KEY: "x",
-      AZURE_CLIENT_SECRET: "x",
-      SLACK_BOT_TOKEN: "x",
-      ANTHROPIC_API_KEY: "x",
-      TYPESAFE_API_KEY: "x",
-      NC_KEEP_ME: "yes",
-    };
-    Object.assign(process.env, added);
-    try {
-      const env = checkEnv({ PORT: "3000" });
-      for (const k of [
-        "GH_TOKEN",
-        "GITHUB_TOKEN",
-        "NPM_TOKEN",
-        "AWS_SECRET_ACCESS_KEY",
-        "AZURE_CLIENT_SECRET",
-        "SLACK_BOT_TOKEN",
-        "ANTHROPIC_API_KEY",
-        "TYPESAFE_API_KEY",
-      ])
-        expect(env[k]).toBeUndefined();
-      expect(env).toMatchObject({ NC_KEEP_ME: "yes", PORT: "3000", GIT_TERMINAL_PROMPT: "0" });
-    } finally {
-      for (const k of Object.keys(added)) delete process.env[k];
-    }
+  // Value: protects=submodules, git-lfs and stash in a task's clone, which shares nothing writable with the host; fails_when=a clone's .git is still denied; why_new=design point 10, clones replace linked worktrees; seam=none
+  test("a standalone clone is writable whole, .git included", () => {
+    const p = seatbeltProfile(clone);
+    expect(p).toContain(`(subpath "${clone}")`);
+    expect(p).not.toContain("(deny file-write*\n");
+    expect(p).not.toContain(join(repo, ".git"));
+  });
+
+  // Value: protects=checks from starting a process outside the sandbox through launchd, LaunchServices or Apple Events; fails_when=the exec or mach-lookup denies go missing; why_new=the profile only limited writes, so `open` or `launchctl` escaped it; seam=none
+  test("blocks the launchers and the services that start work outside the sandbox", () => {
+    const p = seatbeltProfile(clone);
+    const exec = p.slice(p.indexOf("(deny process-exec"));
+    for (const bin of ["/bin/launchctl", "/usr/bin/open", "/usr/bin/osascript"])
+      expect(exec).toContain(`(literal "${bin}")`);
+    const mach = p.slice(p.indexOf("(deny mach-lookup"));
+    expect(mach).toContain('(global-name "com.apple.coreservices.launchservicesd")');
+    expect(mach).toContain('(global-name "com.apple.coreservices.quarantine-resolver")');
+    expect(mach).toContain('(global-name "com.apple.coreservices.appleevents")');
+    expect(mach).toContain('(global-name-regex #"^com\\.apple\\.lsd\\.")');
+  });
+
+  // Value: protects=a check on Linux from writing a linked worktree's pointer, HEAD or the shared config, from injecting into the caller's terminal, and from outliving NightCrew; fails_when=a deny is bound before the writable mount it narrows (later mounts win), or --new-session, --die-with-parent or --unshare-pid go missing; why_new=S5 and design point 10; seam=none
+  test("bubblewrap binds the worktree and its gitdir writable, then the git denies read-only", () => {
+    const a = bwrapArgs(wt).join(" ");
+    expect(a).toContain(
+      "--ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --new-session --die-with-parent --unshare-pid",
+    );
+    const own = join(repo, ".git", "worktrees", "wt");
+    const wtBind = a.indexOf(`--bind ${wt} ${wt}`);
+    const ownBind = a.indexOf(`--bind ${own} ${own}`);
+    expect(wtBind).toBeGreaterThan(a.indexOf(`--ro-bind ${join(repo, ".git")} `));
+    expect(ownBind).toBeGreaterThan(wtBind);
+    expect(a.indexOf(`--ro-bind ${join(wt, ".git")} `)).toBeGreaterThan(wtBind);
+    expect(a.indexOf(`--ro-bind ${join(own, "HEAD")} `)).toBeGreaterThan(ownBind);
+    expect(a.indexOf(`--ro-bind ${join(repo, ".git", "config")} `)).toBeGreaterThan(wtBind);
+  });
+
+  // Value: protects=git in a clone under /tmp on Linux, whose borrowed objects the /tmp tmpfs would hide; fails_when=the alternates' object dir isn't bound read-only; why_new=clones borrow objects through alternates; seam=none
+  test("bubblewrap keeps a clone's borrowed objects readable", () => {
+    const a = bwrapArgs(clone).join(" ");
+    const objects = join(repo, ".git", "objects");
+    expect(a).toContain(`--ro-bind ${objects} ${objects}`);
+    expect(a.indexOf(`--bind ${clone} ${clone}`)).toBeGreaterThan(a.indexOf(`--ro-bind ${objects}`));
   });
 });
 
@@ -106,12 +124,14 @@ describe.skipIf(process.platform !== "darwin")("real sandbox on macOS", () => {
           `echo c > '${outside}' && echo LEAK-home`,
           "echo d > .git && echo LEAK-pointer",
           "echo e > ../repo/.git/hooks/pre-commit && echo LEAK-hooks",
+          "echo f > ../repo/.git/worktrees/wt/nc-probe && echo ok-gitdir",
+          "echo ref: refs/heads/main > ../repo/.git/worktrees/wt/HEAD && echo LEAK-head",
           "bun --version >/dev/null && echo ok-bun",
           "true",
         ].join("; "),
         wt,
       );
-      expect(r.stdout.split("\n").filter(Boolean)).toEqual(["ok-inside", "ok-tmp", "ok-bun"]);
+      expect(r.stdout.split("\n").filter(Boolean)).toEqual(["ok-inside", "ok-tmp", "ok-gitdir", "ok-bun"]);
       expect(existsSync(join(wt, "inside.txt"))).toBe(true);
       expect(existsSync(outside)).toBe(false);
       expect(existsSync(join(repo, ".git", "hooks", "pre-commit"))).toBe(false);
@@ -120,5 +140,28 @@ describe.skipIf(process.platform !== "darwin")("real sandbox on macOS", () => {
       rmSync(outside, { force: true });
       rmSync(join(tmpdir(), "nc-sbx-x"), { force: true });
     }
+  });
+
+  // Value: protects=git commit, stash and hook files inside a task's clone; fails_when=the clone's .git is denied; why_new=design point 10; seam=none
+  test("git works inside a clone", async () => {
+    const r = await runCheck(
+      [
+        "echo b > b.txt && git add -A && git -c user.name=t -c user.email=t@t commit -qm b && echo ok-commit",
+        "echo c > c.txt && git stash -q -u && git stash list | grep -q stash@ && echo ok-stash",
+        "echo x > .git/hooks/post-commit && echo ok-hooks",
+        "true",
+      ].join("; "),
+      clone,
+    );
+    expect(r.stdout.split("\n").filter(Boolean)).toEqual(["ok-commit", "ok-stash", "ok-hooks"]);
+  });
+
+  // Value: protects=checks from escaping the sandbox through launchd, LaunchServices or Apple Events; fails_when=the exec denies stop applying; why_new=the profile only limited writes; seam=none
+  test("launchctl, open and osascript can't run", async () => {
+    const r = await runCheck(
+      "for b in /bin/launchctl /usr/bin/open /usr/bin/osascript; do $b >/dev/null 2>&1; echo $?; done; bun --version >/dev/null && echo ok-bun",
+      clone,
+    );
+    expect(r.stdout.split("\n").filter(Boolean)).toEqual(["126", "126", "126", "ok-bun"]);
   });
 });

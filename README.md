@@ -19,8 +19,10 @@ NightCrew needs `git`, the GitHub CLI (`gh auth login`), and either Claude Code 
 ```bash
 cd ~/code/my-app
 nightcrew repo add        # detects the test, install and preview commands
-nightcrew                 # opens the dashboard at http://localhost:3721
+nightcrew                 # prints a dashboard link and opens it
 ```
+
+The link (`http://localhost:3721/?t=…`) carries a key that changes every launch. With `--no-open`, or after a restart, open the link `nightcrew` just printed.
 
 Give the agents work in the dashboard, or from a terminal:
 
@@ -34,7 +36,7 @@ Agents start as soon as a slot is free: up to 3 at once and 1 per repo by defaul
 
 1. **Dispatch.** Describe the work. NightCrew drafts task cards with scope, acceptance criteria, the evidence it will need and a token budget, and asks one question if something is unclear. Run now, schedule it, or park it in Later.
 2. **Agents work, in parallel.** The **Agents** page shows every agent live: its phase, its last step, and a Stop button.
-   - Each task gets its own git worktree and an isolated Claude session.
+   - Each task gets its own clone of the repo (under `~/.nightcrew/work`) and an isolated Claude session, and lands by commit.
    - Small tasks build directly; bigger ones plan first.
    - Every tool call passes a guard that refuses writes outside scope, pushes, publishing, secrets and protected branches.
    - NightCrew runs your tests itself and gives a failing task one repair attempt, then gathers evidence and hands it to the Skeptic.

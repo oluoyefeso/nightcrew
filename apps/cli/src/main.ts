@@ -20,6 +20,7 @@ import {
   ManagedEngine,
   reflexesFromEnv,
   SdkEngine,
+  setLandingHome,
   takeCrewLock,
 } from "@nightcrew/runner";
 import { createApp, VERSION } from "./server";
@@ -92,6 +93,7 @@ Then start NightCrew again. To look around without Claude, use: nightcrew --demo
   process.exit(1);
 }
 mkdirSync(values.data, { recursive: true });
+setLandingHome(values.data);
 const db = openDb(join(values.data, "nightcrew.db"));
 const classicRoot = values.classic ? resolve(values.classic) : undefined;
 const engine: AgentEngine = values.demo

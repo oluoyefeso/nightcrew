@@ -43,7 +43,7 @@ export function mountTrustRoutes(app: Hono, deps: { db: Db; publish: boolean }) 
     const repo = getRepo(db, c.req.param("id"));
     if (!repo) return c.json({ error: "Repo not found." }, 404);
     if (level !== "train" && level !== "ship") return c.json({ error: "Promote to train or ship." }, 400);
-    const blocker = level === "ship" ? shipBlocker(repo) : null;
+    const blocker = level === "ship" ? shipBlocker(repo, "promote") : null;
     if (blocker) return c.json({ error: blocker }, 400);
     return c.json(updateRepo(db, repo.id, { level }));
   });

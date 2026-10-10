@@ -9,13 +9,14 @@ import {
 } from "react";
 
 const control =
-  "w-full rounded-xl bg-bg px-3 py-2 text-[13.5px] text-fg outline-none ring-1 ring-line transition-shadow placeholder:text-faint focus-within:ring-[color-mix(in_srgb,var(--dawn)_60%,transparent)]";
+  "w-full rounded-xl bg-bg px-3 py-2 text-[13.5px] text-fg outline-none ring-1 ring-line transition-shadow placeholder:text-faint focus-within:ring-dawn";
 
 /**
- * The focus ring for in-place editors (list rows, inline titles). Same strength
- * as form controls so it stays visible in Morning; only the resting ring is dropped.
+ * The focus ring for in-place editors (list rows, inline titles). Same solid
+ * dawn as form controls (at least 3:1 against the page in both themes); only
+ * the resting ring is dropped.
  */
-export const inlineEdit = "focus-within:ring-1 focus-within:ring-[color-mix(in_srgb,var(--dawn)_60%,transparent)]";
+export const inlineEdit = "focus-within:ring-1 focus-within:ring-dawn";
 const listRow = "group flex items-start gap-2.5 rounded-lg px-1 py-1 hover:bg-raised/60";
 
 export function Field({
@@ -23,11 +24,14 @@ export function Field({
   hint,
   children,
   htmlFor,
+  hintId,
 }: {
   label: string;
   hint?: ReactNode;
   children: ReactNode;
   htmlFor?: string;
+  /** Give the hint an id so its control can point at it with aria-describedby. */
+  hintId?: string;
 }) {
   return (
     <div className="grid content-start gap-1.5">
@@ -35,7 +39,11 @@ export function Field({
         {label}
       </label>
       {children}
-      {hint && <p className="text-[12px] text-faint">{hint}</p>}
+      {hint && (
+        <p id={hintId} className="text-[12px] text-faint">
+          {hint}
+        </p>
+      )}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { guardToolCall } from "@nightcrew/core/guard";
@@ -19,6 +19,7 @@ import { ScriptedEngine } from "./engine";
 import { git } from "./git";
 import { normalizeReview, runTask } from "./pipeline";
 import type { ReviewOutput } from "./prompts";
+import { workspaceDir } from "./workspace";
 
 let dir: string;
 let repoPath: string;
@@ -90,8 +91,14 @@ describe("runTask", () => {
     expect(detail?.artifacts.map((a) => a.kind).sort()).toEqual(["decisions", "plan", "review", "tests"]);
     expect(getTask(db, task.id)?.status).toBe("done");
 
-    const wt = detail?.run.branch ? join(repoPath, ".worktrees", "crew-add-the-feature") : "";
+    // The work happened in the task's own clone, outside the repo, and landed in the repo by fetch.
+    const wt = workspaceDir(join(dir, "data"), task.repoId, task.id);
+    expect(wt).toBe(join(dir, "data", "work", task.repoId, task.id));
+    expect(statSync(join(wt, ".git")).isDirectory()).toBe(true);
     expect((await git(wt, "log", "--oneline", "main..HEAD")).stdout).toContain("Add the feature");
+    expect((await git(repoPath, "log", "--oneline", `main..refs/nightcrew/tasks/${task.id}`)).stdout).toContain(
+      "Add the feature",
+    );
     // Artifacts live in NightCrew's folder, not the repo.
     expect((await git(wt, "ls-files")).stdout).not.toContain("DECISIONS");
     // The plan phase was read-only and the implementer got the plan.
@@ -222,8 +229,38 @@ test("files written by NightCrew's dependency install don't count against scope 
   });
   const out = await runTask(deps(engine), task.id, new AbortController().signal);
   expect(out.status).toBe("complete");
-  const wt = join(repoPath, ".worktrees", "crew-add-the-feature");
-  expect((await git(wt, "show", "--stat", "--name-only", "HEAD")).stdout).not.toContain("package-lock.json");
+  const shown = await git(repoPath, "show", "--stat", "--name-only", `refs/nightcrew/tasks/${task.id}`);
+  expect(shown.stdout).toContain("src/feature.ts");
+  expect(shown.stdout).not.toContain("package-lock.json");
+});
+
+test("a failed dependency install is logged with the end of its output", async () => {
+  // Value: protects=the setup failure event carries a short tail of the install's output so you can see why; fails_when=the event only says the exit code; why_new=cycle-3 review: setup failure log had no stderr; seam=none
+  const repo = addRepo(db, {
+    name: "acme",
+    path: repoPath,
+    defaultBranch: "main",
+    testCommand: "test -f src/feature.ts",
+    setupCommand: "echo 'lockfile is out of date' >&2; exit 1",
+  });
+  const task = createTask(db, {
+    repoId: repo.id,
+    title: "Add the feature",
+    workflow: "quick",
+    scope: ["src/**"],
+    status: "queued",
+  });
+  const engine = new ScriptedEngine({
+    implement: (req) => {
+      writeFileSync(join(req.cwd, "src", "feature.ts"), "x\n");
+      return { text: "Done." };
+    },
+    review: () => ({ structured: READY }),
+  });
+  const out = await runTask(deps(engine), task.id, new AbortController().signal);
+  expect(out.status).toBe("complete");
+  const failed = listRunEvents(db, out.runId).find((e) => e.text.startsWith("Dependency install failed"));
+  expect(failed?.text).toContain("lockfile is out of date");
 });
 
 describe("token budget split", () => {
@@ -306,7 +343,7 @@ describe("stopping", () => {
     expect(out.reason).toBe("Stopped while checking the work.");
     expect(engine.calls.map((c) => c.phase)).toEqual(["plan", "implement"]);
     // The work is kept as WIP on the branch, not committed as finished.
-    const wt = join(repoPath, ".worktrees", "crew-add-the-feature");
+    const wt = workspaceDir(join(dir, "data"), task.repoId, task.id);
     expect((await git(wt, "log", "-1", "--format=%s")).stdout).toContain("WIP: Add the feature");
   });
 });
@@ -488,5 +525,87 @@ describe("rate limits", () => {
     );
     expect(cut.status).toBe("failed");
     expect(cut.rateLimited).toBe(true);
+  });
+});
+
+describe("task clones", () => {
+  test("a task with a worktree from an earlier version continues from its branch in a fresh clone", async () => {
+    // Value: protects=tasks that already have <repo>/.worktrees/<slug> from earlier alphas resume their branch's commits in a new clone, and the old worktree is left alone; fails_when=the clone starts from main (losing the branch's work) or the legacy worktree is reused or removed; why_new=D12 legacy carry-over; seam=none
+    const task = setupTask();
+    const legacy = join(repoPath, ".worktrees", "crew-add-the-feature");
+    await git(repoPath, "worktree", "add", "-q", "-b", task.branch, legacy, "main");
+    writeFileSync(join(legacy, "src", "feature.ts"), "v0\n");
+    await git(legacy, "add", "-A");
+    await git(legacy, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "earlier work");
+    const engine = new ScriptedEngine({
+      implement: (req) => {
+        expect(req.cwd).toBe(workspaceDir(join(dir, "data"), task.repoId, task.id));
+        expect(req.prompt).toContain("already has 1 commit");
+        expect(readFileSync(join(req.cwd, "src", "feature.ts"), "utf8")).toBe("v0\n");
+        writeFileSync(join(req.cwd, "src", "feature.ts"), "v1\n");
+        return { text: "Finished it." };
+      },
+      review: () => ({ structured: READY }),
+    });
+    const out = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(out.status).toBe("complete");
+    expect(engine.calls.map((c) => c.phase)).toContain("implement");
+    expect(existsSync(join(legacy, ".git"))).toBe(true);
+    const log = (await git(repoPath, "log", "--format=%s", `main..refs/nightcrew/tasks/${task.id}`)).stdout;
+    expect(log).toContain("earlier work");
+    expect(log).toContain("Add the feature");
+  });
+
+  test("a stopped task keeps its unfinished work in its clone and resumes it", async () => {
+    // Value: protects=a stop commits the work in progress inside the clone (and copies it to your repo), and the next attempt starts from it; fails_when=the WIP commit is dropped, or a rerun makes a new clone from main; why_new=D12 resume after stop; seam=none
+    const task = setupTask({ testCommand: "sleep 30" });
+    const stop = new AbortController();
+    const first = new ScriptedEngine({
+      implement: (req) => {
+        writeFileSync(join(req.cwd, "src", "feature.ts"), "half\n");
+        setTimeout(() => stop.abort(), 300);
+        return { text: "Halfway." };
+      },
+    });
+    const halted = await runTask(deps(first), task.id, stop.signal);
+    expect(halted.status).toBe("timeout");
+    const wip = (await git(repoPath, "log", "-1", "--format=%s", `refs/nightcrew/tasks/${task.id}`)).stdout;
+    expect(wip).toContain("WIP: Add the feature");
+
+    updateTask(db, task.id, { status: "queued", testCommand: "test -f src/feature.ts" });
+    const again = new ScriptedEngine({
+      implement: (req) => {
+        expect(readFileSync(join(req.cwd, "src", "feature.ts"), "utf8")).toBe("half\n");
+        expect(req.prompt).toContain("already has 1 commit");
+        writeFileSync(join(req.cwd, "src", "feature.ts"), "whole\n");
+        return { text: "Done." };
+      },
+      review: () => ({ structured: READY }),
+    });
+    const out = await runTask(deps(again), task.id, new AbortController().signal);
+    expect(out.status).toBe("complete");
+    const shown = await git(repoPath, "show", `refs/nightcrew/tasks/${task.id}:src/feature.ts`);
+    expect(shown.stdout).toBe("whole\n");
+  });
+
+  test("an agent that moves refs in its clone doesn't move your repo's", async () => {
+    // Value: protects=git work in the clone (moving main, creating branches) never reaches your repo's refs; fails_when=the clone shares your repo's refs again (linked worktrees); why_new=D12 isolation; seam=none
+    const task = setupTask();
+    const mainBefore = (await git(repoPath, "rev-parse", "main")).stdout.trim();
+    const engine = new ScriptedEngine({
+      implement: async (req) => {
+        writeFileSync(join(req.cwd, "src", "feature.ts"), "x\n");
+        await git(req.cwd, "add", "-A");
+        await git(req.cwd, "-c", "user.name=a", "-c", "user.email=a@a", "commit", "-qm", "work");
+        await git(req.cwd, "update-ref", "refs/heads/main", "HEAD");
+        await git(req.cwd, "update-ref", "refs/heads/dev", "HEAD");
+        return { text: "Done." };
+      },
+      review: () => ({ structured: READY }),
+    });
+    const out = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(out.status).toBe("complete");
+    expect((await git(repoPath, "rev-parse", "main")).stdout.trim()).toBe(mainBefore);
+    expect((await git(repoPath, "rev-parse", "--verify", "--quiet", "refs/heads/dev")).ok).toBe(false);
   });
 });

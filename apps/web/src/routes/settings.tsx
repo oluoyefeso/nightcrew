@@ -161,8 +161,8 @@ export function SettingsPage() {
         <div className="grid gap-1">
           <h2 className="font-medium text-[16px] tracking-[-0.02em]">Repos</h2>
           <p className="text-[13.5px] text-muted">
-            Where the crew may work. Each task gets its own worktree under the repo's{" "}
-            <span className="font-mono">.worktrees</span> folder.
+            Where the crew may work. Each task gets its own clone under NightCrew's{" "}
+            <span className="font-mono">work</span> folder, and its result lands in your repo by commit.
           </p>
         </div>
         <div className="grid gap-3">
@@ -225,13 +225,24 @@ function RepoCard({ repo }: { repo: Repo }) {
         <Field
           label="Autonomy"
           htmlFor={`level-${repo.id}`}
+          hintId={`level-hint-${repo.id}`}
           hint={
-            picked === "ship" && repo.level !== "ship"
-              ? "Not saved yet. Set a ship branch and the paths allowed to ship below."
-              : LEVEL_HINT[level]
+            picked === "ship" && repo.level !== "ship" ? (
+              <>
+                <span className="font-medium text-dawn">Not saved yet.</span>{" "}
+                <span className="text-muted">Set a ship branch and the paths allowed to ship below.</span>
+              </>
+            ) : (
+              LEVEL_HINT[level]
+            )
           }
         >
-          <Select id={`level-${repo.id}`} value={level} onChange={(e) => pickLevel(e.target.value as AutonomyLevel)}>
+          <Select
+            id={`level-${repo.id}`}
+            aria-describedby={`level-hint-${repo.id}`}
+            value={level}
+            onChange={(e) => pickLevel(e.target.value as AutonomyLevel)}
+          >
             {(Object.keys(AUTONOMY_LABEL) as AutonomyLevel[]).map((l) => (
               <option key={l} value={l}>
                 {AUTONOMY_LABEL[l]}
@@ -298,7 +309,7 @@ function RepoCard({ repo }: { repo: Repo }) {
         </div>
       )}
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Install command" htmlFor={`setup-${repo.id}`} hint="Runs in each fresh worktree before tests.">
+        <Field label="Install command" htmlFor={`setup-${repo.id}`} hint="Runs in each fresh task clone before tests.">
           <TextInput
             id={`setup-${repo.id}`}
             defaultValue={repo.setupCommand ?? ""}

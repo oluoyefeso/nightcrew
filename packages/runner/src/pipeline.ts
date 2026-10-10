@@ -1,5 +1,6 @@
-// One task, start to finish: worktree → plan → implement → validate (with one
-// repair attempt) → review → commit, push and draft PR. Every step is written
+// One task, start to finish: its own clone → plan → implement → validate
+// (with one repair attempt) → review → commit, fetch into your repo, check
+// there, then land (push and draft PR, train or ship). Every step is written
 // to run_events so the dashboard can show it live.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -26,21 +27,19 @@ import {
 import type { AgentEngine, EngineEvent, PhaseRequest, PhaseResult } from "./engine";
 import { type Evidence, gatherEvidence, summarizeEvidence } from "./evidence";
 import {
-  changedFiles,
-  commitAll,
   commitsAhead,
   diffStat,
-  dropSetupFiles,
-  ensureWorktree,
   fingerprints,
   forkPoint,
   git,
+  lastLine,
   openOrUpdatePr,
-  push,
-  run,
+  pushTo,
+  resolveSha,
+  taskChangedFiles,
   untouchedSetupFiles,
 } from "./git";
-import { boardTrain, canShip, shipTask, trainBranch } from "./landing";
+import { boardTrain, canShip, setLandingHome, shipTask, trainBranch } from "./landing";
 import {
   implementPrompt,
   type PromptContext,
@@ -53,6 +52,16 @@ import {
 } from "./prompts";
 import { chooseWorkflow, NoReflexes, type Reflexes, scoreConfidence } from "./reflexes";
 import { runCheck } from "./sandbox";
+import {
+  cloneChangedFiles,
+  commitInClone,
+  dropSetupFiles,
+  ensureWorkspace,
+  fetchTask,
+  taskRef,
+  updateLocalBranch,
+  type Workspace,
+} from "./workspace";
 
 export interface PipelineDeps {
   db: Db;
@@ -96,6 +105,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
   const repo = getRepo(db, task.repoId);
   if (!repo) throw new Error(`Repo for task ${taskId} not found.`);
 
+  setLandingHome(deps.dataDir);
   const startedAt = new Date().toISOString();
   const runId = `run_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
   const artifactsDir = join(deps.dataDir, "runs", runId);
@@ -122,6 +132,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
   const artifacts = new Map<string, { kind: string; name: string; content: string }>();
   /** Files the dependency install wrote, with their hashes: NightCrew's, not the agent's. */
   let setupFiles = new Map<string, string>();
+  let workspace: Workspace | null = null;
 
   const save = () =>
     upsertRuns(db, [
@@ -206,14 +217,19 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
 
   const finish = async (status: "complete" | "failed" | "timeout", reason: string | null): Promise<TaskOutcome> => {
     clearTimeout(timer);
-    // Keep unfinished work on the branch (locally) so the next attempt resumes it.
-    if (status !== "complete" && state.worktree) {
-      await dropSetupFiles(state.worktree, setupFiles).catch(() => {});
-      const kept = await commitAll(
-        state.worktree,
+    // Keep unfinished work on the task's branch in its clone so the next attempt resumes it.
+    if (status !== "complete" && workspace) {
+      const ws = workspace;
+      await dropSetupFiles(ws.dir, setupFiles).catch(() => {});
+      const kept = await commitInClone(
+        ws.dir,
         `WIP: ${task.title}\n\nNightCrew stopped early: ${reason ?? status}.`,
       ).catch(() => false);
-      if (kept) emit("info", "Saved the unfinished work on the branch so the next attempt can pick it up.");
+      if (kept) {
+        // A copy in your repo too, so the work outlives the clone.
+        await fetchTask(ws).catch(() => {});
+        emit("info", "Saved the unfinished work on the branch so the next attempt can pick it up.");
+      }
     }
     state.status = status;
     state.reason = reason;
@@ -239,33 +255,44 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
   const halt = (when: string) => finish("timeout", stoppedReason(when));
 
   try {
-    phase("setup", "Preparing the worktree");
-    const worktree = await ensureWorktree(repo.path, task.branch, repo.defaultBranch);
+    phase("setup", "Preparing the workspace");
+    // Pinned before any agent runs, from your repo's refs: the base every diff is taken against.
+    const forkSha = await pinnedBase(deps.dataDir, task.id, repo.path, task.branch, repo.defaultBranch);
+    const ws = await ensureWorkspace({ dataDir: deps.dataDir, repo, task, base: forkSha });
+    workspace = ws;
+    const worktree = ws.dir;
     state.worktree = worktree;
-    // Pinned before any agent runs: an agent can move the default branch, not this sha.
-    const forkSha = await pinnedBase(deps.dataDir, task.id, worktree, repo.defaultBranch);
+    if (!ws.fresh) emit("info", "Picking up where the last attempt left off.");
     const warn = (text: string) => emit("info", text);
-    // A fresh worktree has no dependencies; tests and previews need them.
+    // A fresh clone has no dependencies; tests and previews need them.
     // Whatever the install itself writes is NightCrew's, not the agent's.
     if (
       repo.setupCommand &&
       !(repo.setupCommand.match(/\b(bun|npm|pnpm|yarn)\b/) && existsSync(join(worktree, "node_modules")))
     ) {
       emit("info", `Installing dependencies: ${repo.setupCommand}`);
-      const before = new Set(await changedFiles(worktree, forkSha));
+      const before = new Set(await cloneChangedFiles(worktree, forkSha, { signal: stop, warn }));
       const setup = await runCheck(repo.setupCommand, worktree, { timeoutMs: 10 * 60_000, signal: stop, warn });
-      if (!setup.ok)
-        emit("info", `Dependency install failed (exit ${setup.code}). Continuing; the crew can install what it needs.`);
-      const touched = (await changedFiles(worktree, forkSha)).filter((f) => !before.has(f));
+      if (!setup.ok) {
+        const tail = `${setup.stdout}\n${setup.stderr}`.trim().split("\n").slice(-3).join(" ").slice(-300);
+        emit(
+          "info",
+          `Dependency install failed (exit ${setup.code}). Continuing; the crew can install what it needs.${tail ? ` Last output: ${tail}` : ""}`,
+        );
+      }
+      const touched = (await cloneChangedFiles(worktree, forkSha, { signal: stop, warn })).filter(
+        (f) => !before.has(f),
+      );
       setupFiles = await fingerprints(worktree, touched);
     }
-    if (stop.aborted) return await halt("while preparing the worktree");
+    if (stop.aborted) return await halt("while preparing the workspace");
+    const startSha = await fetchTask(ws);
     const ctx: PromptContext = {
       task,
       repo,
       artifactsDir,
       feedback: listNotes(db, task.id),
-      resumeCommits: await commitsAhead(worktree, forkSha),
+      resumeCommits: await commitsAhead(repo.path, forkSha, startSha),
     };
     const base = {
       cwd: worktree,
@@ -420,6 +447,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         repo,
         worktree,
         base: forkSha,
+        files: check.files,
         artifactsDir,
         branchTestsPassed: check.ok,
         log: (text) => emit("info", text),
@@ -480,11 +508,25 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     // Publish
     if (stop.aborted) return await halt("before publishing");
     phase("publish", "Committing");
-    await dropSetupFiles(worktree, setupFiles);
-    await commitAll(worktree, `${task.title}\n\nNightCrew task ${task.id}, run ${runId}.`);
-    state.stat = await diffStat(worktree, forkSha);
-    const hasRemote = (await run(["git", "remote", "get-url", "origin"], worktree)).ok;
-    const files = await changedFiles(worktree, forkSha);
+    await dropSetupFiles(worktree, setupFiles, { signal: stop, warn });
+    await commitInClone(worktree, `${task.title}\n\nNightCrew task ${task.id}, run ${runId}.`, { signal: stop, warn });
+    // The final gate: the commit fetched into your repo, checked by your repo's git.
+    const sha = await fetchTask(ws);
+    const gate = scopeCheck(await taskChangedFiles(repo.path, forkSha, sha), task);
+    if (gate.noChanges) return await finish("failed", "The crew finished without changing anything.");
+    if (!gate.ok) {
+      state.log = gate.log;
+      return await finish("failed", gate.reason);
+    }
+    const files = gate.files;
+    state.stat = await diffStat(repo.path, forkSha, sha);
+    await updateLocalBranch(repo.path, task.branch, sha);
+    const hasRemote = (await git(repo.path, "remote", "get-url", "origin")).ok;
+    /** The task branch on origin, pushed from your repo by sha. */
+    const pushTask = async () => {
+      const p = await pushTo(repo.path, sha, task.branch);
+      return p.ok ? null : lastLine(p.stderr) || "push failed";
+    };
 
     // Ship to dev: the crew merges it itself, when everything lines up.
     if (repo.level === "ship") {
@@ -497,8 +539,10 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       });
       if (gate.ok) {
         phase("publish", `Shipping to ${repo.shipBranch}`);
-        if (deps.publish && hasRemote) await push(worktree, task.branch);
-        const shipped = await shipTask(repo, task.branch, task.title, deps.publish);
+        const pushFailed = deps.publish && hasRemote ? await pushTask() : null;
+        const shipped = pushFailed
+          ? { ok: false as const, error: `Couldn't push ${task.branch}: ${pushFailed}` }
+          : await shipTask(repo, sha, task.title, deps.publish);
         if (shipped.ok) {
           markShipped(db, runId, shipped.sha, repo.shipBranch as string);
           emit(
@@ -521,8 +565,10 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       const train =
         getOpenTrain(db, repo.id, nightId) ??
         createTrain(db, { repoId: repo.id, nightId, branch: trainBranch(nightId) });
-      if (deps.publish && hasRemote) await push(worktree, task.branch);
-      const boarded = await boardTrain(repo, train, task.branch, task.title, deps.publish);
+      const pushFailed = deps.publish && hasRemote ? await pushTask() : null;
+      const boarded = pushFailed
+        ? { ok: false as const, error: `Couldn't push ${task.branch}: ${pushFailed}` }
+        : await boardTrain(repo, train, sha, task.title, deps.publish);
       if (boarded.ok) {
         addCar(db, train.id, { runId, taskId: task.id, title: task.title, mergeSha: boarded.sha, state: "on" });
         setRunTrain(db, runId, train.id);
@@ -543,9 +589,9 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       } else {
         if (stop.aborted) return await halt("before opening the PR");
         phase("publish", "Pushing and opening a draft PR");
-        const pushed = await push(worktree, task.branch);
-        if (!pushed.ok) return await finish("failed", `Push failed: ${pushed.stderr.trim().split("\n").pop()}`);
-        const pr = await openOrUpdatePr(worktree, {
+        const pushFailed = await pushTask();
+        if (pushFailed) return await finish("failed", `Push failed: ${pushFailed}`);
+        const pr = await openOrUpdatePr(repo.path, {
           branch: task.branch,
           base: repo.defaultBranch,
           title: task.title,
@@ -579,7 +625,11 @@ export interface CheckResult {
   files: string[];
 }
 
-/** NightCrew's own checks, independent of what the agent claims. */
+/**
+ * NightCrew's own checks between agent phases, independent of what the agent
+ * claims. The file list comes from the clone, so it's advisory; the final
+ * gate repeats the scope check on the commit fetched into your repo.
+ */
 export async function validate(
   worktree: string,
   task: Task,
@@ -591,11 +641,39 @@ export async function validate(
   warn?: (text: string) => void,
 ): Promise<CheckResult> {
   const fromSetup = await untouchedSetupFiles(worktree, setupFiles);
-  const files = (await changedFiles(worktree, base)).filter((f) => !f.startsWith(".worktrees/") && !fromSetup.has(f));
+  const listed = await cloneChangedFiles(worktree, base, { signal, warn });
+  const scope = scopeCheck(
+    listed.filter((f) => !fromSetup.has(f)),
+    task,
+  );
+  if (!scope.ok) return scope;
+
+  const lines = [scope.log];
+  const cmd = task.testCommand ?? repo.testCommand;
+  if (cmd) {
+    const t = await runCheck(cmd, worktree, { timeoutMs: 15 * 60_000, signal, warn });
+    const out = `${t.stdout}\n${t.stderr}`.trim();
+    lines.push("", `$ ${cmd}  (exit ${t.code})`, out.length > 8000 ? `…\n${out.slice(-8000)}` : out);
+    if (!t.ok)
+      return {
+        ok: false,
+        noChanges: false,
+        reason: `\`${cmd}\` failed (exit ${t.code}).`,
+        log: lines.join("\n"),
+        files: scope.files,
+      };
+  } else {
+    lines.push("", "No test command configured for this repo.");
+  }
+  return { ok: true, noChanges: false, reason: null, log: lines.join("\n"), files: scope.files };
+}
+
+/** Changed files against the task's scope and the paths no task may touch. */
+export function scopeCheck(changed: string[], task: Task): CheckResult {
+  const files = changed.filter((f) => !f.startsWith(".worktrees/"));
   const lines: string[] = [`Changed files (${files.length}):`, ...files.map((f) => `  ${f}`)];
   if (files.length === 0)
     return { ok: false, noChanges: true, reason: "No files changed.", log: lines.join("\n"), files };
-
   const outOfScope = files.filter(
     (f) => matchesAny(f, ALWAYS_PROTECTED) || (task.scope.length > 0 && !matchesAny(f, task.scope)),
   );
@@ -609,23 +687,6 @@ export async function validate(
       files,
     };
   }
-
-  const cmd = task.testCommand ?? repo.testCommand;
-  if (cmd) {
-    const t = await runCheck(cmd, worktree, { timeoutMs: 15 * 60_000, signal, warn });
-    const out = `${t.stdout}\n${t.stderr}`.trim();
-    lines.push("", `$ ${cmd}  (exit ${t.code})`, out.length > 8000 ? `…\n${out.slice(-8000)}` : out);
-    if (!t.ok)
-      return {
-        ok: false,
-        noChanges: false,
-        reason: `\`${cmd}\` failed (exit ${t.code}).`,
-        log: lines.join("\n"),
-        files,
-      };
-  } else {
-    lines.push("", "No test command configured for this repo.");
-  }
   return { ok: true, noChanges: false, reason: null, log: lines.join("\n"), files };
 }
 
@@ -633,18 +694,30 @@ const SHA = /^[0-9a-f]{40,64}$/;
 
 /**
  * The task's fork point, kept in NightCrew's data folder (which agents can't
- * write) so a resumed task diffs against the same commit. Recomputed only
- * when the saved one is no longer under the branch, e.g. after a rebase.
+ * write) so a resumed task diffs against the same commit. Read from your
+ * repo's refs, never a clone's. Recomputed only when the saved one is no
+ * longer under the task's last fetched work, e.g. after a rebase.
  */
-async function pinnedBase(dataDir: string, taskId: string, worktree: string, defaultBranch: string): Promise<string> {
+async function pinnedBase(
+  dataDir: string,
+  taskId: string,
+  repoPath: string,
+  branch: string,
+  defaultBranch: string,
+): Promise<string> {
   const file = join(dataDir, "bases", `${taskId}.sha`);
   const saved = existsSync(file) ? readFileSync(file, "utf8").trim() : "";
-  if (SHA.test(saved) && (await git(worktree, "merge-base", "--is-ancestor", saved, "HEAD")).ok) return saved;
-  const sha = await forkPoint(worktree, defaultBranch);
-  if (SHA.test(sha)) {
-    mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, `${sha}\n`);
-  }
+  const tip = (await resolveSha(repoPath, taskRef(taskId))) ?? (await resolveSha(repoPath, `refs/heads/${branch}`));
+  if (
+    SHA.test(saved) &&
+    (await git(repoPath, "cat-file", "-e", `${saved}^{commit}`)).ok &&
+    (!tip || (await git(repoPath, "merge-base", "--is-ancestor", saved, tip)).ok)
+  )
+    return saved;
+  const sha = await forkPoint(repoPath, defaultBranch, tip);
+  if (!SHA.test(sha)) throw new Error(`Couldn't find ${defaultBranch} in ${repoPath} to start the task from.`);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, `${sha}\n`);
   return sha;
 }
 

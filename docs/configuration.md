@@ -33,7 +33,7 @@ Everything is set in the dashboard. This page explains what each setting does.
 | Field | What it does |
 |---|---|
 | Test command | Run by NightCrew after every task and on trains. |
-| Install command | Run in each fresh worktree. |
+| Install command | Run in each fresh task clone. |
 | Preview command | Starts the app for screenshots. Gets `$PORT`; `static` serves the folder. |
 | Preview URL | Default `http://localhost:{port}`. |
 | Pages to screenshot | Up to six paths. Default `/`. |
@@ -42,7 +42,7 @@ Everything is set in the dashboard. This page explains what each setting does.
 
 ## Guardrails that aren't settings
 
-Some limits can't be switched off. Every tool call passes a guard that keeps the crew inside its worktree and scope, away from secrets, workflows and protected branches, and away from pushing or opening PRs itself. The agent's own pushes are blocked, and on the local engine its commands run in the OS sandbox. [Security](security.md) has the full list and what each layer does and doesn't catch.
+Some limits can't be switched off. Every tool call passes a guard that keeps the crew inside its clone and scope, away from secrets, workflows and protected branches, and away from pushing or opening PRs itself. The agent's own pushes are blocked, and on the local engine its commands run in the OS sandbox. [Security](security.md) has the full list and what each layer does and doesn't catch.
 
 Crew sessions are isolated: no filesystem settings, MCP servers, skills or plugins from your machine. The repo's own `CLAUDE.md`, `AGENTS.md` and `.claude/CLAUDE.md` are passed in so the crew follows the project's conventions.
 

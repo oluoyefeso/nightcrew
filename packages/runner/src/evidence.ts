@@ -4,13 +4,14 @@
 // errors, and for bug fixes a test that fails on the base branch and passes
 // on the fix.
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, extname, join, normalize } from "node:path";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, extname, isAbsolute, join, normalize } from "node:path";
 import { EVIDENCE_FOR, type Repo, slugify, type Task } from "@nightcrew/core";
 import { matchesAny } from "@nightcrew/core/guard";
 import axeSource from "axe-core/axe.min.js" with { type: "text" };
-import { baseWorktree, changedFiles } from "./git";
+import { baseWorktree } from "./git";
 import { checkEnv, runCheck, sandboxed } from "./sandbox";
+import { cloneChangedFiles } from "./workspace";
 
 interface A11yIssue {
   id: string;
@@ -58,7 +59,10 @@ const VIEWPORTS = { desktop: { width: 1440, height: 900 }, mobile: { width: 390,
 export interface EvidenceOptions {
   task: Task;
   repo: Repo;
+  /** The task's clone: the "after" side. The "before" side is a checkout of `base` in your repo. */
   worktree: string;
+  /** The files the task changed, if already known (from validate). Otherwise the clone is asked. */
+  files?: string[];
   /** The commit the task forked from. Defaults to the default branch. */
   base?: string;
   artifactsDir: string;
@@ -118,8 +122,10 @@ export async function gatherEvidence(o: EvidenceOptions): Promise<Evidence> {
 
 async function failThenPass(o: EvidenceOptions, baseDir: string): Promise<Evidence["testProof"]> {
   const cmd = o.task.testCommand ?? o.repo.testCommand;
-  const changed = await changedFiles(o.worktree, o.base ?? o.repo.defaultBranch);
-  const testFiles = changed.filter((f) => matchesAny(f, TEST_FILE_GLOBS) && existsSync(join(o.worktree, f)));
+  const changed =
+    o.files ?? (await cloneChangedFiles(o.worktree, o.base ?? o.repo.defaultBranch, { signal: o.signal, warn: o.log }));
+  // The clone's list is the agent's word: only plain files at plain relative paths get copied.
+  const testFiles = changed.filter((f) => matchesAny(f, TEST_FILE_GLOBS) && plainFile(o.worktree, f));
   if (!cmd || testFiles.length === 0)
     return {
       testFiles,
@@ -142,6 +148,12 @@ async function failThenPass(o: EvidenceOptions, baseDir: string): Promise<Eviden
     passesOnBranch: o.branchTestsPassed,
     log: `$ ${cmd}  (on ${o.repo.defaultBranch} with the new tests, exit ${r.code})\n${out.slice(-4000)}`,
   };
+}
+
+/** A regular file (not a link) at a relative path that stays inside `dir` and out of git's folders. */
+function plainFile(dir: string, f: string): boolean {
+  if (isAbsolute(f) || f.split("/").some((p) => p === ".." || p === ".git" || p === "")) return false;
+  return lstatSync(join(dir, f), { throwIfNoEntry: false })?.isFile() ?? false;
 }
 
 // ── Screenshots ─────────────────────────────────────────────────────────────

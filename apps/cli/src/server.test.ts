@@ -126,10 +126,15 @@ describe("per-launch key", () => {
   });
 
   test("a page without the key gets the explainer, its assets still load", async () => {
-    // Value: protects=a stray tab gets a plain explanation, not the dashboard shell; fails_when=the page gate is dropped or blocks /assets; why_new=D10 adds the per-launch key; seam=none
+    // Value: protects=a stray tab gets a plain explanation (with this dashboard's own address), not the dashboard shell; fails_when=the page gate is dropped, blocks /assets, or echoes an unchecked Host header; why_new=D10 adds the per-launch key, W6 restyled the page and added the host; seam=none
     const page = await locked.request("/", { headers: { host } });
     expect(page.status).toBe(401);
-    expect(await page.text()).toContain("Open NightCrew from the link it printed in your terminal.");
+    const html = await page.text();
+    expect(html).toContain("This dashboard needs its launch link.");
+    // The example link names the port this dashboard is on, and a forged Host can't inject markup.
+    expect(html).toContain(`http://${host}/?t=`);
+    const forged = await locked.request("/", { headers: { host: "<script>x</script>" } });
+    expect(await forged.text()).not.toContain("<script>x");
     const asset = await locked.request("/assets/app.js", { headers: { host } });
     expect(asset.status).not.toBe(401);
   });

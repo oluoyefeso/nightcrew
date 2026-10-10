@@ -4,7 +4,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { clsx } from "clsx";
 import { ArrowLeft, Check, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { api, reposQuery, settingsQuery, taskQuery, useInvalidateTasks } from "../api";
+import { ApiError, api, reposQuery, settingsQuery, taskQuery, useInvalidateTasks } from "../api";
 import { ChipsEditor, Field, inlineEdit, ListEditor, Select, TextArea, TextInput } from "../components/form";
 import { Button, Pill } from "../components/ui";
 import { fmtDay, fmtTime } from "../lib";
@@ -17,6 +17,20 @@ const STATUS_COPY: Record<Task["status"], { label: string; color: string }> = {
   done: { label: "Ran", color: "var(--ok)" },
   archived: { label: "Archived", color: "var(--faint)" },
 };
+
+/** The fields a failed autosave may send again. Never status or runAt. */
+const CONTENT_FIELDS = [
+  "title",
+  "brief",
+  "type",
+  "scope",
+  "criteria",
+  "tokenBudget",
+  "maxMinutes",
+  "model",
+  "testCommand",
+  "repoId",
+] as const satisfies readonly (keyof Task)[];
 
 export function TaskPage({ taskId }: { taskId: string }) {
   const { data, error } = useQuery(taskQuery(taskId));
@@ -54,11 +68,16 @@ function TaskEditor({
       invalidate();
       setSaved(Object.keys(pending.current).length === 0);
     },
-    // A refused save goes back into the queue so its edits aren't lost; newer edits
-    // win, and the next save (or leaving the page) sends it again with them.
-    onError: (_err, patch) => {
-      pending.current = { ...patch, ...pending.current };
+    // A save that didn't get through (offline, a server error, locked out) puts its
+    // text back in the queue so it isn't lost; newer edits win, and the next save
+    // (or leaving the page) sends it again. Status and timing never replay: Run now
+    // later would be a surprise. A refusal (400, 409) shows its error instead.
+    onError: (err, patch) => {
       setSaved(false);
+      if (err instanceof ApiError && err.status !== 401 && err.status < 500) return;
+      const content: Partial<Task> = {};
+      for (const k of CONTENT_FIELDS) if (k in patch) Object.assign(content, { [k]: patch[k] });
+      pending.current = { ...content, ...pending.current };
     },
   });
   const remove = useMutation({

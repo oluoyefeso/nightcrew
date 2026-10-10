@@ -22,6 +22,7 @@ import {
   STOPPED,
   stoppedResult,
 } from "./engine";
+import { cacheDirs, childEnv } from "./env";
 
 const TOOLS = ["Read", "Write", "Edit", "MultiEdit", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "TodoWrite"];
 
@@ -97,10 +98,10 @@ export class SdkEngine implements AgentEngine {
       ...(req.resumeSession ? { resume: req.resumeSession } : {}),
       ...(req.outputSchema ? { outputFormat: { type: "json_schema", schema: req.outputSchema } } : {}),
       ...(this.opts.claudePath ? { pathToClaudeCodeExecutable: this.opts.claudePath } : {}),
-      // Bash runs in the OS sandbox: it can only write to the worktree, the
+      // Bash runs in the OS sandbox: it can only write to the clone, the
       // artifact folder, temp and package caches. Network stays open.
       sandbox: sandboxFor(req),
-      // The agent's process (not this one) can't push to a real remote.
+      // The agent's process (not this one) gets no credentials and can't push.
       env: agentEnv(process.env),
     };
 
@@ -229,82 +230,33 @@ export class SdkEngine implements AgentEngine {
   }
 }
 
-/** Prefixes of real remote URLs. Pushes to them are rewritten to a scheme git can't speak. */
-const PUSH_PREFIXES = ["https://", "http://", "ssh://", "git://", "git@"];
-
-/** Credentials the agent has no use for. The claude process keeps ANTHROPIC_* and CLAUDE_* to sign in. */
-const CREDENTIAL_VARS = new Set([
-  "GH_TOKEN",
-  "GITHUB_TOKEN",
-  "GH_ENTERPRISE_TOKEN",
-  "GITHUB_ENTERPRISE_TOKEN",
-  "GITHUB_PAT",
-  "NPM_TOKEN",
-  "NODE_AUTH_TOKEN",
-  "GOOGLE_APPLICATION_CREDENTIALS",
-  "TYPESAFE_API_KEY",
-]);
-const CREDENTIAL_PREFIXES = ["AWS_", "AZURE_", "SLACK_"];
-
-/** The environment without cloud, registry and chat credentials. */
-export function withoutCredentials(base: NodeJS.ProcessEnv): Record<string, string | undefined> {
-  return Object.fromEntries(
-    Object.entries(base).filter(([k]) => !CREDENTIAL_VARS.has(k) && !CREDENTIAL_PREFIXES.some((p) => k.startsWith(p))),
-  );
-}
-
 /**
- * The agent's environment: this process's, minus credentials, plus git config
- * that makes any `git push` to a real remote fail. Only the agent's
- * subprocess gets it; this process still pushes task branches itself. The
- * SDK's `env` replaces the child's environment, so the base is copied in.
+ * The agent's environment: this process's, minus credentials (it keeps
+ * ANTHROPIC_* and CLAUDE_* to sign in), plus git config that makes any
+ * `git push` to a real remote fail and turns off credential helpers. Only the
+ * agent's subprocess gets it. The SDK's `env` replaces the child's
+ * environment, so the base is copied in. See env.ts for the policy.
  */
 export function agentEnv(base: NodeJS.ProcessEnv): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = { ...withoutCredentials(base), GIT_TERMINAL_PROMPT: "0" };
-  // pushInsteadOf matches URL prefixes, which misses scp-style aliases like
-  // `gh:acme/widgets`. A push URL on origin covers those for origin.
-  const entries: [string, string][] = [
-    ...PUSH_PREFIXES.map((prefix): [string, string] => ["url.nightcrew-blocked://.pushInsteadOf", prefix]),
-    ["remote.origin.pushurl", "nightcrew-blocked://blocked"],
-  ];
-  // Append after any GIT_CONFIG_* entries already set, rather than clobber them.
-  const start = Number.parseInt(base.GIT_CONFIG_COUNT ?? "0", 10) || 0;
-  entries.forEach(([key, value], i) => {
-    env[`GIT_CONFIG_KEY_${start + i}`] = key;
-    env[`GIT_CONFIG_VALUE_${start + i}`] = value;
-  });
-  env.GIT_CONFIG_COUNT = String(start + entries.length);
-  return env;
+  return childEnv(base, { agent: true });
 }
 
-/** Shared package caches, so installs work inside the sandbox. */
-const CACHE_DIRS = [
-  ".bun/install/cache",
-  ".npm",
-  ".cache",
-  ".pnpm-store",
-  ".yarn",
-  "Library/Caches",
-  ".cargo/registry",
-];
-
 /**
- * OS sandbox for Bash (Seatbelt on macOS, bubblewrap on Linux). Writes are
- * limited to the worktree, the git data a commit on the task branch needs,
- * the artifact folder, temp and package caches. The model can't opt out of
- * it. Network is left open: tests and installs need it, and the guard handles
- * network writes. Where the sandbox can't start (Linux without bubblewrap),
- * Bash runs unsandboxed with the guard only.
+ * OS sandbox for Bash (Seatbelt on macOS, bubblewrap on Linux). The model
+ * can't opt out of it. Network is left open: tests and installs need it, and
+ * the guard handles network writes. Where the sandbox can't start (Linux
+ * without bubblewrap), Bash runs unsandboxed with the guard only.
+ *
+ * In a task's standalone clone (`.git` is a folder with alternates, as `git
+ * clone --shared` makes it) the agent may write all of it, its own `.git`
+ * included: nothing there is shared with the host repo, and NightCrew reads
+ * results back by commit SHA. Plus the artifact folder, temp and package
+ * caches. In a legacy linked worktree or the repo's main checkout, the git
+ * denies below still apply.
  */
 export function sandboxFor(req: PhaseRequest, home = homedir()): SandboxSettings {
-  const git = gitWrites(req.cwd, req.guard.protectedBranches);
-  const allowWrite = [
-    req.cwd,
-    ...req.guard.writableDirs,
-    tmpdir(),
-    ...(git?.allow ?? []),
-    ...CACHE_DIRS.map((d) => join(home, d)),
-  ];
+  const git = isClone(req.cwd) ? null : gitWrites(req.cwd, req.guard.protectedBranches);
+  const allowWrite = [req.cwd, ...req.guard.writableDirs, tmpdir(), ...(git?.allow ?? []), ...cacheDirs(home)];
   return {
     enabled: true,
     failIfUnavailable: false,
@@ -316,6 +268,19 @@ export function sandboxFor(req: PhaseRequest, home = homedir()): SandboxSettings
     },
     network: { allowedDomains: ["*"], allowLocalBinding: true },
   };
+}
+
+/**
+ * A standalone clone: `.git` is a folder that borrows objects through
+ * alternates. The repo's own main checkout has a `.git` folder too, but no
+ * alternates, and keeps the deny list.
+ */
+function isClone(cwd: string): boolean {
+  try {
+    return statSync(join(cwd, ".git")).isDirectory() && existsSync(join(cwd, ".git", "objects", "info", "alternates"));
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -356,7 +321,7 @@ function gitWrites(cwd: string, protectedBranches: string[]): { allow: string[];
     join(common, "refs", "tags"),
   ];
   // The repo's main checkout: its .git sits inside the writable cwd, so deny
-  // every ref. Tasks always run in linked worktrees; this covers compose.
+  // every ref. Tasks run in clones; this covers compose.
   if (dir === common) return { allow: [], deny: [...new Set([...deny, join(common, "refs")])] };
 
   deny.push(join(cwd, ".git"), join(dir, "commondir"), join(dir, "gitdir"), join(dir, "config.worktree"));

@@ -2,6 +2,20 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.0] - 2026-10-10
+
+### Added
+- **NightCrew 1.0 foundation**: a Bun + TypeScript monorepo (`apps/web`, `apps/cli`, `packages/core`, `packages/db`) on the `v1` branch.
+- **Morning Report dashboard**: a greeting and summary line, the Horizon timeline, and runs grouped into Shipped / Ready to merge / Needs your eyes / Sent back / Failed. A detail pane shows plan, decisions, review and phase logs, plus attempt history across nights.
+- **One-key triage**: `1` merge (two presses, marks draft PRs ready and squash-merges via `gh`), `2` send back with a note, `3` dismiss, `H` try again tonight, `U` undo, `J`/`K` to move.
+- **Light and dark themes** ("Morning" and "Night"), following the system setting by default.
+- **`nightcrew` single binary** (`bun build --compile`) that serves the dashboard locally on port 3721, so self-managed users don't need the terminal.
+- **Classic importer**: reads `state/sessions/*/progress.json`, dedupes attempts copied forward between sessions, attaches PLAN / DECISIONS / REVIEW files and phase logs, turns raw CLI errors into sentences, and refreshes PR state and diff stats from GitHub.
+
+### Changed
+- The bash runner moved to `classic/`. Its 141 bats tests pass unchanged.
+- `DESIGN.md` replaced: "The Silent Sentinel" console look is retired in favour of "The hour before sunrise" (blue-black ink, one dawn accent, Instrument Serif + Geist).
+
 ## [0.4.0.0] - 2026-04-17
 
 ### Added

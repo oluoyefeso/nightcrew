@@ -114,13 +114,14 @@ function Replay() {
     <div className="overflow-hidden rounded-[18px] bg-surface text-left shadow-[var(--shadow)] ring-1 ring-line">
       <div className="flex items-center justify-between gap-3 border-line border-b px-4 py-2.5">
         <div className="flex gap-1 text-[12px]">
-          <span className="rounded-md bg-raised px-2 py-1">Morning Report</span>
-          <span className="px-2 py-1 text-muted">Tonight</span>
+          <span className="whitespace-nowrap rounded-md bg-raised px-2 py-1">Morning Report</span>
+          <span className="hidden px-2 py-1 text-muted sm:inline">Tonight</span>
           <span className="hidden px-2 py-1 text-muted sm:inline">Later</span>
         </div>
-        <span className="flex items-center gap-2 font-mono text-[11px] text-muted tabular">
+        <span className="flex items-center gap-2 whitespace-nowrap font-mono text-[11px] text-muted tabular">
           <span className={clsx("size-1.5 rounded-full", morning ? "bg-ok" : "animate-pulse bg-dawn")} />
-          {morning ? "07:00 · night complete" : `${hh}:${mm} · crew working`}
+          {morning ? "07:00" : `${hh}:${mm}`}
+          <span className="hidden sm:inline">· {morning ? "night complete" : "crew working"}</span>
         </span>
       </div>
       <div className="grid gap-4 px-5 pt-6 pb-5 sm:px-7">
@@ -234,37 +235,55 @@ function InstallButton({ large }: { large?: boolean }) {
   );
 }
 
-/** In a preview frame the host owns the theme; standalone, the page offers a switch. */
-const EMBEDDED = (() => {
-  try {
-    return window.self !== window.top;
-  } catch {
-    return true;
-  }
-})();
-
-function ThemeSwitch() {
-  if (EMBEDDED) return null;
-  return <StandaloneThemeSwitch />;
+function currentTheme(): "light" | "dark" {
+  const set = document.documentElement.dataset.theme;
+  if (set === "light" || set === "dark") return set;
+  return matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
 }
 
-function StandaloneThemeSwitch() {
-  const [dark, setDark] = useState(() => {
-    const set = document.documentElement.dataset.theme;
-    return set ? set === "dark" : !matchMedia("(prefers-color-scheme: light)").matches;
-  });
+/** Always-visible Light / Dark switch. Stays in sync if a host frame changes the theme. */
+function ThemeSwitch() {
+  const [theme, setTheme] = useState(currentTheme);
   useEffect(() => {
-    document.documentElement.dataset.theme = dark ? "dark" : "light";
-  }, [dark]);
+    const root = document.documentElement;
+    const sync = () => setTheme(currentTheme());
+    const observer = new MutationObserver(sync);
+    observer.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+    const media = matchMedia("(prefers-color-scheme: light)");
+    media.addEventListener("change", sync);
+    return () => {
+      observer.disconnect();
+      media.removeEventListener("change", sync);
+    };
+  }, []);
+  const choose = (t: "light" | "dark") => {
+    document.documentElement.dataset.theme = t;
+    setTheme(t);
+  };
   return (
-    <button
-      type="button"
-      onClick={() => setDark(!dark)}
-      aria-label={dark ? "Switch to the Morning theme" : "Switch to the Night theme"}
-      className="grid size-8 place-items-center rounded-full text-muted ring-1 ring-line hover:text-fg"
-    >
-      {dark ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
-    </button>
+    <div role="radiogroup" aria-label="Theme" className="flex rounded-full bg-surface p-0.5 ring-1 ring-line">
+      {(
+        [
+          ["light", "Light", Sun],
+          ["dark", "Dark", Moon],
+        ] as const
+      ).map(([value, label, Icon]) => (
+        <button
+          key={value}
+          type="button"
+          role="radio"
+          aria-checked={theme === value}
+          onClick={() => choose(value)}
+          className={clsx(
+            "inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[12.5px] font-medium transition-colors",
+            theme === value ? "bg-fg text-bg" : "text-muted hover:text-fg",
+          )}
+        >
+          <Icon className="size-3.5" />
+          <span className="hidden sm:inline">{label}</span>
+        </button>
+      ))}
+    </div>
   );
 }
 

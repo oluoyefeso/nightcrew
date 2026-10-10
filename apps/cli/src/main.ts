@@ -10,6 +10,8 @@ import {
   type AgentEngine,
   Crew,
   DemoEngine,
+  detectPreview,
+  detectSetupCommand,
   detectTestCommand,
   draftTasks,
   inspectRepo,
@@ -94,7 +96,7 @@ async function sync() {
 async function serve() {
   const port = Number(values.port);
   const webDir = resolve(import.meta.dir, "../../web/dist");
-  const app = createApp({ db, cwd, classicRoot, webDir, crew, engine });
+  const app = createApp({ db, cwd, classicRoot, webDir, crew, engine, dataDir: values.data });
   const server = Bun.serve({ port, hostname: "127.0.0.1", fetch: app.fetch, idleTimeout: 0 });
   const url = `http://localhost:${server.port}`;
   crew.startSchedule();
@@ -115,6 +117,7 @@ function openBrowser(url: string) {
 
 async function repoFor(path: string | undefined) {
   const info = await inspectRepo(path ?? cwd);
+  const preview = detectPreview(info.path);
   return (
     getRepoByPath(db, info.path) ??
     addRepo(db, {
@@ -122,6 +125,9 @@ async function repoFor(path: string | undefined) {
       path: info.path,
       defaultBranch: info.defaultBranch,
       testCommand: detectTestCommand(info.path),
+      setupCommand: detectSetupCommand(info.path),
+      previewCommand: preview?.command ?? null,
+      previewUrl: preview?.url ?? null,
     })
   );
 }
@@ -155,9 +161,11 @@ switch (command) {
       break;
     }
     const repo = await repoFor(positionals[2]);
-    console.log(
-      `  Added ${repo.name} (${repo.path}), default branch ${repo.defaultBranch}${repo.testCommand ? `, tests: ${repo.testCommand}` : ""}.`,
-    );
+    console.log(`  Added ${repo.name} (${repo.path})`);
+    console.log(`    default branch  ${repo.defaultBranch}`);
+    console.log(`    tests           ${repo.testCommand ?? "none found (set one in Settings)"}`);
+    console.log(`    install         ${repo.setupCommand ?? "none"}`);
+    console.log(`    preview         ${repo.previewCommand ?? "none (UI tasks won't get screenshots)"}`);
     break;
   }
 

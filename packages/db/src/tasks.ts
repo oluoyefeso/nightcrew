@@ -42,6 +42,9 @@ export function addRepo(
     defaultBranch: string;
     protectedBranches?: string[];
     testCommand?: string | null;
+    setupCommand?: string | null;
+    previewCommand?: string | null;
+    previewUrl?: string | null;
   },
 ): Repo {
   const existing = getRepoByPath(db, input.path);
@@ -55,6 +58,10 @@ export function addRepo(
     testCommand: input.testCommand ?? null,
     level: "draft_pr" as AutonomyLevel,
     createdAt: now(),
+    setupCommand: input.setupCommand ?? null,
+    previewCommand: input.previewCommand ?? null,
+    previewUrl: input.previewUrl ?? null,
+    previewPaths: ["/"],
   };
   db.insert(schema.repos).values(row).run();
   return toRepo(row);
@@ -63,7 +70,20 @@ export function addRepo(
 export function updateRepo(
   db: Db,
   id: string,
-  patch: Partial<Pick<Repo, "name" | "defaultBranch" | "protectedBranches" | "testCommand" | "level">>,
+  patch: Partial<
+    Pick<
+      Repo,
+      | "name"
+      | "defaultBranch"
+      | "protectedBranches"
+      | "testCommand"
+      | "level"
+      | "setupCommand"
+      | "previewCommand"
+      | "previewUrl"
+      | "previewPaths"
+    >
+  >,
 ): Repo | null {
   db.update(schema.repos).set(patch).where(eq(schema.repos.id, id)).run();
   return getRepo(db, id);

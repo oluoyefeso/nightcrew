@@ -41,6 +41,10 @@ export interface Repo {
   testCommand: string | null;
   level: AutonomyLevel;
   createdAt: string;
+  setupCommand: string | null;
+  previewCommand: string | null;
+  previewUrl: string | null;
+  previewPaths: string[];
 }
 
 export interface Task {

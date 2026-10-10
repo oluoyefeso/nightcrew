@@ -169,6 +169,53 @@ function RepoCard({ repo }: { repo: Repo }) {
           />
         </Field>
       </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Install command" htmlFor={`setup-${repo.id}`} hint="Runs in each fresh worktree before tests.">
+          <TextInput
+            id={`setup-${repo.id}`}
+            defaultValue={repo.setupCommand ?? ""}
+            onBlur={(e) => update.mutate({ setupCommand: e.target.value || null })}
+            placeholder="bun install --frozen-lockfile"
+            className="font-mono"
+          />
+        </Field>
+        <Field
+          label="Preview command"
+          htmlFor={`preview-${repo.id}`}
+          hint={
+            <>
+              For UI screenshots. Gets <span className="font-mono">$PORT</span>; use{" "}
+              <span className="font-mono">static</span> to serve the folder.
+            </>
+          }
+        >
+          <TextInput
+            id={`preview-${repo.id}`}
+            defaultValue={repo.previewCommand ?? ""}
+            onBlur={(e) => update.mutate({ previewCommand: e.target.value || null })}
+            placeholder="bun run dev -- --port $PORT"
+            className="font-mono"
+          />
+        </Field>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Preview URL" htmlFor={`url-${repo.id}`}>
+          <TextInput
+            id={`url-${repo.id}`}
+            defaultValue={repo.previewUrl ?? "http://localhost:{port}"}
+            onBlur={(e) => update.mutate({ previewUrl: e.target.value || null })}
+            className="font-mono"
+          />
+        </Field>
+        <Field label="Pages to screenshot" htmlFor={`paths-${repo.id}`} hint="Up to six paths.">
+          <ChipsEditor
+            id={`paths-${repo.id}`}
+            value={repo.previewPaths}
+            onChange={(previewPaths) => update.mutate({ previewPaths })}
+            placeholder="/, /settings"
+          />
+        </Field>
+      </div>
       <Field
         label="Also protect these branches"
         htmlFor={`pb-${repo.id}`}

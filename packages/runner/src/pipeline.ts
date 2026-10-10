@@ -18,6 +18,7 @@ import {
   upsertRuns,
 } from "@nightcrew/db";
 import type { AgentEngine, EngineEvent, PhaseRequest, PhaseResult } from "./engine";
+import { type Evidence, gatherEvidence, summarizeEvidence } from "./evidence";
 import { changedFiles, commitAll, commitsAhead, diffStat, ensureWorktree, openOrUpdatePr, push, run } from "./git";
 import {
   implementPrompt,
@@ -49,6 +50,7 @@ export interface TaskOutcome {
 }
 
 const PHASE_NAME: Record<string, string> = {
+  evidence: "Evidence",
   plan: "Planning",
   implement: "Building",
   repair: "Repairing",
@@ -189,6 +191,16 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     phase("setup", "Preparing the worktree");
     const worktree = await ensureWorktree(repo.path, task.branch, repo.defaultBranch);
     state.worktree = worktree;
+    // A fresh worktree has no dependencies; tests and previews need them.
+    if (
+      repo.setupCommand &&
+      !(repo.setupCommand.match(/\b(bun|npm|pnpm|yarn)\b/) && existsSync(join(worktree, "node_modules")))
+    ) {
+      emit("info", `Installing dependencies: ${repo.setupCommand}`);
+      const setup = await run(["sh", "-c", repo.setupCommand], worktree, { timeoutMs: 10 * 60_000 });
+      if (!setup.ok)
+        emit("info", `Dependency install failed (exit ${setup.code}). Continuing; the crew can install what it needs.`);
+    }
     const ctx: PromptContext = {
       task,
       repo,
@@ -319,7 +331,25 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     if (check.noChanges) return await finish("failed", "The crew finished without changing anything.");
     if (!check.ok) return await finish(stop.aborted ? "timeout" : "failed", check.reason);
 
-    // Review
+    // Evidence NightCrew gathers itself
+    let evidence: Evidence | null = null;
+    if (task.type === "ui" || task.type === "bugfix") {
+      phase("evidence", "Gathering evidence");
+      evidence = await gatherEvidence({
+        task,
+        repo,
+        worktree,
+        artifactsDir,
+        branchTestsPassed: check.ok,
+        log: (text) => emit("info", text),
+        signal: stop,
+      });
+      artifact("evidence", "Evidence", JSON.stringify(evidence));
+      ctx.evidence = summarizeEvidence(evidence);
+      for (const m of evidence.missing) emit("info", `Missing evidence: ${m}`);
+    }
+
+    // Review: the Skeptic tries to show the work isn't done
     phase("review", "Reviewing");
     const rv = reviewPrompt(ctx);
     const review = await deps.engine.runPhase(
@@ -338,7 +368,8 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     account(review);
     const verdict = review.ok ? (review.structured as ReviewOutput | null) : null;
     if (verdict) {
-      state.verdict = verdict.verdict === "ready" ? "ready" : "needs_eyes";
+      // Missing evidence always means a person should look.
+      state.verdict = verdict.verdict === "ready" && !evidence?.missing.length ? "ready" : "needs_eyes";
       artifact("review", "REVIEW.md", renderReview(verdict));
       if (verdict.summary) state.summary = state.summary ?? verdict.summary;
     } else {
@@ -370,6 +401,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
             summary: state.summary,
             verdict,
             plan: ctx.plan ?? null,
+            evidence: ctx.evidence ?? null,
             checks: check.log,
             costUsd: state.costUsd,
             runId,
@@ -445,6 +477,7 @@ function prBody(input: {
   summary: string | null;
   verdict: ReviewOutput | null;
   plan: string | null;
+  evidence: string | null;
   checks: string;
   costUsd: number;
   runId: string;
@@ -461,6 +494,19 @@ ${task.brief ? `> ${task.brief.split("\n").join("\n> ")}\n` : ""}
 ### Acceptance criteria
 ${crit || "- (none set)"}
 
+${input.evidence ? `### Evidence\n${input.evidence}\n` : ""}
+${
+  verdict?.challenges?.length
+    ? `### Skeptic\n${verdict.challenges.filter((c) => !c.held).length} of ${verdict.challenges.length} challenges failed to find a problem.${
+        verdict.challenges.some((c) => c.held)
+          ? `\n${verdict.challenges
+              .filter((c) => c.held)
+              .map((c) => `- Held: ${c.challenge}: ${c.detail}`)
+              .join("\n")}`
+          : ""
+      }\n`
+    : ""
+}
 ${verdict?.concerns.length ? `### Reviewer concerns\n${verdict.concerns.map((c) => `- ${c}`).join("\n")}\n` : ""}
 ${details("Plan", input.plan)}${details("Review", verdict?.report ?? null)}${details("Checks", `\`\`\`\n${input.checks.slice(-4000)}\n\`\`\``)}
 ---

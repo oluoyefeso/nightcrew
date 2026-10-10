@@ -28,6 +28,7 @@ export interface ServerOptions {
   webDir?: string;
   crew: Crew;
   engine: AgentEngine;
+  dataDir: string;
 }
 
 export function createApp(opts: ServerOptions) {
@@ -80,7 +81,7 @@ export function createApp(opts: ServerOptions) {
     return c.json(getRun(db, id));
   });
 
-  mountTaskRoutes(app, { db, crew: opts.crew, engine: opts.engine });
+  mountTaskRoutes(app, { db, crew: opts.crew, engine: opts.engine, dataDir: opts.dataDir });
 
   app.post("/api/sync", async (c) => {
     const result = await syncClassic(db, { root: opts.classicRoot, cwd: opts.cwd, github: true });

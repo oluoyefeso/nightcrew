@@ -17,6 +17,7 @@ import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { type BunSQLiteDatabase, drizzle } from "drizzle-orm/bun-sqlite";
 import init from "../migrations/0000_init.sql" with { type: "text" };
 import tasksMigration from "../migrations/0001_tasks.sql" with { type: "text" };
+import previewMigration from "../migrations/0002_preview.sql" with { type: "text" };
 import * as schema from "./schema";
 
 export * from "./tasks";
@@ -27,6 +28,7 @@ export { schema };
 const MIGRATIONS: [name: string, sql: string][] = [
   ["0000_init", init],
   ["0001_tasks", tasksMigration],
+  ["0002_preview", previewMigration],
 ];
 
 export type Db = BunSQLiteDatabase<typeof schema> & { $client: Database };
@@ -159,7 +161,7 @@ export function getRun(db: Db, id: string): RunDetail | null {
   return { run: { ...run, attempt: attempts.length }, artifacts, attempts };
 }
 
-const ARTIFACT_ORDER: ArtifactKind[] = ["report", "plan", "decisions", "review", "tests", "log"];
+const ARTIFACT_ORDER: ArtifactKind[] = ["evidence", "report", "plan", "decisions", "review", "tests", "log"];
 
 function hydrate(db: Db, rows: (typeof schema.runs.$inferSelect)[]): Run[] {
   if (rows.length === 0) return [];

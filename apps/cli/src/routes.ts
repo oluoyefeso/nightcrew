@@ -1,6 +1,7 @@
 // API for repos, tasks, the composer, the crew and its live event stream.
 
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { type Settings, TASK_TYPES, type TaskStatus, type TaskType } from "@nightcrew/core";
 import {
   addNote,
@@ -24,13 +25,21 @@ import {
   updateSettings,
   updateTask,
 } from "@nightcrew/db";
-import { type AgentEngine, type Crew, detectTestCommand, draftTasks, inspectRepo } from "@nightcrew/runner";
+import {
+  type AgentEngine,
+  type Crew,
+  detectPreview,
+  detectSetupCommand,
+  detectTestCommand,
+  draftTasks,
+  inspectRepo,
+} from "@nightcrew/runner";
 import type { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 
 const STATUSES: TaskStatus[] = ["draft", "queued", "later", "running", "done", "archived"];
 
-export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: AgentEngine }) {
+export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: AgentEngine; dataDir: string }) {
   const { db, crew } = deps;
   const body = async <T>(c: { req: { json: <J>() => Promise<J> } }) =>
     (await c.req.json<T>().catch(() => ({}))) as Partial<T>;
@@ -45,11 +54,15 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
     if (!existsSync(expanded)) return c.json({ error: `${expanded} doesn't exist.` }, 400);
     try {
       const info = await inspectRepo(expanded);
+      const preview = detectPreview(info.path);
       const repo = addRepo(db, {
         name: info.name,
         path: info.path,
         defaultBranch: info.defaultBranch,
         testCommand: detectTestCommand(info.path),
+        setupCommand: detectSetupCommand(info.path),
+        previewCommand: preview?.command ?? null,
+        previewUrl: preview?.url ?? null,
       });
       return c.json(repo, 201);
     } catch (e) {
@@ -62,7 +75,17 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
     const repo = updateRepo(
       db,
       c.req.param("id"),
-      pick(patch, ["name", "defaultBranch", "protectedBranches", "testCommand", "level"]),
+      pick(patch, [
+        "name",
+        "defaultBranch",
+        "protectedBranches",
+        "testCommand",
+        "level",
+        "setupCommand",
+        "previewCommand",
+        "previewUrl",
+        "previewPaths",
+      ]),
     );
     return repo ? c.json(repo) : c.json({ error: "Repo not found." }, 404);
   });
@@ -195,6 +218,17 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
   app.post("/api/crew/stop", (c) => {
     crew.stop();
     return c.json(crew.getStatus());
+  });
+
+  /** Screenshots and other files a run produced. */
+  app.get("/api/runs/:id/files/*", (c) => {
+    const id = c.req.param("id");
+    const rel = decodeURIComponent(c.req.path.split(`/api/runs/${id}/files/`)[1] ?? "");
+    if (!/^run_[a-z0-9]+$/.test(id) || !rel || rel.includes("..") || rel.startsWith("/"))
+      return c.json({ error: "Not found." }, 404);
+    const file = join(deps.dataDir, "runs", id, rel);
+    if (!existsSync(file)) return c.json({ error: "Not found." }, 404);
+    return new Response(Bun.file(file), { headers: { "cache-control": "public, max-age=31536000, immutable" } });
   });
 
   app.get("/api/runs/:id/events", (c) => {

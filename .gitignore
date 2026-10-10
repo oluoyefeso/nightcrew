@@ -1,9 +1,17 @@
 # Runtime artifacts
 logs/
 state/
+classic/state/
+classic/logs/
+.nightcrew/
+*.db
+*.db-*
 
-# Node
+# Build
 node_modules/
+dist/
+*.tsbuildinfo
+
 design/
 
 # OS
@@ -13,3 +21,4 @@ design/
 config.yaml
 tasks.yaml
 .gstack/
+apps/cli/src/web-assets.gen.ts

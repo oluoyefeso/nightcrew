@@ -1,9 +1,20 @@
 {
   "name": "nightcrew",
-  "version": "0.3.4",
+  "version": "1.0.0-alpha.0",
   "private": true,
-  "description": "NightCrew web UI server",
-  "dependencies": {
-    "js-yaml": "^4.1.0"
+  "type": "module",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "bun run --filter '@nightcrew/web' dev & bun run --filter '@nightcrew/cli' dev",
+    "build": "bun run --filter '@nightcrew/web' build && bun run --filter '@nightcrew/cli' build",
+    "test": "bun test packages apps/cli",
+    "typecheck": "tsc -p packages/core && tsc -p packages/db && tsc -p apps/cli && tsc -p apps/web",
+    "lint": "biome check .",
+    "classic:test": "cd classic && SHELL=/opt/homebrew/bin/bash bats tests/"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/bun": "1.4.2",
+    "typescript": "7.0.2"
   }
 }

@@ -54,7 +54,7 @@ nightcrew/
   dashboard.html            # Static morning review dashboard (file:// fallback)
   schemas/
     task.schema.json         # JSON Schema for tasks.yaml validation
-  DESIGN.md                  # Design system spec ("The Silent Sentinel")
+  DESIGN.md                  # Design system spec ("The hour before sunrise")
   design/                    # UI design mockups (gitignored — local-only)
   lib/
     00-common.sh             # Logging, config reading, utilities

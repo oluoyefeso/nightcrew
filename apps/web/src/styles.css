@@ -1,0 +1,250 @@
+@import "tailwindcss";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "@fontsource/instrument-serif/400.css";
+@import "@fontsource/instrument-serif/400-italic.css";
+
+/*
+ * NightCrew design tokens. "Night" (dark) is the base; "Morning" (light)
+ * applies when the system prefers light or the user picks it.
+ */
+:root {
+  --bg: #0a0e16;
+  --surface: #111723;
+  --raised: #18202f;
+  --sunken: #070a10;
+  --line: rgb(236 232 225 / 0.09);
+  --line-strong: rgb(236 232 225 / 0.16);
+  --fg: #ece8e1;
+  --muted: #8b92a3;
+  --faint: #5c6475;
+  --dawn: #f2a65a;
+  --dawn-soft: #f7c995;
+  --on-dawn: #1b1206;
+  --ok: #5fbf8f;
+  --bad: #e8685a;
+  --sky: #7db0e3;
+  --horizon-from: #1a2236;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 24px 64px rgb(0 0 0 / 0.45);
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f3f5f8;
+    --surface: #ffffff;
+    --raised: #eaeef3;
+    --sunken: #e6eaf0;
+    --line: rgb(20 26 38 / 0.1);
+    --line-strong: rgb(20 26 38 / 0.18);
+    --fg: #141a26;
+    --muted: #5e6676;
+    --faint: #9aa1ae;
+    --dawn: #b65a12;
+    --dawn-soft: #d9873f;
+    --on-dawn: #fff8f0;
+    --ok: #237a52;
+    --bad: #b93a30;
+    --sky: #2d6ba8;
+    --horizon-from: #c9d3e2;
+    --shadow: 0 1px 2px rgb(20 26 38 / 0.06), 0 24px 64px rgb(20 26 38 / 0.12);
+    color-scheme: light;
+  }
+}
+
+:root[data-theme="light"] {
+  --bg: #f3f5f8;
+  --surface: #ffffff;
+  --raised: #eaeef3;
+  --sunken: #e6eaf0;
+  --line: rgb(20 26 38 / 0.1);
+  --line-strong: rgb(20 26 38 / 0.18);
+  --fg: #141a26;
+  --muted: #5e6676;
+  --faint: #9aa1ae;
+  --dawn: #b65a12;
+  --dawn-soft: #d9873f;
+  --on-dawn: #fff8f0;
+  --ok: #237a52;
+  --bad: #b93a30;
+  --sky: #2d6ba8;
+  --horizon-from: #c9d3e2;
+  --shadow: 0 1px 2px rgb(20 26 38 / 0.06), 0 24px 64px rgb(20 26 38 / 0.12);
+  color-scheme: light;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-sunken: var(--sunken);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-dawn: var(--dawn);
+  --color-dawn-soft: var(--dawn-soft);
+  --color-on-dawn: var(--on-dawn);
+  --color-ok: var(--ok);
+  --color-bad: var(--bad);
+  --color-sky: var(--sky);
+  --font-serif: "Instrument Serif", "Iowan Old Style", Georgia, serif;
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+  --ease-out-quint: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "ss01", "cv11";
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--dawn) 35%, transparent);
+  }
+  :focus-visible {
+    outline: 2px solid var(--dawn);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
+}
+
+/* Markdown rendered from PLAN / DECISIONS / REVIEW files */
+.prose-nc {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--fg);
+  max-width: 72ch;
+}
+.prose-nc > * + * {
+  margin-top: 0.85em;
+}
+.prose-nc h1,
+.prose-nc h2,
+.prose-nc h3 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  margin-top: 1.6em;
+}
+.prose-nc h1 {
+  font-family: var(--font-serif);
+  font-weight: 400;
+  font-size: 28px;
+  margin-top: 0;
+}
+.prose-nc h2 {
+  font-size: 16px;
+}
+.prose-nc h3 {
+  font-size: 14px;
+}
+.prose-nc p,
+.prose-nc li {
+  color: color-mix(in srgb, var(--fg) 86%, transparent);
+}
+.prose-nc ul,
+.prose-nc ol {
+  padding-left: 1.25em;
+}
+.prose-nc ul {
+  list-style: disc;
+}
+.prose-nc ol {
+  list-style: decimal;
+}
+.prose-nc li + li {
+  margin-top: 0.3em;
+}
+.prose-nc li::marker {
+  color: var(--faint);
+}
+.prose-nc a {
+  color: var(--dawn);
+  text-underline-offset: 3px;
+}
+.prose-nc strong {
+  font-weight: 600;
+  color: var(--fg);
+}
+.prose-nc code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--raised);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+.prose-nc pre {
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.prose-nc pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+.prose-nc table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.prose-nc th,
+.prose-nc td {
+  border-bottom: 1px solid var(--line);
+  padding: 6px 12px 6px 0;
+  text-align: left;
+  vertical-align: top;
+}
+.prose-nc th {
+  color: var(--muted);
+  font-weight: 500;
+}
+.prose-nc blockquote {
+  border-left: 2px solid var(--line-strong);
+  padding-left: 14px;
+  color: var(--muted);
+}
+.prose-nc hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+@keyframes nc-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

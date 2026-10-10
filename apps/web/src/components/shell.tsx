@@ -47,8 +47,9 @@ function CrewPill() {
   return (
     <Link
       to="/agents"
+      aria-label={label}
       className={clsx(
-        "inline-flex items-center gap-2 whitespace-nowrap rounded-full px-3 py-1.5 font-mono text-[11.5px]",
+        "inline-flex items-center gap-2 whitespace-nowrap rounded-full px-2.5 py-1.5 font-mono text-[11.5px] sm:px-3",
         working ? "bg-[color-mix(in_srgb,var(--dawn)_14%,transparent)] text-dawn" : "text-faint hover:text-muted",
       )}
     >
@@ -58,7 +59,9 @@ function CrewPill() {
           working ? "animate-pulse bg-dawn" : s.state === "paused" ? "bg-bad" : "bg-faint",
         )}
       />
-      {label}
+      {/* Phones get the dot (and the count when agents are working); the words from sm up. */}
+      <span className="hidden sm:inline">{label}</span>
+      {working > 0 && <span className="sm:hidden">{working}</span>}
     </Link>
   );
 }
@@ -102,9 +105,13 @@ export function Shell() {
     <div className="flex min-h-full flex-col">
       <header className="sticky top-0 z-30 bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] backdrop-blur-xl">
         <div className="mx-auto flex h-14 max-w-[1440px] items-center gap-3 px-4 sm:gap-6 sm:px-6">
-          <Link to="/" className="flex items-center gap-2.5 font-medium text-[15px] tracking-[-0.02em]">
+          <Link
+            to="/"
+            aria-label="NightCrew"
+            className="flex shrink-0 items-center gap-2.5 font-medium text-[15px] tracking-[-0.02em]"
+          >
             <BrandMark className="size-[22px]" />
-            NightCrew
+            <span className="hidden sm:inline">NightCrew</span>
           </Link>
           <nav className="flex items-center gap-0.5 overflow-x-auto text-[13px]">
             <NavLink to="/">Inbox</NavLink>
@@ -116,7 +123,7 @@ export function Shell() {
                 </span>
               )}
             </NavLink>
-            <NavLink to="/later" className="hidden sm:inline-flex">
+            <NavLink to="/later" className="max-sm:hidden">
               Later
             </NavLink>
           </nav>
@@ -158,7 +165,8 @@ function SyncButton() {
       type="button"
       onClick={() => sync.mutate()}
       disabled={sync.isPending}
-      className="inline-flex h-8 items-center gap-2 rounded-full px-3 text-[12.5px] text-muted transition-colors hover:bg-raised hover:text-fg disabled:opacity-60"
+      aria-label="Sync"
+      className="hidden h-8 items-center gap-2 rounded-full px-3 text-[12.5px] text-muted transition-colors hover:bg-raised hover:text-fg disabled:opacity-60 sm:inline-flex"
       title="Re-import runs and refresh PR state from GitHub"
     >
       <RefreshCw className={clsx("size-3.5", sync.isPending && "animate-spin")} strokeWidth={2} />

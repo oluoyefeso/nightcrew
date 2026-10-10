@@ -2,7 +2,7 @@ import { formatTokens, type Repo, TASK_TYPE_LABEL, TASK_TYPES, type Task } from 
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { clsx } from "clsx";
-import { ArrowRight, CalendarClock, CircleHelp, GitBranch, GripVertical, Inbox, Play, Sparkles } from "lucide-react";
+import { ArrowRight, CalendarClock, CircleHelp, GitBranch, GripVertical, Inbox, Play, Sparkles, X } from "lucide-react";
 import { Reorder, useDragControls } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -20,7 +20,7 @@ import { AgentBoard, CrewSummary } from "../components/agent-board";
 import { ChipsEditor, inlineEdit, ListEditor, Select, TextInput } from "../components/form";
 import { Button } from "../components/ui";
 import { isTypingTarget } from "../lib";
-import { dropStash, RESTORED_NOTE, unstash, useStashOnReload } from "../pending";
+import { dropStash, unstash, useStashOnReload } from "../pending";
 
 export function AgentsPage() {
   const repos = useQuery(reposQuery);
@@ -37,6 +37,16 @@ export function AgentsPage() {
     };
   });
   const [drafts, setDrafts] = useState<DraftTask[] | null>(restored.drafts);
+  // Shown until you dismiss it, send the text, or save or discard the drafts.
+  const [note, setNote] = useState(() =>
+    restored.text && restored.drafts
+      ? "Put back your unsaved text and drafts from before NightCrew restarted."
+      : restored.text
+        ? "Put back your unsaved text from before NightCrew restarted."
+        : restored.drafts
+          ? "Put back your unsaved drafts from before NightCrew restarted."
+          : null,
+  );
   useStashOnReload("drafts", () => drafts);
   useEffect(() => {
     dropStash("composer");
@@ -76,12 +86,28 @@ export function AgentsPage() {
           <AddRepo />
         </section>
       ) : (
-        <Composer repos={repos.data ?? []} onDrafts={setDrafts} initialText={restored.text} />
+        <Composer
+          repos={repos.data ?? []}
+          onDrafts={(d) => {
+            setDrafts(d);
+            setNote(null);
+          }}
+          initialText={restored.text}
+          note={note}
+          onDismissNote={() => setNote(null)}
+        />
       )}
-      {(restored.text || restored.drafts) && <p className="-mt-5 text-[13px] text-muted">{RESTORED_NOTE}</p>}
 
       {drafts && (
-        <Drafts drafts={drafts} repos={repos.data ?? []} onChange={setDrafts} onDone={() => setDrafts(null)} />
+        <Drafts
+          drafts={drafts}
+          repos={repos.data ?? []}
+          onChange={setDrafts}
+          onDone={() => {
+            setDrafts(null);
+            setNote(null);
+          }}
+        />
       )}
 
       {(waiting.data?.length ?? 0) > 0 && (
@@ -166,10 +192,15 @@ function Composer({
   repos,
   onDrafts,
   initialText,
+  note,
+  onDismissNote,
 }: {
   repos: Repo[];
   onDrafts: (d: DraftTask[]) => void;
   initialText: string;
+  /** Says a restart's reload put work back. */
+  note: string | null;
+  onDismissNote: () => void;
 }) {
   const [text, setText] = useState(initialText);
   useStashOnReload("composer", () => text);
@@ -220,6 +251,19 @@ function Composer({
         placeholder="What should the agents work on? Describe it like you'd brief a contractor. Several things at once is fine."
         className="block w-full resize-none bg-transparent px-5 pt-4 pb-2 text-[15.5px] leading-relaxed outline-none placeholder:text-faint"
       />
+      {note && (
+        <div className="flex items-start gap-2 px-5 pb-2">
+          <p className="min-w-0 flex-1 text-[13px] text-muted">{note}</p>
+          <button
+            type="button"
+            onClick={onDismissNote}
+            aria-label="Dismiss"
+            className="rounded-md p-1 text-faint transition-colors duration-150 ease-out hover:bg-raised hover:text-fg"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2 px-4 pb-3">
         {repos.map((r) => (
           <button

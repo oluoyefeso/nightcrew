@@ -4,11 +4,11 @@ NightCrew runs agents unattended, so nobody is there to approve each command. Se
 
 ## Each task works in its own clone
 
-Every task gets a standalone clone of your repo at `<data>/work/<repo id>/<task id>`, outside your repo (the data dir is `~/.nightcrew` unless you pass `--data`). NightCrew makes it before any agent runs (`git clone --shared`, which borrows your repo's objects read-only without copying them), checks out the task branch at the pinned base commit, and removes the clone's remote.
+Every task gets a standalone clone of your repo at `<data>/work/<repo id>/<task id>`, outside your repo (the data dir is `~/.nightcrew` unless you pass `--data`). NightCrew makes it before any agent runs (`git clone --shared`, which borrows your repo's objects read-only without copying them), checks out the task branch (the task's work in progress, or the default branch for a new task), and removes the clone's remote.
 
-If you delete a clone, the next run makes a new one that resumes from the task's last saved work, `refs/nightcrew/tasks/<task id>` in your repo.
+If you delete a clone, the next run makes a new one that resumes from the task's work in progress, `refs/nightcrew/wip/<task id>` in your repo.
 
-Repos that use git-lfs, git-crypt or a sparse checkout are refused for now, with a message saying so. Supporting them is on the list.
+Repos that use git-lfs, git-crypt or a sparse checkout are refused for now, with a message saying so. Supporting them is on the list. Only settings actually in effect count, so a commented-out `filter=lfs` line doesn't get a repo refused.
 
 The agent can change anything inside its clone, its own `.git` included: branches, hooks, config, refs. None of that reaches your repo. Your repo's branches, hooks, config and worktrees are never shared with it.
 
@@ -16,12 +16,15 @@ NightCrew never runs unsandboxed git inside a clone. Its own git commands there 
 
 ## Results are checked in your repo, by commit SHA
 
-When the agent is done, NightCrew fetches the task branch from the clone into your repo as `refs/nightcrew/tasks/<task>` and reads its commit SHA. Everything that decides whether the work can ship runs in your repo against that SHA and the pinned base:
-- the result must contain the pinned base, or NightCrew refuses it,
-- the changed files come from `git diff` between the two, failing closed if git fails,
+When the agent is done, NightCrew fetches the task branch from the clone into your repo as `refs/nightcrew/wip/<task>`, the work in progress a later run resumes from, and reads its commit SHA. Everything that decides whether the work can ship runs in your repo against that SHA:
+- the base is worked out again on every run, as the merge-base of the task's work and the default branch. So merging the default branch into the task branch, or a human merging an earlier attempt, is handled,
+- the scope and ship checks always cover the task's whole change against the default branch, not just the latest run's commits,
+- the changed files come from `git diff` between the base and the result, failing closed if git fails,
 - the scope and protected-path checks, the diff stats and the commit count use the same pair.
 
-Draft PRs, trains and ship merges all use that SHA, never a branch name. After a merge, NightCrew checks the diff that actually landed against the same scope and protected-path rules, so a merge can't bring in files the task's own diff didn't show. NightCrew pushes the task branch from your repo as `<sha>:refs/heads/<branch>`, so nothing the agent did to branch names in its clone changes what lands. Integration worktrees (for the ship branch and trains) are worktrees of your repo that only NightCrew writes, reset each time they're reused. Landing records live under `~/.nightcrew/landing/`, not inside any `.git`.
+An earlier landing of the same task counts as a merge point only while NightCrew's records show it's still on that branch: a train car still on the train, a ship not undone. After a task is taken off the train or its ship is undone, a re-run is refused with instructions to start the task fresh, so reverted work can't come back unchecked.
+
+The result becomes `refs/nightcrew/tasks/<task>` only after the gate passes. Draft PRs, trains and ship merges all use that SHA, never a branch name. After a merge, NightCrew checks the diff that actually landed against the same scope and protected-path rules, so a merge can't bring in files the task's own diff didn't show. NightCrew pushes the task branch from your repo as `<sha>:refs/heads/<branch>`, so nothing the agent did to branch names in its clone changes what lands. Integration worktrees (for the ship branch and trains) are worktrees of your repo that only NightCrew writes, reset each time they're reused. Landing records live under `~/.nightcrew/landing/`, not inside any `.git`.
 
 NightCrew's own git commands, in your repo and everywhere else, run with hooks off (`core.hooksPath=/dev/null`), no fsmonitor, no replace objects (`GIT_NO_REPLACE_OBJECTS=1`) and no terminal prompts. A hook or a replace ref planted in a clone does nothing when NightCrew fetches from it.
 
@@ -29,7 +32,7 @@ NightCrew's own git commands, in your repo and everywhere else, run with hooks o
 
 Every tool call goes through the guard before it runs. It refuses:
 - writes outside the task's clone and NightCrew's artifact folder, and outside the task's scope globs,
-- `.github/workflows/`, `.env` files, keys and `.git`, whatever the scope says,
+- `.github/workflows/`, `.env` files, keys, `.git`, `.gitattributes`, `.lfsconfig` and `.gitmodules`, whatever the scope says. These match in any letter case, because macOS reads `.GITATTRIBUTES` as `.gitattributes`. The same list is checked again on the result,
 - reading secrets files,
 - `git push`, history rewrites, `git reset --hard`, `git clean -f`, changing remotes or git config, deleting branches and tagging,
 - checking out or moving a protected branch,
@@ -68,7 +71,7 @@ NightCrew runs the repo's own commands (setup, tests, previews) and its git comm
 
 Checks in NightCrew's own worktrees of your repo (integration worktrees for the ship branch and trains, and the base worktree used for before-and-after evidence) can write only that worktree's folder, minus its `.git` pointer file. None of your repo's git data is writable from there: not the worktree's git dir, not your repo's hooks or config, and not its `lfs` or `modules` folders.
 
-Checks run without your terminal: each starts in a new session with no controlling terminal, so it can't open `/dev/tty`, and on macOS the profile also blocks terminal ioctls, so it can't type into the terminal NightCrew was started from.
+Checks can't read or write a terminal: each starts in a new session with no controlling terminal and no terminal on its input or output, so it can't open `/dev/tty`, and on macOS the profile also blocks terminal ioctls, so it can't type into the terminal NightCrew was started from. Stopping a check, on a timeout or when you stop the task, stops its child processes too.
 
 On macOS the profile also stops a command from starting work outside the sandbox: `launchctl`, `open` and `osascript` can't run, and the LaunchServices and Apple Events services are blocked, so a test can't open a `.command` file in Terminal, submit a launchd job or script another app.
 
@@ -103,7 +106,7 @@ It's a second line, not a wall. A remote other than `origin` that uses an ssh al
 
 ## Branches NightCrew protects
 
-NightCrew pins each task's base commit when the task starts, so later work is compared against what the task actually started from. The repo's default branch, its listed protected branches and the ship and train branches are protected for the guard. Because results land by SHA from your repo, an agent can't move any of them: it only ever has its own clone's copies.
+NightCrew compares each task's work against the default branch, with the base worked out again each run (see above). The repo's default branch, its listed protected branches and the ship and train branches are protected for the guard. Because results land by SHA from your repo, an agent can't move any of them: it only ever has its own clone's copies.
 
 ## The dashboard API
 
@@ -119,7 +122,7 @@ Don't expose the port to a network. To reach NightCrew from another device, use 
 
 In [managed mode](managed.md) the agent works in Anthropic's cloud sandbox, not on your machine. Every shell, write and edit call is held for confirmation and decided by the same guard; read-only tools run on the server's `auto` policy. Paths under the sandbox's `/workspace/<repo>` mount, in file paths and in shell commands, are mapped to the local clone for the guard's decision, so `rm -rf /workspace/<repo>/dist` is judged as a delete inside the clone. The agent's call runs as it sent it.
 
-NightCrew pushes the task's starting point from your repo by SHA, fetches the result back into your repo as `refs/nightcrew/tasks/<task>`, and checks it there exactly as for the local engine. It runs no git of its own inside the clone outside the check sandbox.
+NightCrew pushes the task's starting point from your repo by SHA, fetches the result back into your repo as `refs/nightcrew/wip/<task>`, and checks it there exactly as for the local engine. It becomes `refs/nightcrew/tasks/<task>` only after the gate passes. It runs no git of its own inside the clone outside the check sandbox.
 
 The sandbox mounts your repo with the GitHub token from `gh auth token`. That token can do whatever your account can, so for unattended runs:
 - use a **fine-grained token** limited to the repos NightCrew works on, with contents and pull requests access only,
@@ -133,4 +136,6 @@ The sandbox mounts your repo with the GitHub token from `gh auth token`. That to
 - **Terminals in tests.** Checks can't open new pseudo-terminals (`/dev/ptmx` and `/dev/ttys*` aren't writable on macOS), so tests that spawn a pty fail inside the check sandbox.
 - **Package caches are writable.** A command can plant something in `~/.npm` or `~/.cache` that a later install on this machine picks up.
 - **Local services.** The network is open, including to services on this machine. Anything listening locally that runs commands (a Docker socket, an SSH server with your keys) is reachable.
+- **Landings changed by hand.** Whether an earlier landing still counts as a merge point comes from NightCrew's records. If you revert or rewrite a train or ship branch outside NightCrew, take the task off the train or undo it in NightCrew too, or start the task fresh.
+- **Re-runs after a Pull or Undo.** A task taken off the train or undone can't be run again in place. You start it fresh as a new task.
 - **Managed mode** relies on Anthropic's cloud sandbox and the guard's confirmations. NightCrew's own sandboxes don't apply there; the result is still checked in your repo by SHA before it lands.

@@ -229,7 +229,7 @@ function openBrowser(url: string) {
 
 async function repoFor(path: string | undefined) {
   const info = await inspectRepo(path ?? cwd);
-  const unsupported = repoSupport(info.path);
+  const unsupported = await repoSupport(info.path);
   if (unsupported) {
     console.error(`  ${unsupported}`);
     process.exit(1);

@@ -58,6 +58,7 @@ export function lockedOut() {
     window.location.reload();
   };
   if (writes === 0) return reload();
+  toast("NightCrew restarted. Finishing your save, then reloading…");
   const since = Date.now();
   const wait = setInterval(() => {
     if (writes > 0 && Date.now() - since < 5000) return;

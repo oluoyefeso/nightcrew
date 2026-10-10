@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type GuardContext, globToRegExp, guardToolCall } from "./guard";
+import { type GuardContext, globToRegExp, guardToolCall, isAlwaysProtected } from "./guard";
 
 const ctx: GuardContext = {
   worktree: "/repo/.worktrees/t",
@@ -58,6 +58,36 @@ describe("writes", () => {
     ])
       expect(allowed("Write", { file_path }, open)).toBe(false);
     expect(allowed("Write", { file_path: "docs/gitattributes.md" }, open)).toBe(true);
+  });
+  test("protected paths match in any case, scope still matches exactly", () => {
+    // Value: protects=on macOS's case-insensitive disk an agent can't write .GITATTRIBUTES, .GITMODULES, .Worktrees or .GITHUB/workflows that git then honors; fails_when=ALWAYS_PROTECTED is matched case-sensitively, or scope globs become case-insensitive; why_new=K1 probed bypass; seam=none
+    const open = { ...ctx, scope: [] };
+    const variants = [
+      ".GITATTRIBUTES",
+      "vendor/lib/.GitAttributes",
+      ".LFSCONFIG",
+      ".GITMODULES",
+      ".Worktrees/other/a.ts",
+      ".GITHUB/workflows/ci.yml",
+      ".github/Workflows/ci.yml",
+      ".GIT/config",
+      "apps/api/.Git",
+      ".ENV",
+      ".Env.Local",
+      "keys/Server.PEM",
+      "ID_RSA",
+    ];
+    for (const file_path of variants) {
+      expect(allowed("Write", { file_path }, open)).toBe(false);
+      expect(isAlwaysProtected(file_path)).toBe(true);
+    }
+    expect(isAlwaysProtected("./.GitModules")).toBe(true);
+    for (const file_path of ["src/Attributes.ts", "docs/GitAttributes.md", ".gitignore", ".envrc", "README.md"]) {
+      expect(allowed("Write", { file_path }, open)).toBe(true);
+      expect(isAlwaysProtected(file_path)).toBe(false);
+    }
+    expect(allowed("Write", { file_path: "SRC/auth/login.ts" })).toBe(false);
+    expect(allowed("Write", { file_path: "src/auth/login.ts" })).toBe(true);
   });
   test("every write tool is checked, and a write with no path is refused", () => {
     // Value: protects=MultiEdit/NotebookEdit go through the scope check and empty paths deny; fails_when=WRITE_TOOLS loses an entry or notebook_path is ignored; why_new=only Write/Edit were tested; seam=none
@@ -243,6 +273,17 @@ test("reading .env is refused, an env template is fine", () => {
   expect(allowed("Read", { file_path: "/repo/.worktrees/t/src/env.ts" })).toBe(true);
 });
 
+test("secrets match in any case for Read and Bash", () => {
+  // Value: protects=.ENV, KEY.PEM and ID_RSA open the real secrets on macOS, so Read and Bash refuse them too; fails_when=SECRET_NAMES or SECRET_WORD match case-sensitively; why_new=K1 case variants; seam=none
+  expect(allowed("Read", { file_path: "/repo/.worktrees/t/.ENV" })).toBe(false);
+  expect(allowed("Read", { file_path: "/repo/.worktrees/t/certs/Key.PEM" })).toBe(false);
+  expect(allowed("Bash", { command: "cat .ENV.Local" })).toBe(false);
+  expect(allowed("Bash", { command: "cat ~/.ssh/ID_RSA" })).toBe(false);
+  expect(allowed("Read", { file_path: "/repo/.worktrees/t/.ENV.EXAMPLE" })).toBe(true);
+  expect(allowed("Bash", { command: "cat .Env.Example README.MD" })).toBe(true);
+  expect(allowed("Read", { file_path: "/repo/.worktrees/t/src/Env.ts" })).toBe(true);
+});
+
 test("Read follows symlinks to secrets files", () => {
   // Value: protects=a symlink can't launder a secrets file past the Read check; fails_when=Read stops resolving the real path; why_new=Read only looked at the name it was given; seam=none
   const dir = mkdtempSync(join(tmpdir(), "nc-guard-"));
@@ -264,6 +305,9 @@ test.each([
   ["Grep", { pattern: "foo", glob: "*.ts" }, true],
   ["Glob", { pattern: "**/*.ts" }, true],
   ["Glob", { pattern: "**/.envrc" }, true],
+  ["Grep", { pattern: "KEY", path: ".ENV" }, false],
+  ["Glob", { pattern: "**/.Env*" }, false],
+  ["Grep", { pattern: "BEGIN", glob: "*.PEM" }, false],
 ])("%s %p → allowed %p", (tool, input, expected) => {
   // Value: protects=Grep and Glob can't be pointed at secrets files; fails_when=the Grep/Glob branch is dropped or isSecret over-matches; why_new=only Read and Bash were guarded; seam=none
   expect(allowed(tool, input)).toBe(expected);

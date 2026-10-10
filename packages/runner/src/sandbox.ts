@@ -39,6 +39,12 @@ function real(p: string): string {
 export interface CheckPlace {
   /** The dir is a task's clone: the agent owns all of it, `.git` included. */
   clone?: boolean;
+  /**
+   * The host repo's object dirs a clone borrows from, from NightCrew's records
+   * (never the clone's alternates file). bwrap binds them read-only over its
+   * private /tmp, so a repo under /tmp still reads.
+   */
+  objects?: string[];
 }
 
 /**
@@ -114,6 +120,8 @@ export function seatbeltProfile(dir: string, place: CheckPlace = {}): string {
     `(deny mach-lookup\n  ${LAUNCH_SERVICES.join("\n  ")})`,
     // No typing into a terminal through an inherited descriptor (TIOCSTI).
     '(deny file-ioctl (literal "/dev/tty") (regex #"^/dev/ttys"))',
+    // No opening another terminal to read what's typed there, or a new pty.
+    '(deny file-read* (literal "/dev/tty") (regex #"^/dev/ttys[0-9]+$") (literal "/dev/ptmx"))',
   ].join("\n");
 }
 
@@ -143,6 +151,8 @@ export function bwrapArgs(dir: string, place: CheckPlace = {}): string[] {
   if (tmp !== "/tmp" && existsSync(tmp)) args.push("--bind", tmp, tmp);
   args.push("--bind", wt, wt);
   for (const d of cacheDirs()) if (existsSync(d)) args.push("--bind", real(d), real(d));
+  // After the private /tmp, so a clone of a repo under /tmp reads the objects it borrows.
+  if (place.clone) for (const o of place.objects ?? []) if (existsSync(o)) args.push("--ro-bind", real(o), real(o));
   // Later mounts win, so the denies go last.
   for (const p of denies(wt, place)) if (existsSync(p)) args.push("--ro-bind", p, p);
   return [...args, "--chdir", wt];
@@ -209,8 +219,17 @@ export const NO_SANDBOX_WARNING =
  */
 function newSession(argv: string[]): string[] {
   const perl = existsSync("/usr/bin/perl") ? "/usr/bin/perl" : onPath("perl");
-  if (perl) return [perl, "-e", "use POSIX qw(setsid); setsid(); exec @ARGV or die", "--", ...argv];
+  // Either fails the check if setsid() fails, rather than run it with the terminal.
+  if (perl)
+    return [
+      perl,
+      "-e",
+      'use POSIX qw(setsid); setsid() >= 0 or die "setsid: $!"; exec { $ARGV[0] } @ARGV or die "exec: $!"',
+      "--",
+      ...argv,
+    ];
   const python = onPath("python3");
+  // os.setsid() raises on failure.
   if (python) return [python, "-c", "import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])", ...argv];
   return argv;
 }
@@ -253,9 +272,11 @@ export function runCheck(
     warn?: (text: string) => void;
     /** `dir` is a task's clone (from NightCrew's records). */
     clone?: boolean;
+    /** The host repo's object dirs the clone borrows (from NightCrew's records). */
+    objects?: string[];
   } = {},
 ): Promise<Exec> {
-  return run(sandboxed(cmd, dir, opts.warn, { clone: opts.clone }), dir, {
+  return run(sandboxed(cmd, dir, opts.warn, { clone: opts.clone, objects: opts.objects }), dir, {
     timeoutMs: opts.timeoutMs,
     signal: opts.signal,
     baseEnv: checkEnv(opts.env),

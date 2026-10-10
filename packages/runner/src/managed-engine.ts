@@ -39,9 +39,9 @@ import {
   STOPPED,
   stoppedResult,
 } from "./engine";
-import { FETCH_FSCK, git, gitRun, pushTo, resolveSha } from "./git";
+import { FETCH_FSCK, git, gitRun, pushTo } from "./git";
 import { withRepoInstructions } from "./sdk-engine";
-import { fetchTask, pullIntoClone, taskRef, type Workspace, workspaceFor } from "./workspace";
+import { fetchCloudWork, fetchTask, pullIntoClone, type Workspace, wipRef, workspaceFor } from "./workspace";
 
 /** The slice of the Anthropic client this engine uses. Tests pass a fake. */
 export interface ManagedAgentsClient {
@@ -580,33 +580,14 @@ function fail(result: PhaseResult, error: string): PhaseResult {
 }
 
 /**
- * Fetch the cloud's commits on the task branch into your repo, refuse
- * anything that doesn't build on where the session started, then move the
- * clone there from inside the sandbox.
+ * Fetch the cloud's commits on the task branch into your repo as the task's
+ * work in progress, refuse anything that doesn't build on where the session
+ * started, then move the clone there from inside the sandbox. The task's
+ * result ref moves only after the pipeline's final gate.
  */
 async function pullCloudWork(ws: Workspace, branch: string, startSha: string | null): Promise<boolean> {
-  const ref = taskRef(ws.taskId);
-  const fetched = await gitRun(
-    ws.repoPath,
-    [
-      ...FETCH_FSCK,
-      "fetch",
-      "--quiet",
-      "--no-tags",
-      "--no-recurse-submodules",
-      "origin",
-      `+refs/heads/${branch}:${ref}`,
-    ],
-    { timeoutMs: GIT_TIMEOUT_MS },
-  );
-  if (!fetched.ok) return false;
-  const sha = await resolveSha(ws.repoPath, ref);
-  if (!sha || (startSha && !(await git(ws.repoPath, "merge-base", "--is-ancestor", startSha, sha)).ok)) {
-    // Put back the last good copy of the clone's work.
-    if (startSha) await git(ws.repoPath, "update-ref", ref, startSha);
-    return false;
-  }
-  return (await pullIntoClone(ws, ref)).ok;
+  if (!(await fetchCloudWork(ws, branch, startSha, GIT_TIMEOUT_MS))) return false;
+  return (await pullIntoClone(ws, wipRef(ws.taskId))).ok;
 }
 
 /** The same for a plain checkout NightCrew didn't set up: fetch and fast-forward in place. */

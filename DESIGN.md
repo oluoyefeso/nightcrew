@@ -46,7 +46,7 @@ The signature element. A 4px band across the top of the Inbox covering the hours
 
 ## Theme switching
 
-The header toggle has three states: Match system, Night and Morning. The selected one is an inverted pill so it's unmistakable in both themes. The choice is stored locally; Match system clears it. Embedded in a preview frame, the landing page defers to the host's theme and hides its own switch.
+The header toggle has three states: Match system, Night and Morning. The selected one is an inverted pill so it's unmistakable in both themes. The choice is stored locally; Match system clears it. The landing page has a labelled Light / Dark switch in its nav that is always visible, embedded or not, and follows the host's theme until you pick one.
 
 ## Components
 

@@ -1,8 +1,9 @@
 import { formatCost, TASK_TYPE_LABEL } from "@nightcrew/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { Archive, MoonStar } from "lucide-react";
+import { Archive, Inbox, MoonStar } from "lucide-react";
 import { api, tasksQuery, useInvalidateTasks } from "../api";
+import { Routines } from "../components/routines";
 import { Button } from "../components/ui";
 
 export function LaterPage() {
@@ -14,10 +15,33 @@ export function LaterPage() {
     onSuccess: invalidate,
   });
 
+  const intake = useMutation({
+    mutationFn: () => api.post<{ added: number; errors: string[] }>("/api/intake/github"),
+    onSuccess: invalidate,
+  });
+
   return (
     <div className="mx-auto grid max-w-[860px] gap-8 px-4 pt-8 pb-28 sm:px-8 lg:pt-12">
       <header className="grid gap-2">
-        <h1 className="font-serif text-[40px] leading-none tracking-[-0.01em] sm:text-[48px]">Later</h1>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <h1 className="font-serif text-[40px] leading-none tracking-[-0.01em] sm:text-[48px]">Later</h1>
+          <Button
+            size="sm"
+            onClick={() => intake.mutate()}
+            disabled={intake.isPending}
+            title='Imports open issues labelled "crew" from each repo'
+          >
+            <Inbox className="size-3.5" /> {intake.isPending ? "Importing…" : "Import GitHub issues"}
+          </Button>
+        </div>
+        {intake.data && (
+          <p className="text-[12.5px] text-muted">
+            {intake.data.added
+              ? `Imported ${intake.data.added} ${intake.data.added === 1 ? "issue" : "issues"}.`
+              : 'No new issues labelled "crew".'}
+            {intake.data.errors.length ? ` ${intake.data.errors.join(" ")}` : ""}
+          </p>
+        )}
         <p className="text-[14px] text-muted">
           Work you've captured but haven't scheduled. Move anything to tonight with one click.
         </p>
@@ -54,6 +78,8 @@ export function LaterPage() {
           ))}
         </div>
       )}
+
+      <Routines />
 
       {(archived.data?.length ?? 0) > 0 && (
         <section className="grid gap-2.5">

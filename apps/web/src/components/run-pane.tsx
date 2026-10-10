@@ -6,12 +6,12 @@ import {
   type Run,
   type TriageAction,
 } from "@nightcrew/core";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { clsx } from "clsx";
 import { ArrowLeft, ExternalLink, GitBranch, GitPullRequest, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
-import { runQuery, useTriage } from "../api";
+import { api, runQuery, useTriage } from "../api";
 import { BUCKET_COLOR, durationMs, fmtModel, fmtTime, fmtTokens, isTypingTarget } from "../lib";
 import { EvidenceView, parseEvidence } from "./evidence";
 import { Button, Chip, Kbd, Pill } from "./ui";
@@ -97,11 +97,29 @@ export function RunPane({
           </div>
         </div>
 
-        <dl className="grid grid-cols-3 gap-px overflow-hidden rounded-xl bg-line ring-1 ring-line">
+        <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-line ring-1 ring-line sm:grid-cols-4">
           <Stat label="Cost" value={formatCost(run.costCents)} />
+          <Stat label="Confidence" value={run.confidence === null ? "—" : `${Math.round(run.confidence * 100)}%`} />
           <Stat label="Model" value={fmtModel(run.model)} />
           <Stat label="Tokens" value={`${fmtTokens(run.tokensIn)} in · ${fmtTokens(run.tokensOut)} out`} />
         </dl>
+
+        {run.shipSha && (
+          <Callout
+            tone={run.undoneAt ? "dawn" : "ok"}
+            label={run.undoneAt ? "Shipped, then undone" : `Shipped to ${run.shipBranch}`}
+          >
+            {run.undoneAt
+              ? `You undid this. NightCrew reverted ${run.shipSha.slice(0, 7)} on ${run.shipBranch}.`
+              : `The crew merged this into ${run.shipBranch} itself (${run.shipSha.slice(0, 7)}) because the evidence, the Skeptic and the ship rules all agreed. Press U to undo.`}
+          </Callout>
+        )}
+        {run.trainId && !run.shipSha && (
+          <Callout label="On tonight's train">
+            This task is merged into the nightly train with the night's other work and tested together. You merge the
+            train's one PR, or press 3 to take this task off it.
+          </Callout>
+        )}
 
         {run.status !== "complete" && run.reason && (
           <Callout tone="bad" label="Why it stopped">
@@ -209,7 +227,15 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Callout({ label, children, tone }: { label: string; children: React.ReactNode; tone?: "bad" | "dawn" }) {
+function Callout({
+  label,
+  children,
+  tone,
+}: {
+  label: string;
+  children: React.ReactNode;
+  tone?: "bad" | "dawn" | "ok";
+}) {
   return (
     <div
       className="grid gap-1 rounded-xl px-4 py-3"
@@ -238,8 +264,32 @@ function TriageBar({ run, onToast }: { run: Run; onToast: (msg: string) => void 
   const armTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const canMerge = Boolean(run.prUrl) && (run.bucket === "ready" || run.bucket === "eyes");
-  // A merge can't be taken back from here; that becomes a revert PR in M3.
-  const canUndo = run.triage !== null && run.triage !== "merge";
+  const shipped = Boolean(run.shipSha && !run.undoneAt);
+  const onTrain = Boolean(run.trainId && !run.shipSha && run.triage !== "close" && run.triage !== "send_back");
+  // A merged PR can't be taken back from here; a ship can (it's reverted on the ship branch).
+  const canUndo = shipped || (run.triage !== null && run.triage !== "merge");
+  const qc = useQueryClient();
+  const unship = useMutation({
+    mutationFn: () => api.post<{ demoted: boolean }>(`/api/runs/${encodeURIComponent(run.id)}/unship`),
+    onSuccess: (r) => {
+      onToast(r.demoted ? "Undone. The repo goes back to the nightly train for now." : "Undone.");
+      qc.invalidateQueries({ queryKey: ["run", run.id] });
+      qc.invalidateQueries({ queryKey: ["report"] });
+    },
+    onError: (e) => onToast(e.message),
+  });
+  const pull = useMutation({
+    mutationFn: () => api.post(`/api/runs/${encodeURIComponent(run.id)}/pull`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["trains"] });
+    },
+    onError: (e) => onToast(e.message),
+  });
+  const undo = () => (shipped ? unship.mutate() : act("undo", "Undone."));
+  const dismiss = () => {
+    if (onTrain) pull.mutate(undefined, { onSuccess: () => act("close", "Taken off the train.") });
+    else act("close", "Dismissed.");
+  };
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset when the run changes
   useEffect(() => {
@@ -276,6 +326,7 @@ function TriageBar({ run, onToast }: { run: Run; onToast: (msg: string) => void 
 
   const sendBack = () => {
     if (!note.trim()) return;
+    if (onTrain) pull.mutate();
     act("send_back", "Sent back. It goes into tonight's queue with your note.", note);
     setComposing(false);
     setNote("");
@@ -287,9 +338,9 @@ function TriageBar({ run, onToast }: { run: Run; onToast: (msg: string) => void 
       const k = e.key.toLowerCase();
       if (k === "1") merge();
       else if (k === "2") setComposing(true);
-      else if (k === "3" && run.bucket !== "failed") act("close", "Dismissed.");
+      else if (k === "3" && run.bucket !== "failed" && !shipped) dismiss();
       else if (k === "h") act("tonight", "Queued to try again tonight.");
-      else if (k === "u" && canUndo) act("undo", "Undone.");
+      else if (k === "u" && canUndo) undo();
       else return;
       e.preventDefault();
     };
@@ -341,8 +392,8 @@ function TriageBar({ run, onToast }: { run: Run; onToast: (msg: string) => void 
         </Button>
       )}
       {run.bucket !== "failed" && run.bucket !== "shipped" && (
-        <Button variant="ghost" onClick={() => act("close", "Dismissed.")} kbd="3">
-          Dismiss
+        <Button variant="ghost" onClick={dismiss} kbd="3">
+          {onTrain ? "Take off the train" : "Dismiss"}
         </Button>
       )}
       {(run.bucket === "failed" || run.bucket === "eyes") && (
@@ -351,8 +402,8 @@ function TriageBar({ run, onToast }: { run: Run; onToast: (msg: string) => void 
         </Button>
       )}
       {canUndo && (
-        <Button variant="ghost" onClick={() => act("undo", "Undone.")} kbd="U">
-          Undo
+        <Button variant={shipped ? "secondary" : "ghost"} onClick={undo} disabled={unship.isPending} kbd="U">
+          {shipped ? (unship.isPending ? "Reverting…" : `Undo ship to ${run.shipBranch}`) : "Undo"}
         </Button>
       )}
     </div>

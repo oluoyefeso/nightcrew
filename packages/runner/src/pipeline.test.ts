@@ -57,6 +57,7 @@ function setupTask(over: Parameters<typeof createTask>[1] extends infer T ? Part
   });
   return createTask(db, {
     repoId: repo.id,
+    workflow: "planned",
     title: "Add the feature",
     scope: ["src/**"],
     criteria: ["Feature file exists"],

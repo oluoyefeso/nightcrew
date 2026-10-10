@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const runs = sqliteTable(
   "runs",
@@ -33,6 +33,13 @@ export const runs = sqliteTable(
     phase: text("phase"),
     worktree: text("worktree"),
     verdict: text("verdict"),
+    /** 0–1: how safe this is to merge without changes. */
+    confidence: real("confidence"),
+    /** Set when the crew shipped it to the ship branch itself. */
+    shipSha: text("ship_sha"),
+    shipBranch: text("ship_branch"),
+    undoneAt: text("undone_at"),
+    trainId: text("train_id"),
   },
   (t) => [index("runs_night_idx").on(t.nightId), index("runs_task_idx").on(t.taskId)],
 );
@@ -80,6 +87,12 @@ export const repos = sqliteTable("repos", {
   previewCommand: text("preview_command"),
   previewUrl: text("preview_url"),
   previewPaths: text("preview_paths", { mode: "json" }).$type<string[]>().notNull().default(["/"]),
+  /** Level "ship": the branch the crew may merge into itself (never a protected one). */
+  shipBranch: text("ship_branch"),
+  /** Level "ship": only changes entirely inside these globs ship without you. */
+  allowShip: text("allow_ship", { mode: "json" }).$type<string[]>().notNull().default([]),
+  /** Changes touching these always wait for you, whatever the level. */
+  alwaysAsk: text("always_ask", { mode: "json" }).$type<string[]>().notNull().default([]),
 });
 
 export const tasks = sqliteTable(
@@ -104,6 +117,10 @@ export const tasks = sqliteTable(
     testCommand: text("test_command"),
     question: text("question"),
     source: text("source").notNull().default("manual"),
+    /** Where it came from, like a GitHub issue URL. */
+    sourceRef: text("source_ref"),
+    /** auto | quick (no separate plan) | planned */
+    workflow: text("workflow").notNull().default("auto"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
     lastRunId: text("last_run_id"),
@@ -144,4 +161,40 @@ export const runEvents = sqliteTable(
 export const settings = sqliteTable("settings", {
   key: text("key").primaryKey(),
   value: text("value", { mode: "json" }).notNull(),
+});
+
+/** One integration branch per repo per night: tasks merge in, you merge the train. */
+export const trains = sqliteTable("trains", {
+  id: text("id").primaryKey(),
+  repoId: text("repo_id")
+    .notNull()
+    .references(() => repos.id, { onDelete: "cascade" }),
+  nightId: text("night_id").notNull(),
+  branch: text("branch").notNull(),
+  status: text("status").notNull().default("open"),
+  prUrl: text("pr_url"),
+  prNumber: integer("pr_number"),
+  cars: text("cars", { mode: "json" })
+    .$type<{ runId: string; taskId: string; title: string; mergeSha: string; state: "on" | "pulled" | "broke" }[]>()
+    .notNull()
+    .default([]),
+  createdAt: text("created_at").notNull(),
+});
+
+/** Recurring work: a task created automatically on chosen days. */
+export const routines = sqliteTable("routines", {
+  id: text("id").primaryKey(),
+  repoId: text("repo_id")
+    .notNull()
+    .references(() => repos.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  brief: text("brief").notNull().default(""),
+  type: text("type").notNull().default("implementation"),
+  scope: text("scope", { mode: "json" }).$type<string[]>().notNull().default([]),
+  criteria: text("criteria", { mode: "json" }).$type<string[]>().notNull().default([]),
+  /** Days of the week it runs, 0 = Sunday. */
+  days: text("days", { mode: "json" }).$type<number[]>().notNull().default([]),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  lastNight: text("last_night"),
+  createdAt: text("created_at").notNull(),
 });

@@ -18,6 +18,7 @@ import { Hono } from "hono";
 import { mergePr } from "./github";
 import { mountTaskRoutes } from "./routes";
 import { syncClassic } from "./sync";
+import { mountTrustRoutes } from "./trust-routes";
 
 const ACTIONS: TriageAction[] = ["merge", "send_back", "close", "tonight", "undo"];
 
@@ -29,6 +30,7 @@ export interface ServerOptions {
   crew: Crew;
   engine: AgentEngine;
   dataDir: string;
+  publish: boolean;
 }
 
 export function createApp(opts: ServerOptions) {
@@ -82,6 +84,7 @@ export function createApp(opts: ServerOptions) {
   });
 
   mountTaskRoutes(app, { db, crew: opts.crew, engine: opts.engine, dataDir: opts.dataDir });
+  mountTrustRoutes(app, { db, publish: opts.publish });
 
   app.post("/api/sync", async (c) => {
     const result = await syncClassic(db, { root: opts.classicRoot, cwd: opts.cwd, github: true });

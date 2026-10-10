@@ -214,7 +214,8 @@ async function screenshots(o: EvidenceOptions, baseDir: string, ev: Evidence) {
             const errors: string[] = [];
             page.on("console", (m) => {
               // A missing favicon isn't something the task broke.
-              if (m.type() === "error" && !/favicon\.ico/.test(m.location()?.url ?? "")) errors.push(m.text().slice(0, 300));
+              if (m.type() === "error" && !/favicon\.ico/.test(m.location()?.url ?? ""))
+                errors.push(m.text().slice(0, 300));
             });
             page.on("pageerror", (e) => errors.push(e.message.slice(0, 300)));
             await page

@@ -4,5 +4,8 @@ export { DemoEngine } from "./demo-engine";
 export * from "./engine";
 export { type Evidence, type Shot, summarizeEvidence } from "./evidence";
 export { detectPreview, detectSetupCommand, detectTestCommand, inspectRepo, type RepoInfo } from "./git";
+export { canShip, publishTrain, pullCar, shipTask, undoShip } from "./landing";
 export * from "./pipeline";
+export { JevReflexes, NoReflexes, type Reflexes, reflexesFromEnv } from "./reflexes";
+export { materializeRoutines } from "./routines";
 export { SdkEngine } from "./sdk-engine";

@@ -45,6 +45,47 @@ export interface Repo {
   previewCommand: string | null;
   previewUrl: string | null;
   previewPaths: string[];
+  shipBranch: string | null;
+  allowShip: string[];
+  alwaysAsk: string[];
+}
+
+export type Workflow = "auto" | "quick" | "planned";
+
+export interface TrainCar {
+  runId: string;
+  taskId: string;
+  title: string;
+  mergeSha: string;
+  state: "on" | "pulled" | "broke";
+}
+
+export interface Train {
+  id: string;
+  repoId: string;
+  repoName: string;
+  nightId: string;
+  branch: string;
+  status: "open" | "published" | "merged" | "closed";
+  prUrl: string | null;
+  prNumber: number | null;
+  cars: TrainCar[];
+  createdAt: string;
+}
+
+export interface Routine {
+  id: string;
+  repoId: string;
+  repoName: string;
+  title: string;
+  brief: string;
+  type: TaskType;
+  scope: string[];
+  criteria: string[];
+  days: number[];
+  enabled: boolean;
+  lastNight: string | null;
+  createdAt: string;
 }
 
 export interface Task {
@@ -65,7 +106,9 @@ export interface Task {
   model: string | null;
   testCommand: string | null;
   question: string | null;
-  source: "composer" | "cli" | "github" | "manual";
+  source: "composer" | "cli" | "github" | "manual" | "routine";
+  sourceRef: string | null;
+  workflow: Workflow;
   createdAt: string;
   updatedAt: string;
   lastRunId: string | null;

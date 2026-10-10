@@ -29,9 +29,7 @@
       "name": "@nightcrew/site",
       "version": "1.0.0-alpha.0",
       "dependencies": {
-        "@fontsource-variable/geist": "5.3.0",
-        "@fontsource-variable/geist-mono": "5.3.0",
-        "@fontsource/instrument-serif": "5.3.0",
+        "@fontsource-variable/inter": "5.3.0",
         "@nightcrew/core": "workspace:*",
         "clsx": "2.1.1",
         "lucide-react": "1.55.0",
@@ -51,9 +49,7 @@
       "name": "@nightcrew/web",
       "version": "1.0.0-alpha.0",
       "dependencies": {
-        "@fontsource-variable/geist": "5.3.0",
-        "@fontsource-variable/geist-mono": "5.3.0",
-        "@fontsource/instrument-serif": "5.3.0",
+        "@fontsource-variable/inter": "5.3.0",
         "@nightcrew/core": "workspace:*",
         "@tanstack/react-query": "5.104.1",
         "@tanstack/react-router": "1.170.42",
@@ -205,11 +201,7 @@
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.25.12", "", { "os": "win32", "cpu": "x64" }, "sha512-alJC0uCZpTFrSL0CCDjcgleBXPnCrEAhTBILpeAp7M/OFgoqtAetfBzX0xM00MUsVVPpVjlPuMbREqnZCXaTnA=="],
 
-    "@fontsource-variable/geist": ["@fontsource-variable/geist@5.3.0", "", {}, "sha512-j0m+vLQuG5XAYoHtGCVu0spvlGreR3EzpECUVzkFmI1mTVnAO38l/NEPDCFgZ177JxzYJCLSmTQibIiYPilGrA=="],
-
-    "@fontsource-variable/geist-mono": ["@fontsource-variable/geist-mono@5.3.0", "", {}, "sha512-vBbuwDEo9AkrqADMXOrlAR3DFcJi4/JxeuU43FoiQERnNwsfXNnvxvReZG02cQKmyk4DZkZdBZX3oTDvy2zBAw=="],
-
-    "@fontsource/instrument-serif": ["@fontsource/instrument-serif@5.3.0", "", {}, "sha512-mDiaIg0u67sYV59fie92Wz4sM8UiVlbL7fLxnFPCKkX15DMASEnQTREbaP5S5/3DCcsoAOcQ0sV9E4AeY4QqYQ=="],
+    "@fontsource-variable/inter": ["@fontsource-variable/inter@5.3.0", "", {}, "sha512-OupL48va4JNofb97w6NYeF9S7W/kHNKM0Er8Dem5nqi4jeOLrVJDoE8tZEpnMJmtkvNbB1EIPPwHcdkF6b1oUA=="],
 
     "@hono/node-server": ["@hono/node-server@2.1.4", "", { "peerDependencies": { "hono": "^4 || ^5.0.0-0" } }, "sha512-2g1qeHl4BduwDn6L8nkAvDrPUWPMlkQ//a5NhP/zIyaXKMjZNRV+cG9Csu+BiJFf6+68pqzjf4Hi5sJGKHuS1g=="],
 

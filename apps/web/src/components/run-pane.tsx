@@ -70,7 +70,7 @@ export function RunPane({
               {dur ? ` · ${formatDuration(dur)}` : ""}
             </span>
           </div>
-          <h2 className="text-balance font-semibold text-[19px] leading-snug tracking-[-0.015em]">{run.title}</h2>
+          <h2 className="t-h3 text-balance">{run.title}</h2>
           <div className="flex flex-wrap items-center gap-1.5">
             {run.branch && (
               <Chip title="Branch">

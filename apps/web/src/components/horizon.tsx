@@ -64,7 +64,7 @@ export function Horizon({
                 )}
                 style={{ background: BUCKET_COLOR[r.bucket], boxShadow: "0 0 0 2px var(--bg)" }}
               />
-              {active && (
+              {r.id === hoveredId && (
                 <span
                   className={clsx(
                     "pointer-events-none absolute bottom-full z-10 mb-1.5 whitespace-nowrap rounded-md bg-raised px-2 py-1 font-mono text-[11px] text-fg shadow-[var(--shadow)] ring-1 ring-line",

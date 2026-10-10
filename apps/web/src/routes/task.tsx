@@ -105,7 +105,7 @@ function TaskEditor({
           disabled={locked}
           onChange={(e) => edit({ title: e.target.value })}
           aria-label="Title"
-          className="w-full bg-transparent font-serif text-[32px] leading-tight tracking-[-0.01em] outline-none sm:text-[38px]"
+          className="t-h2 w-full bg-transparent outline-none"
         />
         <div className="flex flex-wrap gap-2">
           {t.status !== "queued" && t.status !== "running" && (

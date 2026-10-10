@@ -67,7 +67,7 @@ export function Shell() {
     <div className="flex min-h-full flex-col">
       <header className="sticky top-0 z-30 border-line border-b bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] backdrop-blur-xl">
         <div className="mx-auto flex h-14 max-w-[1440px] items-center gap-3 px-4 sm:gap-6 sm:px-6">
-          <Link to="/" className="flex items-center gap-2.5 font-semibold tracking-[-0.01em]">
+          <Link to="/" className="flex items-center gap-2.5 font-medium text-[15px] tracking-[-0.02em]">
             <BrandMark className="size-[22px]" />
             NightCrew
           </Link>
@@ -178,7 +178,7 @@ function ThemeToggle() {
           onClick={() => setTheme(value)}
           className={clsx(
             "grid size-7 place-items-center rounded-full transition-colors duration-150",
-            theme === value ? "bg-raised text-fg" : "text-faint hover:text-muted",
+            theme === value ? "bg-fg text-bg shadow-sm" : "text-muted hover:text-fg",
           )}
         >
           <Icon className="size-3.5" strokeWidth={2} />

@@ -24,7 +24,7 @@ export function LaterPage() {
     <div className="mx-auto grid max-w-[860px] gap-8 px-4 pt-8 pb-28 sm:px-8 lg:pt-12">
       <header className="grid gap-2">
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <h1 className="font-serif text-[40px] leading-none tracking-[-0.01em] sm:text-[48px]">Later</h1>
+          <h1 className="t-h1">Later</h1>
           <Button
             size="sm"
             onClick={() => intake.mutate()}

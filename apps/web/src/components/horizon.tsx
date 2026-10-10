@@ -1,9 +1,9 @@
-import { horizonPosition, horizonWindow, type Run } from "@nightcrew/core";
+import { horizonPosition, horizonWindow, nightIdFor, type Run } from "@nightcrew/core";
 import { clsx } from "clsx";
 import { BUCKET_COLOR, fmtTime } from "../lib";
 
 /**
- * The Horizon: the night as a time axis, ink fading to dawn, with a tick for
+ * The Horizon: the day as a time axis, ink fading to dawn, with a tick for
  * each task at the moment it started, coloured by where it landed.
  */
 export function Horizon({
@@ -21,7 +21,9 @@ export function Horizon({
   onHover: (id: string | null) => void;
   onSelect: (id: string) => void;
 }) {
-  const w = horizonWindow(runs, nightId);
+  const now = new Date();
+  const w = horizonWindow(runs, nightId, now);
+  const nowPct = nightIdFor(now.toISOString()) === nightId ? horizonPosition(now.toISOString(), w) : null;
   const hours = Math.round((w.end.getTime() - w.start.getTime()) / 3_600_000);
   const step = hours > 6 ? 3 : 1;
   const labels: { pct: number; text: string }[] = [];
@@ -40,6 +42,17 @@ export function Horizon({
               "linear-gradient(90deg, var(--horizon-from) 0%, var(--horizon-from) 34%, var(--dawn-soft) 86%, var(--dawn) 100%)",
           }}
         />
+        {nowPct !== null && (
+          <span
+            className="absolute top-[-2px] bottom-[-2px] w-px bg-fg/50"
+            style={{ left: `${nowPct}%` }}
+            aria-hidden="true"
+          >
+            <span className="absolute -top-3 left-1/2 -translate-x-1/2 font-mono text-[9.5px] text-faint uppercase tracking-[0.08em]">
+              now
+            </span>
+          </span>
+        )}
         {runs.map((r) => {
           if (!r.startedAt) return null;
           const active = r.id === selectedId || r.id === hoveredId;

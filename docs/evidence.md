@@ -24,6 +24,6 @@ The reviewer gets the diff, the acceptance criteria and a summary of the evidenc
 
 ## Where to see it
 
-In the Morning Report, open a task and choose **Evidence**: a checklist, the screenshot gallery (before, after and changes), and the fail-then-pass output. The same summary goes into the PR description, along with the Skeptic's results.
+In the Inbox, open a task and choose **Evidence**: a checklist, the screenshot gallery (before, after and changes), and the fail-then-pass output. The same summary goes into the PR description, along with the Skeptic's results.
 
 Files live in `~/.nightcrew/runs/<run>/`. Nothing is committed to your repo.

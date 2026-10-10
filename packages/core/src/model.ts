@@ -11,7 +11,7 @@ export type PrState = "open" | "draft" | "merged" | "closed";
 
 export type ArtifactKind = "evidence" | "plan" | "decisions" | "review" | "tests" | "report" | "log";
 
-export type TriageAction = "merge" | "send_back" | "close" | "tonight" | "undo";
+export type TriageAction = "merge" | "send_back" | "close" | "again" | "undo";
 
 export interface Run {
   id: string;

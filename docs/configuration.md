@@ -2,13 +2,16 @@
 
 Everything is set in the dashboard. This page explains what each setting does.
 
-## The night (Settings)
+## Agents (Settings)
 
 | Setting | Default | What it does |
 |---|---|---|
-| Start time | 22:00 | When the queue starts, local time. |
-| Nightly budget | $25 | The crew stops before a task could take the night past this. |
-| Start automatically | Yes | Off means the queue waits for Run now. |
+| Agents at once | 3 | Agents working at the same time, across all repos. |
+| Per repo | 1 | Agents at once in one repo. Above 1, same-repo agents use separate branches and the daily train catches conflicts. |
+| Daily budget | $25 | Counts what agents have actually spent today, plus the caps of agents still running. New agents wait rather than pass it. |
+| Dispatch | On | Paused: running agents finish, nothing new starts. |
+| Schedule time | 22:00 | Where "Schedule" sends work, such as an off-peak window. Local time. |
+| Slack webhook | none | Agents post there when they finish or need you. |
 | Planning model | `claude-opus-5-5` | Plans bigger tasks. |
 | Building model | `claude-sonnet-5-5` | Implements and repairs. |
 | Review model | `claude-sonnet-5-5` | The Skeptic. |
@@ -63,11 +66,11 @@ Crew sessions are isolated: no filesystem settings, MCP servers, skills or plugi
 ## Command line
 
 ```
-nightcrew                     Open the dashboard and keep the nightly schedule
-nightcrew add "<request>"     Draft tasks and queue them for tonight (--later to park them)
+nightcrew                     Open the dashboard; agents pick up work around the clock
+nightcrew add "<request>"     Draft tasks and dispatch them (--schedule for off-peak, --later to park)
 nightcrew repo add [path]     Let the crew work in a repo
 nightcrew repo                List repos
-nightcrew run                 Work through tonight's queue now, in this terminal
+nightcrew run                 Run the queue in this terminal until it's empty
 nightcrew import              Import 0.x (classic) history
 
 --demo             Pretend crew that spends nothing

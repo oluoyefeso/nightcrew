@@ -2,7 +2,7 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { type Settings, TASK_TYPES, type TaskStatus, type TaskType } from "@nightcrew/core";
+import { nextStart, type Settings, TASK_TYPES, type TaskStatus, type TaskType } from "@nightcrew/core";
 import {
   addNote,
   addRepo,
@@ -121,12 +121,19 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
     const input = await body<NewTask>(c);
     const err = validateTask(db, input);
     if (err) return c.json({ error: err }, 400);
-    return c.json(createTask(db, { ...(input as NewTask), source: input.source ?? "manual" }), 201);
+    const created = createTask(db, { ...(input as NewTask), source: input.source ?? "manual" });
+    void crew.pump();
+    return c.json(created, 201);
   });
 
   /** Save a batch of composer drafts; dependsOn holds indexes within the batch. */
   app.post("/api/tasks/batch", async (c) => {
-    const { tasks, status } = await body<{ tasks: (NewTask & { dependsOnIndex?: number[] })[]; status: TaskStatus }>(c);
+    const { tasks, status, when } = await body<{
+      tasks: (NewTask & { dependsOnIndex?: number[] })[];
+      status: TaskStatus;
+      /** now (default): dispatch as soon as an agent is free. schedule: at the schedule time. later: park. */
+      when: "now" | "schedule" | "later";
+    }>(c);
     if (!Array.isArray(tasks) || tasks.length === 0) return c.json({ error: "No tasks to save." }, 400);
     for (const t of tasks) {
       const err = validateTask(db, t);
@@ -135,9 +142,11 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
     const created: string[] = [];
     for (const t of tasks) {
       const dependsOn = (t.dependsOnIndex ?? []).map((i) => created[i]).filter((x): x is string => Boolean(x));
-      const s = t.question ? "draft" : (status ?? "queued");
-      created.push(createTask(db, { ...t, dependsOn, status: s, source: "composer" }).id);
+      const s = t.question ? "draft" : when === "later" ? "later" : (status ?? "queued");
+      const runAt = when === "schedule" ? nextStart(getSettings(db).scheduleAt).toISOString() : null;
+      created.push(createTask(db, { ...t, dependsOn, status: s, runAt, source: "composer" }).id);
     }
+    void crew.pump();
     return c.json(
       created.map((id) => getTask(db, id)),
       201,
@@ -150,7 +159,7 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
     const current = getTask(db, id);
     if (!current) return c.json({ error: "Task not found." }, 404);
     if (current.status === "running" && patch.status && patch.status !== "running") {
-      return c.json({ error: "The crew is working on this task right now. Stop the crew first." }, 409);
+      return c.json({ error: "An agent is working on this task right now. Stop it first." }, 409);
     }
     // Answering the composer's question: keep it as a note and clear the flag.
     if (patch.answer?.trim() && current.question) {
@@ -174,7 +183,9 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
     ]);
     if (clean.type && !TASK_TYPES.includes(clean.type as TaskType)) return c.json({ error: "Unknown task type." }, 400);
     if (clean.status && !STATUSES.includes(clean.status)) return c.json({ error: "Unknown status." }, 400);
-    return c.json(updateTask(db, id, clean));
+    const updated = updateTask(db, id, clean);
+    void crew.pump();
+    return c.json(updated);
   });
 
   app.delete("/api/tasks/:id", (c) => {
@@ -217,13 +228,23 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
 
   // ── Crew ──
   app.get("/api/crew", (c) => c.json(crew.getStatus()));
-  app.post("/api/crew/start", (c) => {
-    if (listTasks(db, ["queued"]).length === 0) return c.json({ error: "Tonight's queue is empty." }, 400);
-    void crew.start("manual");
-    return c.json(crew.getStatus(), 202);
+  /** Pause dispatch: running agents finish, nothing new starts. */
+  app.post("/api/crew/pause", (c) => {
+    updateSettings(db, { dispatch: false });
+    return c.json(crew.getStatus());
   });
-  app.post("/api/crew/stop", (c) => {
-    crew.stop();
+  app.post("/api/crew/resume", async (c) => {
+    updateSettings(db, { dispatch: true });
+    await crew.pump();
+    return c.json(crew.getStatus());
+  });
+  /** Stop one agent (its work so far stays on its branch). */
+  app.post("/api/crew/stop/:taskId", (c) => {
+    if (!crew.stopAgent(c.req.param("taskId"))) return c.json({ error: "No agent is working on that task." }, 404);
+    return c.json(crew.getStatus());
+  });
+  app.post("/api/crew/stop-all", (c) => {
+    crew.stopAll();
     return c.json(crew.getStatus());
   });
 
@@ -248,7 +269,8 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
     streamSSE(c, async (stream) => {
       await stream.writeSSE({ event: "status", data: JSON.stringify(crew.getStatus()) });
       const unsubscribe = crew.subscribe((e) => {
-        void stream.writeSSE({ event: e.type, data: JSON.stringify(e.type === "status" ? e.status : e.event) });
+        const data = e.type === "status" ? e.status : e.type === "report" ? e.outcome : e.event;
+        void stream.writeSSE({ event: e.type, data: JSON.stringify(data) });
       });
       const ping = setInterval(() => void stream.writeSSE({ event: "ping", data: "" }), 20_000);
       await new Promise<void>((resolve) => stream.onAbort(resolve));
@@ -261,9 +283,23 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
   app.get("/api/settings", (c) => c.json(getSettings(db)));
   app.patch("/api/settings", async (c) => {
     const patch = await body<Settings>(c);
-    if (patch.startAt && !/^([01]\d|2[0-3]):[0-5]\d$/.test(patch.startAt))
+    if (patch.scheduleAt && !/^([01]\d|2[0-3]):[0-5]\d$/.test(patch.scheduleAt))
       return c.json({ error: "Use a 24-hour time like 22:00." }, 400);
-    return c.json(updateSettings(db, patch));
+    if (
+      patch.maxAgents !== undefined &&
+      !(Number.isInteger(patch.maxAgents) && patch.maxAgents >= 1 && patch.maxAgents <= 12)
+    )
+      return c.json({ error: "Agents at once must be between 1 and 12." }, 400);
+    if (
+      patch.maxPerRepo !== undefined &&
+      !(Number.isInteger(patch.maxPerRepo) && patch.maxPerRepo >= 1 && patch.maxPerRepo <= 6)
+    )
+      return c.json({ error: "Agents per repo must be between 1 and 6." }, 400);
+    if (patch.slackWebhookUrl && !/^https:\/\/hooks\.slack\.com\//.test(patch.slackWebhookUrl))
+      return c.json({ error: "Paste a Slack incoming webhook URL (https://hooks.slack.com/…)." }, 400);
+    const next = updateSettings(db, patch);
+    void crew.pump();
+    return c.json(next);
   });
 }
 

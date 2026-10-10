@@ -1,6 +1,6 @@
 # NightCrew Design System: "The hour before sunrise"
 
-NightCrew is used at two moments: handing off work in the evening and clearing the report in the morning. The interface should feel calm at both. Blue-black ink with one warm dawn accent. Restraint does the work: one accent colour, one typeface, mono for every number.
+NightCrew is a control room: you hand work to agents and judge what they bring back, at any hour. The interface should feel calm while agents are busy, and fast when it's time to decide. Blue-black ink with one warm dawn accent. Restraint does the work: one accent colour, one typeface, mono for every number.
 
 Railway already owns the violet night sky. NightCrew sits at dawn instead. Never use violet or indigo.
 
@@ -42,7 +42,7 @@ Mono is the system stack (SF Mono, then Menlo and others) for anything that chan
 
 ## The Horizon
 
-The signature element. A 4px band across the top of the Morning Report, from 22:00 to 07:00 (or the hours around daytime runs), fading from ink to dawn. Each task is a tick at the moment it started, coloured by where it landed. Hover a tick to see the task; click it to open it. Don't use the gradient anywhere else.
+The signature element. A 4px band across the top of the Inbox covering the hours around the day's work, fading from ink to dawn; today's ends a little after a "now" marker. Each task is a tick at the moment it started, coloured by where it landed. Hover a tick to see the task; click it to open it. Don't use the gradient anywhere else.
 
 ## Theme switching
 
@@ -51,7 +51,8 @@ The header toggle has three states: Match system, Night and Morning. The selecte
 ## Components
 
 - **Buttons** are pills. Primary is `dawn` on `on-dawn`. Every triage action shows its key (`1`, `2`, `3`, `H`, `U`).
-- **Rows** in the Morning Report breathe (~64px). A 3px stripe on the left carries the bucket colour.
+- **Rows** in the Inbox breathe (~64px). A 3px stripe on the left carries the bucket colour.
+- **Agent cards** on the Agents page carry a sweeping dawn bar while working, the phase progress, the last step, and Stop.
 - **Panes** slide in from the right on desktop and take the screen on mobile.
 - **Callouts** ("Crew note", "Your note", "Why it stopped") use a tinted surface, not a border.
 - **Icons** come from Lucide at 14–16px with 2px strokes, and are always paired with a label or `aria-label`.

@@ -8,10 +8,10 @@ Draft PRs are the safe default. Each repo can move up as its record earns it, an
 
 **Draft PR.** One draft PR per task. You merge. This is the default.
 
-**Nightly train.** Every task that finishes ready, with complete evidence, merges into `crew/train-<night>`, a branch made from your default branch that night, and the full test suite runs on the combined result.
-- A task that conflicts with the night's other work, or breaks the combined tests, comes straight back off and gets its own draft PR.
-- When the night ends, NightCrew pushes the train and opens **one** PR listing every task on it.
-- In the morning, press `3` on any task to take it off the train (its merge is reverted) without blocking the rest.
+**Daily train.** Every task that finishes ready, with complete evidence, merges into `crew/train-<day>`, a branch made from your default branch that day, and the full test suite runs on the combined result.
+- A task that conflicts with the day's other work, or breaks the combined tests, comes straight back off and gets its own draft PR.
+- Whenever no agent is working in the repo, NightCrew pushes the train and opens (or refreshes) **one** PR listing every task on it.
+- At any point, press `3` on any task to take it off the train (its merge is reverted) without blocking the rest.
 
 **Ship to dev.** The crew merges into your ship branch (like `dev` or `staging`, never a protected branch) by itself when all of these hold:
 - the Skeptic's verdict is ready,
@@ -20,16 +20,16 @@ Draft PRs are the safe default. Each repo can move up as its record earns it, an
 - every changed file matches **Allowed to ship on their own**,
 - no changed file matches **Always wait for me**.
 
-Otherwise the task falls back to a draft PR, and the run log says exactly which rule stopped it. Press `U` on a shipped task to revert its merge on the ship branch. An undo also drops the repo back to the nightly train.
+Otherwise the task falls back to a draft PR, and the run log says exactly which rule stopped it. Press `U` on a shipped task to revert its merge on the ship branch. An undo also drops the repo back to the daily train.
 
 **Never.** The default branch, `main`, `master`, release branches you protect, workflows and secrets. The guard refuses them during the night, and NightCrew never merges there.
 
 ## Earning it
 
-NightCrew keeps a record per repo over the last ten finished tasks: how many merged unchanged, were sent back, or were undone. It suggests a promotion in the Morning Report:
+NightCrew keeps a record per repo over the last ten finished tasks: how many merged unchanged, were sent back, or were undone. It suggests a promotion in the Inbox:
 
-- **Draft PR → Nightly train** after 5 merged unchanged, with nothing sent back or undone.
-- **Nightly train → Ship to dev** after 8 merged unchanged, with nothing sent back or undone. You need a ship branch and an allow list first.
+- **Draft PR → Daily train** after 5 merged unchanged, with nothing sent back or undone.
+- **Daily train → Ship to dev** after 8 merged unchanged, with nothing sent back or undone. You need a ship branch and an allow list first.
 
 You can also change the level in **Settings → Repos** at any time.
 

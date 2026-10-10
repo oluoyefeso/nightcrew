@@ -1,4 +1,4 @@
-// Tasks, repos and the nightly schedule.
+// Tasks, repos, agent settings and scheduling.
 
 export type TaskType = "implementation" | "bugfix" | "test" | "refactor" | "ui" | "research";
 
@@ -15,9 +15,9 @@ export const TASK_TYPE_LABEL: Record<TaskType, string> = {
 
 /**
  * draft: shaped in the composer, not queued yet
- * queued: in tonight's queue
+ * queued: waiting for an agent (now, or at runAt)
  * later: parked in the backlog
- * running: the crew is on it
+ * running: an agent is on it
  * done: the latest run finished (see its bucket in the Morning Report)
  * archived: dismissed or merged and out of the way
  */
@@ -28,7 +28,7 @@ export type AutonomyLevel = "propose" | "draft_pr" | "train" | "ship";
 export const AUTONOMY_LABEL: Record<AutonomyLevel, string> = {
   propose: "Propose",
   draft_pr: "Draft PR",
-  train: "Nightly train",
+  train: "Daily train",
   ship: "Ship to dev",
 };
 
@@ -106,6 +106,8 @@ export interface Task {
   model: string | null;
   testCommand: string | null;
   question: string | null;
+  /** Hold until this time (ISO). Null means run as soon as a slot is free. */
+  runAt: string | null;
   source: "composer" | "cli" | "github" | "manual" | "routine";
   sourceRef: string | null;
   workflow: Workflow;
@@ -124,24 +126,33 @@ export interface TaskNote {
 }
 
 export interface Settings {
-  /** Local time the queue starts, "HH:MM". */
-  startAt: string;
-  /** Spend cap across one night, in cents. */
-  nightlyBudgetCents: number;
-  /** Run tasks automatically at startAt. */
-  autoStart: boolean;
+  /** Agents working at once, across all repos. */
+  maxAgents: number;
+  /** Agents working at once in a single repo. */
+  maxPerRepo: number;
+  /** Spend cap per day (local time), in cents. */
+  dailyBudgetCents: number;
+  /** Dispatch queued tasks as soon as a slot is free. Off = the queue is paused. */
+  dispatch: boolean;
+  /** When "Schedule" sends a task, local "HH:MM" (an off-peak window, like 22:00). */
+  scheduleAt: string;
   planModel: string;
   buildModel: string;
   reviewModel: string;
+  /** Optional Slack incoming webhook for reports that need you. */
+  slackWebhookUrl: string | null;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  startAt: "22:00",
-  nightlyBudgetCents: 2500,
-  autoStart: true,
+  maxAgents: 3,
+  maxPerRepo: 1,
+  dailyBudgetCents: 2500,
+  dispatch: true,
+  scheduleAt: "22:00",
   planModel: "claude-opus-5-5",
   buildModel: "claude-sonnet-5-5",
   reviewModel: "claude-sonnet-5-5",
+  slackWebhookUrl: null,
 };
 
 export const DEFAULT_TASK_BUDGET_CENTS = 500;
@@ -188,7 +199,7 @@ export function planQueue(tasks: Pick<Task, "id" | "position" | "dependsOn" | "s
   const placed = new Set<string>();
   const blocked: { id: string; waitingOn: string[] }[] = [];
 
-  // Anything waiting on a task that isn't queued or done can't run tonight.
+  // Anything waiting on a task that isn't queued or done can't run yet.
   const runnable = queued.filter((t) => {
     const missing = t.dependsOn.filter((d) => !done.has(d) && !queuedIds.has(d));
     if (missing.length) blocked.push({ id: t.id, waitingOn: missing });
@@ -215,7 +226,7 @@ export function planQueue(tasks: Pick<Task, "id" | "position" | "dependsOn" | "s
   return { order, blocked };
 }
 
-/** Next time the queue should start, from a local "HH:MM". */
+/** The next occurrence of a local "HH:MM", for scheduled tasks. */
 export function nextStart(startAt: string, now = new Date()): Date {
   const [h, m] = startAt.split(":").map((n) => Number.parseInt(n, 10));
   const next = new Date(now);

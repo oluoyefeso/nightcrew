@@ -14,7 +14,7 @@ interface Command {
   run: () => void;
 }
 
-/** ⌘K: jump anywhere, start or stop the crew, open any task. */
+/** ⌘K: jump anywhere, pause or resume the agents, open any task. */
 export function CommandBar() {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -23,8 +23,9 @@ export function CommandBar() {
   const navigate = useNavigate();
   const crew = useQuery(crewQuery);
   const tasks = useQuery({ ...tasksQuery(["queued", "later", "draft", "running", "done"]), enabled: open });
-  const start = useMutation({ mutationFn: () => api.post("/api/crew/start") });
-  const stop = useMutation({ mutationFn: () => api.post("/api/crew/stop") });
+  const resume = useMutation({ mutationFn: () => api.post("/api/crew/resume") });
+  const pause = useMutation({ mutationFn: () => api.post("/api/crew/pause") });
+  const stopAll = useMutation({ mutationFn: () => api.post("/api/crew/stop-all") });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -54,15 +55,25 @@ export function CommandBar() {
         hint: "N",
         group: "Actions",
         run: () => {
-          navigate({ to: "/tonight" });
+          navigate({ to: "/agents" });
           setTimeout(() => window.dispatchEvent(new Event("nc:compose")), 60);
         },
       },
-      crew.data?.state === "idle"
-        ? { id: "start", label: "Run tonight's queue now", group: "Actions", run: () => start.mutate() }
-        : { id: "stop", label: "Stop the crew", group: "Actions", run: () => stop.mutate() },
-      { id: "report", label: "Morning Report", group: "Go to", run: go("/") },
-      { id: "tonight", label: "Tonight", group: "Go to", run: go("/tonight") },
+      crew.data?.state === "paused"
+        ? { id: "resume", label: "Resume dispatch", group: "Actions", run: () => resume.mutate() }
+        : { id: "pause", label: "Pause dispatch (running agents finish)", group: "Actions", run: () => pause.mutate() },
+      ...(crew.data?.active.length
+        ? [
+            {
+              id: "stop-all",
+              label: `Stop all ${crew.data.active.length} agents`,
+              group: "Actions",
+              run: () => stopAll.mutate(),
+            },
+          ]
+        : []),
+      { id: "report", label: "Inbox", group: "Go to", run: go("/") },
+      { id: "agents", label: "Agents", group: "Go to", run: go("/agents") },
       { id: "later", label: "Later", group: "Go to", run: go("/later") },
       { id: "settings", label: "Settings and repos", group: "Go to", run: go("/settings") },
       {
@@ -91,7 +102,7 @@ export function CommandBar() {
     const all = [...base, ...taskCmds];
     const needle = q.trim().toLowerCase();
     return needle ? all.filter((c) => `${c.label} ${c.hint ?? ""}`.toLowerCase().includes(needle)) : all.slice(0, 14);
-  }, [q, tasks.data, crew.data?.state, navigate, start, stop]);
+  }, [q, tasks.data, crew.data?.state, crew.data?.active.length, navigate, resume, pause, stopAll]);
 
   if (!open) return null;
 

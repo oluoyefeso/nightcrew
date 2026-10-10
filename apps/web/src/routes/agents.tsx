@@ -1,58 +1,62 @@
 import { formatCost, type Repo, TASK_TYPE_LABEL, TASK_TYPES, type Task } from "@nightcrew/core";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { clsx } from "clsx";
-import { ArrowRight, CircleHelp, GitBranch, GripVertical, Moon, Play, Sparkles, Square } from "lucide-react";
+import { ArrowRight, CalendarClock, CircleHelp, GitBranch, GripVertical, Inbox, Play, Sparkles } from "lucide-react";
 import { Reorder, useDragControls } from "motion/react";
 import { useEffect, useRef, useState } from "react";
-import { api, crewQuery, type DraftTask, reposQuery, settingsQuery, tasksQuery, useInvalidateTasks } from "../api";
+import {
+  api,
+  crewQuery,
+  type DraftTask,
+  reposQuery,
+  settingsQuery,
+  tasksQuery,
+  toast,
+  useInvalidateTasks,
+} from "../api";
 import { AddRepo } from "../components/add-repo";
-import { CrewBar } from "../components/crew-bar";
+import { AgentBoard, CrewSummary } from "../components/agent-board";
 import { ChipsEditor, ListEditor, Select, TextInput } from "../components/form";
 import { Button } from "../components/ui";
 import { isTypingTarget } from "../lib";
 
-export function TonightPage() {
+export function AgentsPage() {
   const repos = useQuery(reposQuery);
-  const settings = useQuery(settingsQuery);
   const crew = useQuery(crewQuery);
-  const queued = useQuery(tasksQuery(["queued", "running"]));
+  const queued = useQuery(tasksQuery(["queued"]));
   const waiting = useQuery(tasksQuery(["draft"]));
   const [drafts, setDrafts] = useState<DraftTask[] | null>(null);
 
-  const s = settings.data;
-  const queue = queued.data ?? [];
-  const estimate = queue.reduce((n, t) => n + t.budgetCents, 0);
-  const running = crew.data && crew.data.state !== "idle";
+  const now = Date.now();
+  const all = queued.data ?? [];
+  const queue = all.filter((t) => !t.runAt || new Date(t.runAt).getTime() <= now);
+  const scheduled = all.filter((t) => t.runAt && new Date(t.runAt).getTime() > now);
+  const working = crew.data?.active.length ?? 0;
 
   return (
-    <div className="mx-auto grid max-w-[860px] gap-8 px-4 pt-8 pb-28 sm:px-8 lg:pt-12">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div className="grid gap-2">
-          <h1 className="t-h1">Tonight</h1>
-          <p className="text-[14px] text-muted">
-            {running ? (
-              "The crew is working."
-            ) : s?.autoStart ? (
-              <>
-                The crew starts at <span className="font-mono text-fg">{s.startAt}</span>
-                {crew.data && <> · {untilText(crew.data.nextStartAt)}</>}
-              </>
-            ) : (
-              "Auto-start is off. Press Run now when you're ready."
-            )}
-          </p>
-        </div>
-        <CrewControls hasQueue={queue.length > 0} />
+    <div className="mx-auto grid max-w-[920px] gap-8 px-4 pt-8 pb-28 sm:px-8 lg:pt-12">
+      <header className="grid gap-5">
+        <h1 className="t-h1">
+          Agents.{" "}
+          <span className="text-faint">
+            {working
+              ? `${working} working right now.`
+              : queue.length
+                ? "Starting on the queue."
+                : "Give them something to do."}
+          </span>
+        </h1>
+        <CrewSummary />
       </header>
 
-      <CrewBar />
+      <AgentBoard />
 
       {repos.data && repos.data.length === 0 ? (
         <section className="grid gap-4 rounded-2xl bg-surface p-6 ring-1 ring-line">
           <h2 className="t-h3">Where should the crew work?</h2>
           <p className="text-[14px] text-muted">
-            Add a git repository on this machine. The crew works in its own worktree and never touches your checkout.
+            Add a git repository on this machine. Each agent works in its own worktree and never touches your checkout.
           </p>
           <AddRepo />
         </section>
@@ -67,7 +71,7 @@ export function TonightPage() {
       {(waiting.data?.length ?? 0) > 0 && (
         <section className="grid gap-2.5">
           <h2 className="flex items-center gap-2 font-medium text-[13px]">
-            <CircleHelp className="size-3.5 text-dawn" /> Needs an answer before tonight
+            <CircleHelp className="size-3.5 text-dawn" /> Needs an answer before an agent can start
           </h2>
           <div className="divide-y divide-line overflow-hidden rounded-2xl bg-surface ring-1 ring-line">
             {waiting.data?.map((t) => (
@@ -80,77 +84,62 @@ export function TonightPage() {
       <section className="grid gap-3">
         <div className="flex items-baseline justify-between gap-4">
           <h2 className="flex items-center gap-2.5 font-medium text-[13px]">
-            Queue <span className="font-mono text-[12px] text-faint">{queue.length}</span>
+            Waiting for an agent <span className="font-mono text-[12px] text-faint">{queue.length}</span>
           </h2>
           <Link to="/later" className="inline-flex items-center gap-1 text-[12.5px] text-muted hover:text-fg">
             Later <ArrowRight className="size-3" />
           </Link>
         </div>
-        {s && queue.length > 0 && <BudgetMeter estimate={estimate} budget={s.nightlyBudgetCents} />}
         {queue.length === 0 ? (
-          <div className="grid place-items-center gap-2 rounded-2xl border border-line border-dashed px-6 py-12 text-center">
-            <Moon className="size-5 text-faint" />
+          <div className="grid place-items-center gap-2 rounded-2xl border border-line border-dashed px-6 py-10 text-center">
+            <Inbox className="size-5 text-faint" />
             <p className="text-[14px] text-muted">
-              Nothing queued yet. Describe some work above, or pull something from Later.
+              {working
+                ? "Every task has an agent. New work starts the moment you add it."
+                : "Nothing waiting. Describe some work above and an agent starts on it right away."}
             </p>
           </div>
         ) : (
           <Queue tasks={queue} />
         )}
       </section>
+
+      {scheduled.length > 0 && (
+        <section className="grid gap-3">
+          <h2 className="flex items-center gap-2.5 font-medium text-[13px]">
+            <CalendarClock className="size-3.5 text-faint" /> Scheduled
+            <span className="font-mono text-[12px] text-faint">{scheduled.length}</span>
+          </h2>
+          <div className="divide-y divide-line overflow-hidden rounded-2xl bg-surface ring-1 ring-line">
+            {scheduled.map((t) => (
+              <ScheduledRow key={t.id} task={t} />
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
 
-function untilText(iso: string) {
-  const ms = new Date(iso).getTime() - Date.now();
-  if (ms <= 0) return "any minute";
-  const m = Math.round(ms / 60_000);
-  const h = Math.floor(m / 60);
-  return `in ${h ? `${h}h ` : ""}${m % 60}m`;
-}
-
-function CrewControls({ hasQueue }: { hasQueue: boolean }) {
-  const crew = useQuery(crewQuery);
-  const qc = useQueryClient();
-  const start = useMutation({
-    mutationFn: () => api.post("/api/crew/start"),
-    onSettled: () => qc.invalidateQueries({ queryKey: ["crew"] }),
+function ScheduledRow({ task }: { task: Task }) {
+  const invalidate = useInvalidateTasks();
+  const runNow = useMutation({
+    mutationFn: () => api.patch(`/api/tasks/${task.id}`, { runAt: null }),
+    onSuccess: invalidate,
   });
-  const stop = useMutation({ mutationFn: () => api.post("/api/crew/stop") });
-  const state = crew.data?.state ?? "idle";
-  if (state === "idle") {
-    return (
-      <div className="grid justify-items-end gap-1">
-        <Button variant="primary" onClick={() => start.mutate()} disabled={!hasQueue || start.isPending}>
-          <Play className="size-3.5" /> Run now
-        </Button>
-        {start.error && <p className="text-[12px] text-bad">{start.error.message}</p>}
-      </div>
-    );
-  }
+  const when = task.runAt ? new Date(task.runAt) : null;
   return (
-    <Button variant="danger" onClick={() => stop.mutate()} disabled={state === "stopping"}>
-      <Square className="size-3" /> {state === "stopping" ? "Stopping…" : "Stop"}
-    </Button>
-  );
-}
-
-function BudgetMeter({ estimate, budget }: { estimate: number; budget: number }) {
-  const pct = Math.min(100, (estimate / budget) * 100);
-  const over = estimate > budget;
-  return (
-    <div className="grid gap-1.5">
-      <div className="h-1 overflow-hidden rounded-full bg-raised">
-        <div
-          className={clsx("h-full rounded-full transition-[width] duration-300", over ? "bg-bad" : "bg-dawn")}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <p className="font-mono text-[11.5px] text-muted tabular">
-        up to {formatCost(estimate)} of the {formatCost(budget)} nightly budget
-        {over && <span className="text-bad"> · the crew stops before the budget runs out</span>}
-      </p>
+    <div className="flex items-center gap-3 px-5 py-3">
+      <Link to="/task/$taskId" params={{ taskId: task.id }} className="grid min-w-0 flex-1 gap-0.5">
+        <span className="truncate font-medium text-[14px]">{task.title}</span>
+        <span className="font-mono text-[11.5px] text-faint">
+          {task.repoName} · starts{" "}
+          {when?.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false })}
+        </span>
+      </Link>
+      <Button size="sm" onClick={() => runNow.mutate()}>
+        <Play className="size-3" /> Run now
+      </Button>
     </div>
   );
 }
@@ -192,7 +181,7 @@ function Composer({ repos, onDrafts }: { repos: Repo[]; onDrafts: (d: DraftTask[
   return (
     <section className="overflow-hidden rounded-2xl bg-surface ring-1 ring-line focus-within:ring-[color-mix(in_srgb,var(--dawn)_45%,transparent)]">
       <label htmlFor="composer" className="sr-only">
-        What should the crew do tonight?
+        What should the agents work on?
       </label>
       <textarea
         id="composer"
@@ -203,7 +192,7 @@ function Composer({ repos, onDrafts }: { repos: Repo[]; onDrafts: (d: DraftTask[
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
         }}
         rows={3}
-        placeholder="What should the crew do tonight? Describe it like you'd brief a contractor. Several things at once is fine."
+        placeholder="What should the agents work on? Describe it like you'd brief a contractor. Several things at once is fine."
         className="block w-full resize-none bg-transparent px-5 pt-4 pb-2 text-[15.5px] leading-relaxed outline-none placeholder:text-faint"
       />
       <div className="flex flex-wrap items-center gap-2 px-4 pb-3">
@@ -244,15 +233,24 @@ function Drafts({
   onDone: () => void;
 }) {
   const invalidate = useInvalidateTasks();
+  const settings = useQuery(settingsQuery);
   const save = useMutation({
-    mutationFn: (status: "queued" | "later") =>
+    mutationFn: (when: "now" | "schedule" | "later") =>
       api.post("/api/tasks/batch", {
-        status,
+        when,
+        status: when === "later" ? "later" : "queued",
         tasks: drafts.map((d) => ({ ...d, dependsOnIndex: d.dependsOn, dependsOn: undefined })),
       }),
-    onSuccess: () => {
+    onSuccess: (_, when) => {
       invalidate();
       onDone();
+      toast(
+        when === "now"
+          ? "Dispatched. Agents start as soon as a slot is free."
+          : when === "schedule"
+            ? `Scheduled for ${settings.data?.scheduleAt ?? "later"}.`
+            : "Saved to Later.",
+      );
     },
   });
   const update = (i: number, patch: Partial<DraftTask>) =>
@@ -350,12 +348,19 @@ function Drafts({
         <Button variant="ghost" onClick={onDone}>
           Discard
         </Button>
-        <Button onClick={() => save.mutate("later")} disabled={save.isPending}>
+        <Button variant="ghost" onClick={() => save.mutate("later")} disabled={save.isPending}>
           Save to Later
         </Button>
-        <Button variant="primary" onClick={() => save.mutate("queued")} disabled={save.isPending}>
-          Queue{" "}
-          {ready === drafts.length ? (drafts.length === 1 ? "it" : `all ${drafts.length}`) : `${ready} for tonight`}
+        <Button
+          onClick={() => save.mutate("schedule")}
+          disabled={save.isPending}
+          title="Hold until the schedule time in Settings"
+        >
+          <CalendarClock className="size-3.5" /> Schedule for {settings.data?.scheduleAt ?? "later"}
+        </Button>
+        <Button variant="primary" onClick={() => save.mutate("now")} disabled={save.isPending}>
+          <Play className="size-3.5" /> Run{" "}
+          {ready === drafts.length ? (drafts.length === 1 ? "now" : `all ${drafts.length} now`) : `${ready} now`}
         </Button>
       </div>
     </section>
@@ -379,7 +384,7 @@ function QuestionRow({ task }: { task: Task }) {
         <TextInput
           value={answer}
           onChange={(e) => setAnswer(e.target.value)}
-          placeholder="Answer, and it joins tonight's queue"
+          placeholder="Answer, and an agent picks it up"
           aria-label="Answer"
           onKeyDown={(e) => e.key === "Enter" && answer.trim() && send.mutate()}
         />
@@ -390,7 +395,7 @@ function QuestionRow({ task }: { task: Task }) {
           disabled={!answer.trim() && Boolean(task.question)}
           onClick={() => send.mutate()}
         >
-          Queue
+          Run
         </Button>
       </div>
     </div>

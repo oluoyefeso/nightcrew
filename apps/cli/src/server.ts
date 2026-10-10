@@ -20,7 +20,7 @@ import { mountTaskRoutes } from "./routes";
 import { syncClassic } from "./sync";
 import { mountTrustRoutes } from "./trust-routes";
 
-const ACTIONS: TriageAction[] = ["merge", "send_back", "close", "tonight", "undo"];
+const ACTIONS: TriageAction[] = ["merge", "send_back", "close", "again", "undo"];
 
 export interface ServerOptions {
   db: Db;
@@ -75,11 +75,12 @@ export function createApp(opts: ServerOptions) {
     if (task && task.status !== "running") {
       if (action === "send_back") {
         if (note) addNote(db, task.id, "you", note, id);
-        updateTask(db, task.id, { status: "queued" });
-      } else if (action === "tonight") updateTask(db, task.id, { status: "queued" });
+        updateTask(db, task.id, { status: "queued", runAt: null });
+      } else if (action === "again") updateTask(db, task.id, { status: "queued", runAt: null });
       else if (action === "close" || action === "merge") updateTask(db, task.id, { status: "archived" });
       else if (action === "undo") updateTask(db, task.id, { status: "done" });
     }
+    void opts.crew.pump();
     return c.json(getRun(db, id));
   });
 
@@ -108,7 +109,7 @@ export function createApp(opts: ServerOptions) {
   return app;
 }
 
-export const VERSION = "1.0.0-alpha.1";
+export const VERSION = "1.0.0-alpha.2";
 
 // ── Static dashboard ────────────────────────────────────────────────────────
 // The compiled binary carries the built dashboard (see scripts/embed-web.ts).

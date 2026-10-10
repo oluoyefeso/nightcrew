@@ -123,6 +123,7 @@ export interface NewTask {
   source?: Task["source"];
   sourceRef?: string | null;
   workflow?: Task["workflow"];
+  runAt?: string | null;
 }
 
 export function createTask(db: Db, input: NewTask): Task {
@@ -148,6 +149,7 @@ export function createTask(db: Db, input: NewTask): Task {
     source: input.source ?? "manual",
     sourceRef: input.sourceRef ?? null,
     workflow: input.workflow ?? "auto",
+    runAt: input.runAt ?? null,
     createdAt: now(),
     updatedAt: now(),
     lastRunId: null,
@@ -174,6 +176,7 @@ export type TaskPatch = Partial<
     | "repoId"
     | "lastRunId"
     | "workflow"
+    | "runAt"
   >
 >;
 
@@ -256,6 +259,17 @@ function uniqueBranch(db: Db, repoId: string, base: string): string {
   for (let i = 2; ; i++) if (!taken.has(`${base}-${i}`)) return `${base}-${i}`;
 }
 
+/** What the crew has spent on a report day, in cents. */
+export function spentOnDay(db: Db, dayId: string): number {
+  return (
+    db
+      .select({ n: sql<number>`coalesce(sum(${schema.runs.costCents}), 0)` })
+      .from(schema.runs)
+      .where(and(eq(schema.runs.nightId, dayId), sql`${schema.runs.source} != 'classic'`))
+      .get()?.n ?? 0
+  );
+}
+
 export function countRunsForTask(db: Db, taskId: string): number {
   return db.select({ n: sql<number>`count(*)` }).from(schema.runs).where(eq(schema.runs.taskId, taskId)).get()?.n ?? 0;
 }
@@ -310,8 +324,13 @@ export function listRunEvents(db: Db, runId: string, afterId = 0): RunEvent[] {
 
 export function getSettings(db: Db): Settings {
   const rows = db.select().from(schema.settings).all();
-  const stored = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-  return { ...DEFAULT_SETTINGS, ...stored } as Settings;
+  const stored = Object.fromEntries(rows.map((r) => [r.key, r.value])) as Record<string, unknown>;
+  // Settings from the night-only days carry over.
+  if (stored.dailyBudgetCents === undefined && typeof stored.nightlyBudgetCents === "number")
+    stored.dailyBudgetCents = stored.nightlyBudgetCents;
+  if (stored.scheduleAt === undefined && typeof stored.startAt === "string") stored.scheduleAt = stored.startAt;
+  const known = Object.fromEntries(Object.entries(stored).filter(([k]) => k in DEFAULT_SETTINGS));
+  return { ...DEFAULT_SETTINGS, ...known } as Settings;
 }
 
 export function updateSettings(db: Db, patch: Partial<Settings>): Settings {

@@ -1,10 +1,20 @@
-import { BUCKET_LABEL, BUCKET_ORDER, formatCost, formatDuration, greeting, type Run, summarize } from "@nightcrew/core";
+import {
+  BUCKET_LABEL,
+  BUCKET_ORDER,
+  formatCost,
+  formatDuration,
+  greeting,
+  nightIdFor,
+  type Run,
+  summarize,
+} from "@nightcrew/core";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { clsx } from "clsx";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, reportQuery } from "../api";
+import { ApiError, crewQuery, reportQuery, toast } from "../api";
+import { AgentBoard } from "../components/agent-board";
 import { Horizon } from "../components/horizon";
 import { RunPane } from "../components/run-pane";
 import { RunRow } from "../components/run-row";
@@ -16,12 +26,11 @@ export function ReportPage({ nightId, runId }: { nightId?: string; runId?: strin
   const navigate = useNavigate();
   const { data, isPending, error } = useQuery(reportQuery(nightId));
   const [hovered, setHovered] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
 
   const ordered = useMemo(() => {
     if (!data) return [] as Run[];
-    return BUCKET_ORDER.flatMap((b) => data.runs.filter((r) => r.bucket === b));
+    return BUCKET_ORDER.flatMap((b) => data.runs.filter((r) => r.status !== "running" && r.bucket === b));
   }, [data]);
 
   const select = useCallback(
@@ -31,12 +40,6 @@ export function ReportPage({ nightId, runId }: { nightId?: string; runId?: strin
     },
     [navigate],
   );
-
-  useEffect(() => {
-    if (!toast) return;
-    const t = setTimeout(() => setToast(null), 3200);
-    return () => clearTimeout(t);
-  }, [toast]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -56,7 +59,9 @@ export function ReportPage({ nightId, runId }: { nightId?: string; runId?: strin
   if (error instanceof ApiError && error.status === 404) return <EmptyState />;
   if (error || !data) return <p className="p-10 text-bad">{error?.message ?? "Something went wrong."}</p>;
 
-  const summary = summarize(data.runs);
+  // Agents still working appear under "Working now", not in the buckets or the greeting.
+  const finished = data.runs.filter((r) => r.status !== "running");
+  const summary = summarize(finished);
   const lastEnd = data.runs.reduce<string | null>((m, r) => (r.endedAt && (!m || r.endedAt > m) ? r.endedAt : m), null);
 
   return (
@@ -68,7 +73,7 @@ export function ReportPage({ nightId, runId }: { nightId?: string; runId?: strin
               <NightLink nightId={data.previousId} label="Previous night">
                 <ChevronLeft className="size-3.5" />
               </NightLink>
-              <span className="px-1 tabular">{fmtDay(lastEnd ?? data.night.startedAt)}</span>
+              <span className="px-1 tabular">{dayLabel(data.night.id, lastEnd ?? data.night.startedAt)}</span>
               <NightLink nightId={data.nextId} label="Next night">
                 <ChevronRight className="size-3.5" />
               </NightLink>
@@ -108,12 +113,13 @@ export function ReportPage({ nightId, runId }: { nightId?: string; runId?: strin
             />
           </header>
 
-          <PromotionBanners onToast={setToast} />
+          {!data.nextId && <WorkingNow />}
+          <PromotionBanners onToast={toast} />
           <TrainCards nightId={data.night.id} onOpen={select} />
 
           <div className="grid gap-7">
             {BUCKET_ORDER.map((bucket) => {
-              const runs = data.runs.filter((r) => r.bucket === bucket);
+              const runs = finished.filter((r) => r.bucket === bucket);
               if (runs.length === 0) return null;
               return (
                 <section key={bucket} aria-labelledby={`b-${bucket}`} className="grid gap-2.5">
@@ -158,7 +164,7 @@ export function ReportPage({ nightId, runId }: { nightId?: string; runId?: strin
               <Kbd>3</Kbd> dismiss
             </span>
             <span className="inline-flex items-center gap-1.5">
-              <Kbd>H</Kbd> try again tonight
+              <Kbd>H</Kbd> run again
             </span>
             <span className="inline-flex items-center gap-1.5">
               <Kbd>U</Kbd> undo
@@ -170,18 +176,10 @@ export function ReportPage({ nightId, runId }: { nightId?: string; runId?: strin
       {runId && (
         <div className="lg:sticky lg:top-14 lg:h-[calc(100dvh-3.5rem)] lg:border-line lg:border-l">
           <div className="h-[calc(100dvh-3.5rem)] lg:h-full">
-            <RunPane runId={runId} onClose={() => select(null)} onToast={setToast} />
+            <RunPane runId={runId} onClose={() => select(null)} onToast={toast} />
           </div>
         </div>
       )}
-
-      <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
-        {toast && (
-          <div className="pointer-events-auto rounded-full bg-fg px-4 py-2 text-[13px] text-bg shadow-[var(--shadow)] motion-safe:animate-[nc-rise_.24s_var(--ease-out-quint)]">
-            {toast}
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -216,17 +214,19 @@ function ReportSkeleton() {
 function EmptyState() {
   return (
     <div className="mx-auto grid max-w-[620px] gap-5 px-4 pt-24 sm:px-8">
-      <h1 className="t-h1">No nights yet.</h1>
+      <h1 className="t-h1">
+        Nothing yet. <span className="text-faint">Your agents report here.</span>
+      </h1>
       <p className="text-[15px] text-muted leading-relaxed">
-        Queue some work for tonight and the crew's results land here in the morning: what shipped, what needs you, and
-        the evidence for each.
+        Send work to your agents and their reports land here as they finish: what shipped, what needs you, and the
+        evidence for each.
       </p>
       <div>
         <Link
-          to="/tonight"
+          to="/agents"
           className="inline-flex h-9 items-center gap-2 rounded-full bg-dawn px-4 font-medium text-[13.5px] text-on-dawn"
         >
-          Plan tonight
+          Give the agents work
         </Link>
       </div>
       <p className="text-[13px] text-faint">
@@ -245,5 +245,32 @@ function TwoTone({ text }: { text: string }) {
     <>
       <span className="text-faint">{m[1]}</span> {m[2]}
     </>
+  );
+}
+
+/** "Today", "Yesterday", or the date. */
+function dayLabel(dayId: string, fallbackIso: string): string {
+  const today = nightIdFor(new Date().toISOString());
+  if (dayId === today) return "Today";
+  const y = new Date(`${today}T12:00:00`);
+  y.setDate(y.getDate() - 1);
+  if (dayId === y.toISOString().slice(0, 10)) return "Yesterday";
+  return fmtDay(fallbackIso);
+}
+
+/** Agents still working, at the top of today's Inbox. */
+function WorkingNow() {
+  const crew = useQuery(crewQuery);
+  const n = crew.data?.active.length ?? 0;
+  if (!n) return null;
+  return (
+    <section className="grid gap-2.5">
+      <h2 className="flex items-center gap-2.5 font-medium text-[13px]">
+        <span className="size-2 animate-pulse rounded-full bg-dawn" />
+        Working now
+        <span className="font-mono text-[12px] text-faint">{n}</span>
+      </h2>
+      <AgentBoard compact />
+    </section>
   );
 }

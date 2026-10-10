@@ -10,6 +10,7 @@ import {
   listTasks,
   openDb,
   reorderTasks,
+  schema,
   updateSettings,
   updateTask,
 } from "./index";
@@ -78,7 +79,16 @@ test("notes and run events", () => {
 
 test("settings merge over defaults", () => {
   const { db } = setup();
-  expect(getSettings(db).startAt).toBe("22:00");
-  expect(updateSettings(db, { startAt: "23:30", nightlyBudgetCents: 1500 }).startAt).toBe("23:30");
-  expect(getSettings(db).nightlyBudgetCents).toBe(1500);
+  expect(getSettings(db).maxAgents).toBe(3);
+  expect(getSettings(db).maxPerRepo).toBe(1);
+  expect(updateSettings(db, { scheduleAt: "23:30", dailyBudgetCents: 1500 }).scheduleAt).toBe("23:30");
+  expect(getSettings(db).dailyBudgetCents).toBe(1500);
+});
+
+test("night-era settings carry over", () => {
+  const { db } = setup();
+  db.insert(schema.settings).values({ key: "nightlyBudgetCents", value: 900 }).run();
+  db.insert(schema.settings).values({ key: "startAt", value: "21:00" }).run();
+  expect(getSettings(db).dailyBudgetCents).toBe(900);
+  expect(getSettings(db).scheduleAt).toBe("21:00");
 });

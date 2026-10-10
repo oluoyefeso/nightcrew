@@ -69,44 +69,60 @@ describe("classify", () => {
     }
   });
   test("triage wins over run status", () => {
-    expect(classify({ status: "failed", prState: null, prUrl: null, triage: "tonight" })).toBe("back");
+    expect(classify({ status: "failed", prState: null, prUrl: null, triage: "again" })).toBe("back");
     expect(classify({ status: "complete", prState: "merged", prUrl: "u", triage: "send_back" })).toBe("back");
     expect(classify({ status: "complete", prState: "open", prUrl: "u", triage: "close" })).toBe("failed");
   });
 });
 
-describe("nightIdFor", () => {
-  test("evening and the following morning share a report day", () => {
+describe("nightIdFor (the report day)", () => {
+  test("late-night work belongs to the day it started", () => {
     expect(nightIdFor("2026-04-16T22:30:00Z", 0)).toBe("2026-04-16");
-    expect(nightIdFor("2026-04-17T06:10:00Z", 0)).toBe("2026-04-16");
+    expect(nightIdFor("2026-04-17T03:10:00Z", 0)).toBe("2026-04-16");
   });
-  test("cutoff is 18:00 local", () => {
-    expect(nightIdFor("2026-04-17T17:59:00Z", 0)).toBe("2026-04-16");
-    expect(nightIdFor("2026-04-17T18:00:00Z", 0)).toBe("2026-04-17");
+  test("the day turns over at 04:00 local", () => {
+    expect(nightIdFor("2026-04-17T03:59:00Z", 0)).toBe("2026-04-16");
+    expect(nightIdFor("2026-04-17T04:00:00Z", 0)).toBe("2026-04-17");
   });
   test("respects the timezone offset", () => {
-    // 02:00 UTC is 19:00 the previous day in UTC-7 (offset +420)
-    expect(nightIdFor("2026-04-17T02:00:00Z", 420)).toBe("2026-04-16");
-    // ...but 00:30 UTC is 17:30, still the day before's report
-    expect(nightIdFor("2026-04-17T00:30:00Z", 420)).toBe("2026-04-15");
+    // 10:00 UTC is 03:00 local in UTC-7 (offset +420): still the previous day
+    expect(nightIdFor("2026-04-17T10:00:00Z", 420)).toBe("2026-04-16");
+    expect(nightIdFor("2026-04-17T12:00:00Z", 420)).toBe("2026-04-17");
   });
 });
 
 describe("horizon", () => {
-  test("overnight runs use the 22:00 → 07:00 window", () => {
-    const start = new Date("2026-04-16T23:00:00").toISOString();
-    const end = new Date("2026-04-17T03:00:00").toISOString();
-    const w = horizonWindow([{ startedAt: start, endedAt: end }], "2026-04-16");
-    expect(w.start.getHours()).toBe(22);
-    expect(w.end.getHours()).toBe(7);
-    expect(horizonPosition(start, w)).toBeCloseTo((1 / 9) * 100, 5);
-  });
-  test("daytime runs stretch the window to whole hours around them", () => {
-    const start = new Date("2026-04-17T11:15:00").toISOString();
-    const end = new Date("2026-04-17T14:31:00").toISOString();
-    const w = horizonWindow([{ startedAt: start, endedAt: end }], "2026-04-16");
+  const past = new Date("2026-05-01T12:00:00");
+  test("spans whole hours around the work", () => {
+    const w = horizonWindow(
+      [
+        {
+          startedAt: new Date("2026-04-17T11:15:00").toISOString(),
+          endedAt: new Date("2026-04-17T14:31:00").toISOString(),
+        },
+      ],
+      "2026-04-17",
+      past,
+    );
     expect(w.start.getHours()).toBe(11);
     expect(w.end.getHours()).toBe(15);
+  });
+  test("is at least three hours wide", () => {
+    const t = new Date("2026-04-17T10:20:00").toISOString();
+    const w = horizonWindow([{ startedAt: t, endedAt: t }], "2026-04-17", past);
+    expect((w.end.getTime() - w.start.getTime()) / 3_600_000).toBe(3);
+  });
+  test("today reaches up to now", () => {
+    const now = new Date("2026-04-17T16:40:00");
+    const w = horizonWindow(
+      [{ startedAt: new Date("2026-04-17T09:05:00").toISOString(), endedAt: null }],
+      "2026-04-17",
+      now,
+    );
+    expect(w.start.getHours()).toBe(9);
+    // 16:40 plus room after now, rounded up to a whole hour
+    expect(w.end.getHours()).toBe(18);
+    expect(w.end.getMinutes()).toBe(0);
   });
   test("position is clamped", () => {
     const w = { start: new Date("2026-04-16T22:00:00Z"), end: new Date("2026-04-17T07:00:00Z") };
@@ -136,6 +152,6 @@ describe("summary and greeting", () => {
     ]);
     expect(greeting(s, morning)).toBe("Good morning. Two shipped and two need you.");
     expect(greeting(summarize([run({ bucket: "failed" })]), morning)).toBe("Good morning. One failed.");
-    expect(greeting(summarize([]), morning)).toBe("Good morning. Nothing ran this night.");
+    expect(greeting(summarize([]), morning)).toBe("Good morning. Nothing has finished yet.");
   });
 });

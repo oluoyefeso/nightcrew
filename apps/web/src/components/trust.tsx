@@ -5,7 +5,7 @@ import { useState } from "react";
 import { api } from "../api";
 import { Button } from "./ui";
 
-/** Tonight's trains: one integration branch per repo, one PR to merge. */
+/** Today's trains: one integration branch per repo, one PR to merge. */
 export function TrainCards({ nightId, onOpen }: { nightId: string; onOpen: (runId: string) => void }) {
   const trains = useQuery({
     queryKey: ["trains", nightId],
@@ -25,7 +25,7 @@ export function TrainCards({ nightId, onOpen }: { nightId: string; onOpen: (runI
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 className="flex items-center gap-2.5 font-medium text-[14px]">
                 <TrainFront className="size-4 text-sky" />
-                Nightly train · {t.repoName}
+                Daily train · {t.repoName}
                 <span className="font-mono text-[12px] text-faint">
                   {on.length} {on.length === 1 ? "task" : "tasks"}, tested together
                 </span>
@@ -40,7 +40,9 @@ export function TrainCards({ nightId, onOpen }: { nightId: string; onOpen: (runI
                   PR #{t.prNumber} <ExternalLink className="size-3" />
                 </a>
               ) : (
-                <span className="font-mono text-[11.5px] text-faint">{t.branch} · PR opens when the night ends</span>
+                <span className="font-mono text-[11.5px] text-faint">
+                  {t.branch} · PR opens when its agents are done
+                </span>
               )}
             </div>
             <ol className="flex flex-wrap gap-1.5">
@@ -84,7 +86,7 @@ interface Track {
 }
 
 const COPY = {
-  train: { ask: "Let the crew use the nightly train?", button: "Promote to the train" },
+  train: { ask: "Let the crew use the daily train?", button: "Promote to the train" },
   ship: { ask: "Let the crew ship to dev on its own?", button: "Promote to Ship to dev" },
 };
 
@@ -102,7 +104,7 @@ export function PromotionBanners({ onToast }: { onToast: (m: string) => void }) 
   const promote = useMutation({
     mutationFn: (t: Track) => api.post(`/api/repos/${t.repoId}/promote`, { level: t.suggestion?.level }),
     onSuccess: (_, t) => {
-      onToast(`${t.repoName} moved up to ${t.suggestion?.level === "ship" ? "Ship to dev" : "the nightly train"}.`);
+      onToast(`${t.repoName} moved up to ${t.suggestion?.level === "ship" ? "Ship to dev" : "the daily train"}.`);
       qc.invalidateQueries({ queryKey: ["track"] });
       qc.invalidateQueries({ queryKey: ["repos"] });
     },

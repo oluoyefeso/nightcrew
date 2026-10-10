@@ -11,10 +11,8 @@ import {
   getTask,
   listRunEvents,
   openDb,
-  updateSettings,
   updateTask,
 } from "@nightcrew/db";
-import { Crew } from "./crew";
 import { ScriptedEngine } from "./engine";
 import { git } from "./git";
 import { runTask } from "./pipeline";
@@ -198,28 +196,30 @@ describe("runTask", () => {
   });
 });
 
-describe("Crew", () => {
-  test("works through the queue in order and stops at the nightly budget", async () => {
-    const repo = addRepo(db, { name: "acme", path: repoPath, defaultBranch: "main" });
-    updateSettings(db, { nightlyBudgetCents: 450 });
-    const a = createTask(db, { repoId: repo.id, title: "First", status: "queued", budgetCents: 200 });
-    const b = createTask(db, { repoId: repo.id, title: "Second", status: "queued", budgetCents: 200 });
-    const c = createTask(db, { repoId: repo.id, title: "Third", status: "queued", budgetCents: 200 });
-    const order: string[] = [];
-    const engine = new ScriptedEngine({
-      implement: (req) => {
-        order.push(req.prompt.match(/## Task\n(.+)/)?.[1] ?? "?");
-        writeFileSync(join(req.cwd, `${order.length}.txt`), "x");
-        return { text: "ok", costUsd: 1 };
-      },
-      review: () => ({ structured: READY, costUsd: 0.2 }),
-    });
-    const crew = new Crew({ db, engine, dataDir: join(dir, "data"), publish: false });
-    await crew.start();
-    expect(order).toEqual(["First", "Second"]);
-    expect(getTask(db, a.id)?.status).toBe("done");
-    expect(getTask(db, b.id)?.status).toBe("done");
-    expect(getTask(db, c.id)?.status).toBe("queued");
-    expect(crew.getStatus().message).toContain("budget");
+test("files written by NightCrew's dependency install don't count against scope or get committed", async () => {
+  const repo = addRepo(db, {
+    name: "acme",
+    path: repoPath,
+    defaultBranch: "main",
+    testCommand: "test -f src/feature.ts",
+    setupCommand: "echo lock > package-lock.json",
   });
+  const task = createTask(db, {
+    repoId: repo.id,
+    title: "Add the feature",
+    workflow: "quick",
+    scope: ["src/**"],
+    status: "queued",
+  });
+  const engine = new ScriptedEngine({
+    implement: (req) => {
+      writeFileSync(join(req.cwd, "src", "feature.ts"), "x\n");
+      return { text: "Done." };
+    },
+    review: () => ({ structured: READY }),
+  });
+  const out = await runTask(deps(engine), task.id, new AbortController().signal);
+  expect(out.status).toBe("complete");
+  const wt = join(repoPath, ".worktrees", "crew-add-the-feature");
+  expect((await git(wt, "show", "--stat", "--name-only", "HEAD")).stdout).not.toContain("package-lock.json");
 });

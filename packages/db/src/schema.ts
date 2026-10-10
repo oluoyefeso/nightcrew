@@ -110,7 +110,9 @@ export const tasks = sqliteTable(
     status: text("status").notNull().default("draft"),
     position: integer("position").notNull().default(0),
     dependsOn: text("depends_on", { mode: "json" }).$type<string[]>().notNull().default([]),
+    /** Legacy (dollar budgets). Unused; budgets are in tokens now. */
     budgetCents: integer("budget_cents").notNull().default(200),
+    tokenBudget: integer("token_budget").notNull().default(1_000_000),
     maxMinutes: integer("max_minutes").notNull().default(45),
     branch: text("branch").notNull(),
     model: text("model"),

@@ -108,7 +108,7 @@ const request = (over: Partial<PhaseRequest> = {}): PhaseRequest => ({
   systemPrompt: "You are a careful engineer.",
   model: "claude-sonnet-5-5",
   guard: { worktree: work, writableDirs: [], scope: [], protectedBranches: ["main"], readOnly: false },
-  maxBudgetUsd: 1.5,
+  maxTokens: 100_000,
   maxTurns: 50,
   signal: new AbortController().signal,
   ...over,
@@ -354,7 +354,7 @@ describe("ManagedEngine", () => {
     const fake = new FakeClient(script(say("Halfway."), idle("budget_reached")));
     const r = await engineFor(fake).runPhase(request(), () => {});
     expect(r.ok).toBe(false);
-    expect(r.error).toBe("Hit the task's budget before finishing.");
+    expect(r.error).toBe("Hit the task's token budget before finishing.");
     expect(r.text).toBe("Halfway.");
   });
 

@@ -1,4 +1,4 @@
-import { formatCost, type Run } from "@nightcrew/core";
+import { formatTokens, type Run } from "@nightcrew/core";
 import { clsx } from "clsx";
 import { RotateCw } from "lucide-react";
 import { forwardRef } from "react";
@@ -68,7 +68,9 @@ export const RunRow = forwardRef<
             <span className="text-ok">+{run.additions}</span> <span className="text-bad">−{run.deletions}</span>
           </span>
         )}
-        <span>{formatCost(run.costCents)}</span>
+        <span title={`${run.tokensIn.toLocaleString()} in · ${run.tokensOut.toLocaleString()} out`}>
+          {formatTokens(run.tokensIn + run.tokensOut)} tok
+        </span>
         <span className="hidden text-faint lg:inline">{fmtTime(run.startedAt)}</span>
       </span>
     </button>

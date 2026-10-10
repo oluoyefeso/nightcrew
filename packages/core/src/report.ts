@@ -106,19 +106,20 @@ export interface ReportSummary {
   total: number;
   byBucket: Record<Bucket, number>;
   prs: number;
-  costCents: number;
+  /** Input (including cache) plus output tokens. */
+  tokens: number;
   unattendedMs: number;
 }
 
 export function summarize(runs: Run[]): ReportSummary {
   const byBucket: Record<Bucket, number> = { shipped: 0, ready: 0, eyes: 0, back: 0, failed: 0 };
-  let costCents = 0;
+  let tokens = 0;
   let prs = 0;
   let first = Number.POSITIVE_INFINITY;
   let last = 0;
   for (const r of runs) {
     byBucket[r.bucket]++;
-    costCents += r.costCents;
+    tokens += r.tokensIn + r.tokensOut;
     if (r.prUrl) prs++;
     if (r.startedAt) first = Math.min(first, new Date(r.startedAt).getTime());
     if (r.endedAt) last = Math.max(last, new Date(r.endedAt).getTime());
@@ -127,7 +128,7 @@ export function summarize(runs: Run[]): ReportSummary {
     total: runs.length,
     byBucket,
     prs,
-    costCents,
+    tokens,
     unattendedMs: last > first ? last - first : 0,
   };
 }
@@ -155,8 +156,11 @@ function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-export function formatCost(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
+/** 950 → "950", 98_400 → "98k", 2_270_888 → "2.3M". */
+export function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1).replace(/\.0$/, "")}M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
+  return String(n);
 }
 
 export function formatDuration(ms: number): string {

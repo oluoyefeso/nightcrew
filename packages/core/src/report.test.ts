@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Run } from "./model";
-import { classify, greeting, horizonPosition, horizonWindow, nightIdFor, summarize } from "./report";
+import { classify, formatTokens, greeting, horizonPosition, horizonWindow, nightIdFor, summarize } from "./report";
 
 function run(over: Partial<Run>): Run {
   return {
@@ -132,15 +132,22 @@ describe("horizon", () => {
 });
 
 describe("summary and greeting", () => {
-  test("counts buckets, PRs and cost", () => {
+  test("counts buckets, PRs and tokens", () => {
     const s = summarize([
-      run({ bucket: "shipped", prUrl: "a", costCents: 100 }),
-      run({ bucket: "ready", prUrl: "b", costCents: 50 }),
-      run({ bucket: "failed", costCents: 10 }),
+      run({ bucket: "shipped", prUrl: "a", tokensIn: 90_000, tokensOut: 3_000 }),
+      run({ bucket: "ready", prUrl: "b", tokensIn: 100_000, tokensOut: 5_000 }),
+      run({ bucket: "failed", tokensIn: 1_000 }),
     ]);
     expect(s.byBucket.shipped).toBe(1);
     expect(s.prs).toBe(2);
-    expect(s.costCents).toBe(160);
+    expect(s.tokens).toBe(199_000);
+  });
+  test("formatTokens", () => {
+    expect(formatTokens(950)).toBe("950");
+    expect(formatTokens(98_400)).toBe("98k");
+    expect(formatTokens(2_270_888)).toBe("2.3M");
+    expect(formatTokens(1_000_000)).toBe("1M");
+    expect(formatTokens(20_000_000)).toBe("20M");
   });
   test("greeting reads like a sentence", () => {
     const morning = new Date("2026-04-17T07:30:00");

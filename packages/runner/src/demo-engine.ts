@@ -18,7 +18,10 @@ export class DemoEngine implements AgentEngine {
   readonly name = "demo";
   constructor(private readonly stepMs = 900) {}
 
+  private lastPhase: PhaseRequest["phase"] = "plan";
+
   async runPhase(req: PhaseRequest, onEvent: (e: EngineEvent) => void): Promise<PhaseResult> {
+    this.lastPhase = req.phase;
     const script: Record<PhaseRequest["phase"], EngineEvent[]> = {
       plan: [
         { kind: "tool", tool: "Glob", input: {}, text: "Looked for **/*.ts" },
@@ -121,13 +124,23 @@ export class DemoEngine implements AgentEngine {
   }
 
   private result(over: Partial<PhaseResult>): PhaseResult {
+    // Pretend usage in line with measured real runs (a small task is ~100k tokens).
+    const usage: Record<string, [number, number]> = {
+      plan: [18_000, 900],
+      implement: [42_000, 2_100],
+      repair: [20_000, 800],
+      review: [24_000, 1_100],
+      research: [36_000, 1_600],
+      compose: [6_000, 400],
+    };
+    const [tokensIn, tokensOut] = usage[this.lastPhase] ?? [0, 0];
     return {
       ok: true,
       text: "",
       structured: null,
       costUsd: 0,
-      tokensIn: 0,
-      tokensOut: 0,
+      tokensIn,
+      tokensOut,
       turns: 1,
       error: null,
       rateLimited: false,

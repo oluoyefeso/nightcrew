@@ -1,5 +1,6 @@
 import "../../web/src/styles.css";
 import "./site.css";
+import { formatTokens } from "@nightcrew/core";
 import { clsx } from "clsx";
 import { Check, Copy, Moon, Sun } from "lucide-react";
 import { StrictMode, useEffect, useState } from "react";
@@ -10,17 +11,17 @@ const INSTALL = "curl -fsSL https://raw.githubusercontent.com/oluoyefeso/nightcr
 
 // ── The replay ──────────────────────────────────────────────────────────────
 // An example day in the real Inbox design. The first three tasks
-// and their costs are real runs from building NightCrew (October 2026); the
+// and their token counts are real runs from building NightCrew (October 2026); the
 // last two are illustrative, priced inside the range those runs measured.
 
 type Bucket = "shipped" | "ready" | "eyes" | "failed";
-const NIGHT: { at: number; title: string; note: string; bucket: Bucket; cost: string; diff: string }[] = [
+const DAY: { at: number; title: string; note: string; bucket: Bucket; tokens: number; diff: string }[] = [
   {
     at: 0.09,
     title: "Add widgetCount helper",
     note: "Counts widgets with a non-blank title; 2 new tests pass.",
     bucket: "ready",
-    cost: "$0.08",
+    tokens: 99_220,
     diff: "+17 −1",
   },
   {
@@ -28,7 +29,7 @@ const NIGHT: { at: number; title: string; note: string; bucket: Bucket; cost: st
     title: "Add widgetTitles helper with test",
     note: "Maps each widget through widgetLabel; empty list returns [].",
     bucket: "shipped",
-    cost: "$0.10",
+    tokens: 123_135,
     diff: "+18 −1",
   },
   {
@@ -36,7 +37,7 @@ const NIGHT: { at: number; title: string; note: string; bucket: Bucket; cost: st
     title: "Dark mode that follows the system",
     note: "CSS variables with a prefers-color-scheme override. 4 screenshots, no new a11y issues.",
     bucket: "ready",
-    cost: "$0.16",
+    tokens: 98_522,
     diff: "+5 −2",
   },
   {
@@ -44,7 +45,7 @@ const NIGHT: { at: number; title: string; note: string; bucket: Bucket; cost: st
     title: "Fix the crash when a widget has no title",
     note: "New test fails on main and passes on the fix.",
     bucket: "eyes",
-    cost: "$0.12",
+    tokens: 112_000,
     diff: "+12 −3",
   },
   {
@@ -52,7 +53,7 @@ const NIGHT: { at: number; title: string; note: string; bucket: Bucket; cost: st
     title: "Detect 429s in JSON output, not just stderr",
     note: "Backoff now uses the 5/10/20 minute schedule. Skeptic: 6 challenges, 0 held.",
     bucket: "shipped",
-    cost: "$0.14",
+    tokens: 131_000,
     diff: "+41 −6",
   },
 ];
@@ -101,10 +102,10 @@ function useReplay(durationMs = 7000) {
 
 function Replay() {
   const t = useReplay();
-  const done = NIGHT.filter((n) => n.at <= t);
+  const done = DAY.filter((n) => n.at <= t);
   const shipped = done.filter((n) => n.bucket === "shipped").length;
   const needYou = done.filter((n) => n.bucket === "ready" || n.bucket === "eyes").length;
-  const spent = done.reduce((s, n) => s + Number(n.cost.slice(1)), 0);
+  const tokens = done.reduce((s, n) => s + n.tokens, 0);
   const clock = 9 * 60 + Math.round(t * 9 * 60);
   const hh = String(Math.floor(clock / 60) % 24).padStart(2, "0");
   const mm = String(clock % 60).padStart(2, "0");
@@ -122,8 +123,7 @@ function Replay() {
           <span className={clsx("size-1.5 rounded-full", morning ? "bg-ok" : "animate-pulse bg-dawn")} />
           {morning ? "18:00" : `${hh}:${mm}`}
           <span className="hidden sm:inline">
-            ·{" "}
-            {morning ? "all agents reported" : `${Math.max(1, Math.min(3, NIGHT.length - done.length))} agents working`}
+            · {morning ? "all agents reported" : `${Math.max(1, Math.min(3, DAY.length - done.length))} agents working`}
           </span>
         </span>
       </div>
@@ -143,7 +143,7 @@ function Replay() {
             <b className="font-medium text-fg">{done.length}</b> tasks
           </span>
           <span>
-            <b className="font-medium text-fg">${spent.toFixed(2)}</b> spent
+            <b className="font-medium text-fg">{formatTokens(tokens)}</b> tokens
           </span>
           <span>
             <b className="font-medium text-fg">0</b> files outside scope
@@ -176,7 +176,7 @@ function Replay() {
           </div>
         </div>
         <div className="divide-y divide-line overflow-hidden rounded-xl ring-1 ring-line">
-          {NIGHT.map((n) => {
+          {DAY.map((n) => {
             const visible = n.at <= t;
             return (
               <div
@@ -195,7 +195,7 @@ function Replay() {
                   <span className="hidden sm:inline" style={{ color: COLOR[n.bucket] }}>
                     {LABEL[n.bucket]}
                   </span>
-                  <span>{n.cost}</span>
+                  <span>{formatTokens(n.tokens)}</span>
                 </span>
               </div>
             );
@@ -312,7 +312,7 @@ function Reveal({ children, className }: { children: React.ReactNode; className?
 function Site() {
   return (
     <div className="min-h-full">
-      <header className="sticky top-0 z-30 border-line border-b bg-[color-mix(in_srgb,var(--bg)_80%,transparent)] backdrop-blur-xl">
+      <header className="sticky top-0 z-30 bg-[color-mix(in_srgb,var(--bg)_80%,transparent)] backdrop-blur-xl">
         <nav className="mx-auto flex h-14 max-w-[1120px] items-center gap-6 px-5">
           <a href="#top" className="flex items-center gap-2.5 font-medium text-[15px] tracking-[-0.02em]">
             <svg viewBox="0 0 32 32" className="size-[22px]" aria-hidden="true">
@@ -336,8 +336,8 @@ function Site() {
             <a href="#trust" className="hover:text-fg">
               Trust
             </a>
-            <a href="#cost" className="hover:text-fg">
-              Cost
+            <a href="#tokens" className="hover:text-fg">
+              Tokens
             </a>
           </div>
           <div className="ml-auto flex items-center gap-2">
@@ -375,7 +375,7 @@ function Site() {
                 </a>
               </div>
               <p className="font-mono text-[12px] text-faint">
-                A small task, end to end: <span className="text-fg">$0.08</span> · measured, not estimated
+                A small task, end to end: <span className="text-fg">~100k tokens</span> · measured, not estimated
               </p>
             </div>
             <div className="grid w-full max-w-[920px] gap-2.5">
@@ -452,8 +452,8 @@ function Site() {
                   </div>
                 </div>
                 <figcaption className="text-[13px] text-muted">
-                  A real UI task from testing NightCrew: an agent added system dark mode for $0.16. NightCrew started
-                  the site on both branches and took these itself.
+                  A real UI task from testing NightCrew: an agent added system dark mode in 98k tokens. NightCrew
+                  started the site on both branches and took these itself.
                 </figcaption>
               </figure>
               <ul className="grid content-start gap-0 overflow-hidden rounded-[18px] ring-1 ring-line">
@@ -535,23 +535,26 @@ function Site() {
           </Reveal>
         </section>
 
-        <section id="cost" className="mx-auto grid max-w-[1120px] gap-10 px-5 py-24 [&>*]:min-w-0">
+        <section id="tokens" className="mx-auto grid max-w-[1120px] gap-10 px-5 py-24 [&>*]:min-w-0">
           <Reveal className="grid gap-4">
-            <Eyebrow>Cost</Eyebrow>
+            <Eyebrow>Tokens</Eyebrow>
             <H2
-              claim="Cents, not dollars."
+              claim="Lean on tokens."
               rest="Each agent runs in a clean, isolated harness with only the tools its task needs."
             />
           </Reveal>
           <Reveal>
             <div className="grid gap-px overflow-hidden rounded-[18px] bg-line ring-1 ring-line sm:grid-cols-3">
               {[
-                ["$0.08", "a small task, end to end: build, check, review, commit"],
+                ["~100k", "tokens for a small task, end to end: build, check, review, commit"],
                 [
-                  "48×",
-                  "lower cost per turn, measured against a session that loads every skill, plugin and connector installed on the machine",
+                  "20–40×",
+                  "fewer tokens than the same task in a session that loads every skill, plugin and connector on the machine (2.3M–4.4M measured)",
                 ],
-                ["$25", "default daily budget. Agents wait rather than pass it, and every task has its own cap."],
+                [
+                  "20M",
+                  "tokens a day by default. Agents wait rather than pass it, and every task has its own token cap.",
+                ],
               ].map(([n, l]) => (
                 <div key={n} className="grid gap-2 bg-surface p-7">
                   <span className="font-medium text-[44px] leading-none tracking-[-0.035em] tabular">{n}</span>

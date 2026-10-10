@@ -174,7 +174,7 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
       "criteria",
       "status",
       "dependsOn",
-      "budgetCents",
+      "tokenBudget",
       "maxMinutes",
       "model",
       "testCommand",

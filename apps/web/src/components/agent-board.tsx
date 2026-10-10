@@ -1,4 +1,4 @@
-import { formatCost } from "@nightcrew/core";
+import { formatTokens } from "@nightcrew/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { clsx } from "clsx";
@@ -130,14 +130,14 @@ function AgentCard({ agent, compact }: { agent: ActiveAgent; compact?: boolean }
   );
 }
 
-/** "2 working · 3 queued · $1.20 of $25 today", plus Pause/Resume. */
+/** "2 working · 3 queued · 1.2M of 20M tokens today", plus Pause/Resume. */
 export function CrewSummary() {
   const crew = useQuery(crewQuery);
   const s = crew.data;
   const pause = useMutation({ mutationFn: () => api.post("/api/crew/pause") });
   const resume = useMutation({ mutationFn: () => api.post("/api/crew/resume") });
   if (!s) return null;
-  const pct = Math.min(100, (s.spentTodayCents / s.dailyBudgetCents) * 100);
+  const pct = Math.min(100, (s.tokensToday / s.dailyTokenBudget) * 100);
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
       <div className="grid gap-2">
@@ -157,8 +157,8 @@ export function CrewSummary() {
             </span>
           )}
           <span>
-            <b className="font-medium text-fg">{formatCost(s.spentTodayCents)}</b> of {formatCost(s.dailyBudgetCents)}{" "}
-            today
+            <b className="font-medium text-fg">{formatTokens(s.tokensToday)}</b> of {formatTokens(s.dailyTokenBudget)}{" "}
+            tokens today
           </span>
         </p>
         <div className="h-1 w-56 max-w-full overflow-hidden rounded-full bg-raised">

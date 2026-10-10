@@ -1,8 +1,8 @@
 import {
   type ArtifactKind,
   BUCKET_LABEL,
-  formatCost,
   formatDuration,
+  formatTokens,
   type Run,
   type TriageAction,
 } from "@nightcrew/core";
@@ -12,7 +12,7 @@ import { ArrowLeft, ExternalLink, GitBranch, GitPullRequest, X } from "lucide-re
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import { api, runQuery, useTriage } from "../api";
-import { BUCKET_COLOR, durationMs, fmtModel, fmtTime, fmtTokens, isTypingTarget } from "../lib";
+import { BUCKET_COLOR, durationMs, fmtModel, fmtTime, isTypingTarget } from "../lib";
 import { EvidenceView, parseEvidence } from "./evidence";
 import { Button, Chip, Kbd, Pill } from "./ui";
 
@@ -98,10 +98,10 @@ export function RunPane({
         </div>
 
         <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-line ring-1 ring-line sm:grid-cols-4">
-          <Stat label="Cost" value={formatCost(run.costCents)} />
+          <Stat label="Tokens" value={formatTokens(run.tokensIn + run.tokensOut)} />
           <Stat label="Confidence" value={run.confidence === null ? "—" : `${Math.round(run.confidence * 100)}%`} />
           <Stat label="Model" value={fmtModel(run.model)} />
-          <Stat label="Tokens" value={`${fmtTokens(run.tokensIn)} in · ${fmtTokens(run.tokensOut)} out`} />
+          <Stat label="In / out" value={`${formatTokens(run.tokensIn)} · ${formatTokens(run.tokensOut)}`} />
         </dl>
 
         {run.shipSha && (

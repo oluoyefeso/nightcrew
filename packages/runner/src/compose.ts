@@ -87,7 +87,7 @@ export async function draftTasks(
         "You turn a developer's request into well-scoped tasks for an overnight coding crew that works unattended. Split unrelated work into separate tasks; keep one coherent change as one task. Never invent requirements.",
       prompt: `Repos and their files:\n\n${context}\n\n---\n\nThe request:\n\n${input.text}`,
       guard: { worktree: "/nonexistent", writableDirs: [], scope: [], protectedBranches: [], readOnly: true },
-      maxBudgetUsd: 0.5,
+      maxTokens: 200_000,
       maxTurns: 3,
       outputSchema: SCHEMA,
       signal: AbortSignal.timeout(90_000),

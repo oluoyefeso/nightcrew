@@ -205,14 +205,18 @@ function TaskEditor({
         </Field>
 
         <div className="grid gap-4 sm:grid-cols-3">
-          <Field label="Budget" htmlFor="budget" hint="Stops when it's spent.">
+          <Field
+            label="Token budget (thousands)"
+            htmlFor="budget"
+            hint="Input, cache and output across all phases. The agent stops at it."
+          >
             <TextInput
               id="budget"
               type="number"
-              min={0.1}
-              step={0.5}
-              value={(t.budgetCents / 100).toString()}
-              onChange={(e) => edit({ budgetCents: Math.max(10, Math.round(Number(e.target.value) * 100) || 0) })}
+              min={50}
+              step={100}
+              value={Math.round(t.tokenBudget / 1000).toString()}
+              onChange={(e) => edit({ tokenBudget: Math.max(50_000, Math.round(Number(e.target.value) * 1000) || 0) })}
               className="font-mono"
             />
           </Field>
@@ -253,7 +257,7 @@ function TaskEditor({
 
       <section className="grid gap-3">
         <h2 className="font-medium text-[13px] text-muted">Notes and attempts</h2>
-        <Timeline notes={notes} runs={runs} budget={t.budgetCents} />
+        <Timeline notes={notes} runs={runs} />
         <NoteBox taskId={t.id} onDone={invalidate} />
       </section>
     </div>
@@ -266,7 +270,6 @@ function Timeline({
 }: {
   notes: { id: number; author: string; body: string; at: string }[];
   runs: { id: string; status: string; startedAt: string | null; reason: string | null }[];
-  budget: number;
 }) {
   const items = [
     ...notes.map((n) => ({ at: n.at, key: `n${n.id}`, node: <NoteItem author={n.author} body={n.body} at={n.at} /> })),

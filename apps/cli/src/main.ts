@@ -5,7 +5,7 @@ import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { nextStart } from "@nightcrew/core";
+import { formatTokens, nextStart } from "@nightcrew/core";
 import { addRepo, createTask, getRepoByPath, getSettings, listRepos, listTasks, openDb } from "@nightcrew/db";
 import {
   type AgentEngine,
@@ -115,7 +115,7 @@ crew.subscribe((e) => {
   const o = e.outcome;
   const text =
     o.status === "complete"
-      ? `NightCrew finished "${o.title}"${o.prUrl ? `: ${o.prUrl}` : ""} ($${(o.costCents / 100).toFixed(2)})`
+      ? `NightCrew finished "${o.title}"${o.prUrl ? `: ${o.prUrl}` : ""} (${formatTokens(o.tokens)} tokens)`
       : `NightCrew needs you: "${o.title}" stopped. ${o.reason ?? ""}`;
   void fetch(hook, {
     method: "POST",
@@ -149,7 +149,7 @@ async function serve() {
   const s = getSettings(db);
   console.log(`\n  NightCrew is running at ${url}`);
   console.log(
-    `  Agents: up to ${s.maxAgents} at once (${s.maxPerRepo} per repo) · $${(s.dailyBudgetCents / 100).toFixed(2)} a day · ${engine.name}${publish ? "" : ", branches stay local"} · reflexes: ${reflexes.name}${s.dispatch ? "" : " · dispatch paused"}\n`,
+    `  Agents: up to ${s.maxAgents} at once (${s.maxPerRepo} per repo) · ${formatTokens(s.dailyTokenBudget)} tokens a day · ${engine.name}${publish ? "" : ", branches stay local"} · reflexes: ${reflexes.name}${s.dispatch ? "" : " · dispatch paused"}\n`,
   );
   if (!values["no-open"] && !values.dev) openBrowser(url);
 }
@@ -291,7 +291,7 @@ switch (command) {
       if (e.type === "report") {
         const o = e.outcome;
         console.log(
-          `  ${o.status === "complete" ? "✓" : "!"} [${o.title}] ${o.status === "complete" ? "finished" : o.reason} · $${(o.costCents / 100).toFixed(2)}${o.prUrl ? ` · ${o.prUrl}` : ""}`,
+          `  ${o.status === "complete" ? "✓" : "!"} [${o.title}] ${o.status === "complete" ? "finished" : o.reason} · ${formatTokens(o.tokens)} tokens${o.prUrl ? ` · ${o.prUrl}` : ""}`,
         );
       }
       if (e.type === "run_event") {
@@ -315,9 +315,7 @@ switch (command) {
     });
     await crew.drain();
     const end = crew.getStatus();
-    console.log(
-      `\n  ${end.message ?? "All agents are done."} Spent today: $${(end.spentTodayCents / 100).toFixed(2)}.`,
-    );
+    console.log(`\n  ${end.message ?? "All agents are done."} Tokens today: ${formatTokens(end.tokensToday)}.`);
     break;
   }
 

@@ -9,6 +9,7 @@ import type {
   TaskStatus,
   TriageAction,
 } from "@nightcrew/core";
+import { formatTokens } from "@nightcrew/core";
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
@@ -97,8 +98,8 @@ export interface CrewStatus {
   queued: number;
   scheduled: number;
   nextAt: string | null;
-  spentTodayCents: number;
-  dailyBudgetCents: number;
+  tokensToday: number;
+  dailyTokenBudget: number;
   maxAgents: number;
   message: string | null;
   engine: string;
@@ -110,6 +111,7 @@ export interface AgentReport {
   title: string;
   status: "complete" | "failed" | "timeout";
   costCents: number;
+  tokens: number;
   prUrl: string | null;
   reason: string | null;
 }
@@ -227,7 +229,7 @@ function announce(r: AgentReport) {
   try {
     if (typeof Notification !== "undefined" && Notification.permission === "granted" && document.hidden) {
       const n = new Notification(text, {
-        body: r.status === "complete" ? `$${(r.costCents / 100).toFixed(2)}` : (r.reason ?? ""),
+        body: r.status === "complete" ? `${formatTokens(r.tokens)} tokens` : (r.reason ?? ""),
         tag: r.runId,
       });
       n.onclick = () => {

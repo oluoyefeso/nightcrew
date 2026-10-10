@@ -100,7 +100,7 @@ export function Shell() {
   const queued = tasks.data?.length ?? 0;
   return (
     <div className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-30 border-line border-b bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] backdrop-blur-xl">
+      <header className="sticky top-0 z-30 bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] backdrop-blur-xl">
         <div className="mx-auto flex h-14 max-w-[1440px] items-center gap-3 px-4 sm:gap-6 sm:px-6">
           <Link to="/" className="flex items-center gap-2.5 font-medium text-[15px] tracking-[-0.02em]">
             <BrandMark className="size-[22px]" />

@@ -1,4 +1,4 @@
-import { formatCost, TASK_TYPE_LABEL } from "@nightcrew/core";
+import { formatTokens, TASK_TYPE_LABEL } from "@nightcrew/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Archive, Inbox, MoonStar } from "lucide-react";
@@ -59,7 +59,7 @@ export function LaterPage() {
               <Link to="/task/$taskId" params={{ taskId: t.id }} className="grid min-w-0 flex-1 gap-0.5">
                 <span className="truncate font-medium text-[14px]">{t.title}</span>
                 <span className="font-mono text-[11.5px] text-faint">
-                  {t.repoName} · {TASK_TYPE_LABEL[t.type]} · ≤{formatCost(t.budgetCents)}
+                  {t.repoName} · {TASK_TYPE_LABEL[t.type]} · ≤{formatTokens(t.tokenBudget)} tokens
                 </span>
               </Link>
               <Button size="sm" onClick={() => move.mutate({ id: t.id, status: "queued" })}>

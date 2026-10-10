@@ -68,9 +68,7 @@ export function RunPage({ runId }: { runId: string }) {
             {formatCost(r.costCents)}
           </span>
         </div>
-        <h1 className="text-balance font-serif text-[32px] leading-tight tracking-[-0.01em] sm:text-[38px]">
-          {r.title}
-        </h1>
+        <h1 className="t-h2">{r.title}</h1>
         {r.taskId.startsWith("task_") && (
           <Link
             to="/task/$taskId"

@@ -1,6 +1,6 @@
 # NightCrew Design System: "The hour before sunrise"
 
-NightCrew is used at two moments: handing off work in the evening and clearing the report in the morning. The interface should feel calm at both. Blue-black ink with one warm dawn accent. Restraint does the work: one accent colour, a serif only for big moments, mono for every number.
+NightCrew is used at two moments: handing off work in the evening and clearing the report in the morning. The interface should feel calm at both. Blue-black ink with one warm dawn accent. Restraint does the work: one accent colour, one typeface, mono for every number.
 
 Railway already owns the violet night sky. NightCrew sits at dawn instead. Never use violet or indigo.
 
@@ -18,7 +18,7 @@ Both themes are first-class. The app follows the system setting by default, and 
 | `line` | ink at 9% | ink at 10% | Hairlines |
 | `fg` | `#ECE8E1` | `#141A26` | Text |
 | `muted` | `#8B92A3` | `#5E6676` | Secondary text |
-| `faint` | `#5C6475` | `#9AA1AE` | Labels, timestamps, the second half of two-tone headings |
+| `faint` | `#6B7386` | `#7D8494` | Labels, timestamps, the second half of two-tone headings |
 | `dawn` | `#F2A65A` | `#B65A12` | The accent: primary buttons, focus, active tab |
 | `ok` / `bad` / `sky` | green / red / blue | darker variants | Semantic state only |
 
@@ -26,15 +26,27 @@ Semantic colours mark state (shipped, failed, ready) and are never decoration. `
 
 ## Type
 
-- **Instrument Serif**: greetings, page titles, the first heading of a rendered plan. Never in UI chrome.
-- **Geist**: all UI and body text. 14px base, 13px secondary.
-- **Geist Mono**: anything that changes, such as costs, times, SHAs, PR numbers, token counts, logs. Always `tabular-nums`.
+One family, Inter (variable), in the spirit of Aster: weight 500 for headings, tracking that tightens as size grows, and two-tone headings where the elaboration sits in `--faint` at the same size ("Good morning." faint, "Two shipped and three need you." ink).
 
-Large serif headings get tight tracking (-0.01em). Uppercase labels are rare, mono at 11px, with +0.08em tracking.
+| Role | Class | Size | Weight | Tracking |
+|---|---|---|---|---|
+| Display (landing hero) | `t-display` | 72px (40px on phones) | 500 | −0.04em |
+| Page and section heads, the greeting | `t-h1` | 46px (30px) | 500 | −0.03em |
+| Task and run titles | `t-h2` | 32px (24px) | 500 | −0.025em |
+| Card titles | `t-h3` | 19px | 500 | −0.02em |
+| Lede | `t-lede` | 18px / 1.6 | 400 | −0.011em |
+| Body and UI | none | 14px (13px secondary) | 400 / 500 | −0.011em |
+| Eyebrow | `t-eyebrow` | 12px mono, uppercase | 400 | +0.08em, in `--dawn` |
+
+Mono is the system stack (SF Mono, then Menlo and others) for anything that changes: costs, times, SHAs, PR numbers, logs. Always use `tabular-nums`, and no negative tracking.
 
 ## The Horizon
 
 The signature element. A 4px band across the top of the Morning Report, from 22:00 to 07:00 (or the hours around daytime runs), fading from ink to dawn. Each task is a tick at the moment it started, coloured by where it landed. Hover a tick to see the task; click it to open it. Don't use the gradient anywhere else.
+
+## Theme switching
+
+The header toggle has three states: Match system, Night and Morning. The selected one is an inverted pill so it's unmistakable in both themes. The choice is stored locally; Match system clears it. Embedded in a preview frame, the landing page defers to the host's theme and hides its own switch.
 
 ## Components
 

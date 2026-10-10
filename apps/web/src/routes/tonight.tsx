@@ -29,7 +29,7 @@ export function TonightPage() {
     <div className="mx-auto grid max-w-[860px] gap-8 px-4 pt-8 pb-28 sm:px-8 lg:pt-12">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div className="grid gap-2">
-          <h1 className="font-serif text-[40px] leading-none tracking-[-0.01em] sm:text-[48px]">Tonight</h1>
+          <h1 className="t-h1">Tonight</h1>
           <p className="text-[14px] text-muted">
             {running ? (
               "The crew is working."
@@ -50,7 +50,7 @@ export function TonightPage() {
 
       {repos.data && repos.data.length === 0 ? (
         <section className="grid gap-4 rounded-2xl bg-surface p-6 ring-1 ring-line">
-          <h2 className="font-semibold text-[16px]">Where should the crew work?</h2>
+          <h2 className="t-h3">Where should the crew work?</h2>
           <p className="text-[14px] text-muted">
             Add a git repository on this machine. The crew works in its own worktree and never touches your checkout.
           </p>
@@ -276,7 +276,7 @@ function Drafts({
                 value={d.title}
                 onChange={(e) => update(i, { title: e.target.value })}
                 aria-label="Title"
-                className="min-w-0 flex-1 bg-transparent font-semibold text-[14.5px] outline-none"
+                className="min-w-0 flex-1 bg-transparent font-medium text-[15px] tracking-[-0.015em] outline-none"
               />
               <span
                 className={clsx(

@@ -130,7 +130,7 @@ export function PromotionBanners({ onToast }: { onToast: (m: string) => void }) 
             className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-surface px-5 py-3.5 ring-1 ring-line"
           >
             <p className="text-[14px]">
-              <b className="font-semibold">{s.reason.replace("tasks", `tasks in ${t.repoName}`)}</b>{" "}
+              <b className="font-medium">{s.reason.replace("tasks", `tasks in ${t.repoName}`)}</b>{" "}
               <span className="text-muted">{COPY[s.level].ask}</span>
             </p>
             <div className="flex gap-2">

@@ -73,11 +73,14 @@ export function ReportPage({ nightId, runId }: { nightId?: string; runId?: strin
                 <ChevronRight className="size-3.5" />
               </NightLink>
             </div>
-            <h1 className="text-balance font-serif text-[34px] leading-[1.08] tracking-[-0.01em] sm:text-[44px]">
-              {/* Only the latest night gets a greeting; older ones read as a dated record. */}
-              {data.nextId
-                ? greeting(summary).replace(/^Good \w+\./, `${fmtWeekday(lastEnd ?? data.night.startedAt)}.`)
-                : greeting(summary)}
+            <h1 className="t-h1">
+              <TwoTone
+                text={
+                  data.nextId
+                    ? greeting(summary).replace(/^Good \w+\./, `${fmtWeekday(lastEnd ?? data.night.startedAt)}.`)
+                    : greeting(summary)
+                }
+              />
             </h1>
             <p className="flex flex-wrap gap-x-5 gap-y-1 font-mono text-[12.5px] text-muted tabular">
               <span>
@@ -213,7 +216,7 @@ function ReportSkeleton() {
 function EmptyState() {
   return (
     <div className="mx-auto grid max-w-[620px] gap-5 px-4 pt-24 sm:px-8">
-      <h1 className="font-serif text-[44px] leading-[1.05] tracking-[-0.01em]">No nights yet.</h1>
+      <h1 className="t-h1">No nights yet.</h1>
       <p className="text-[15px] text-muted leading-relaxed">
         Queue some work for tonight and the crew's results land here in the morning: what shipped, what needs you, and
         the evidence for each.
@@ -231,5 +234,16 @@ function EmptyState() {
         <span className="font-mono">nightcrew import --classic ~/path/to/nightcrew</span>
       </p>
     </div>
+  );
+}
+
+/** "Good morning." in faint ink, the result in full ink. */
+function TwoTone({ text }: { text: string }) {
+  const m = text.match(/^([^.]+\.)\s*(.*)$/);
+  if (!m) return <>{text}</>;
+  return (
+    <>
+      <span className="text-faint">{m[1]}</span> {m[2]}
+    </>
   );
 }

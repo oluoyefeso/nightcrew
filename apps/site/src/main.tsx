@@ -124,10 +124,11 @@ function Replay() {
         </span>
       </div>
       <div className="grid gap-4 px-5 pt-6 pb-5 sm:px-7">
-        <div className="min-h-[2.4em] font-serif text-[26px] leading-[1.1] tracking-[-0.01em] sm:text-[34px]">
+        <div className="min-h-[2.3em] font-medium text-[24px] leading-[1.12] tracking-[-0.03em] sm:text-[30px]">
           {morning ? (
             <>
-              Good morning. {shipped === 2 ? "Two" : shipped} shipped and {needYou === 3 ? "three" : needYou} need you.
+              <span className="text-faint">Good morning.</span> {shipped === 2 ? "Two" : shipped} shipped and{" "}
+              {needYou === 3 ? "three" : needYou} need you.
             </>
           ) : (
             <span className="text-muted">The crew is working…</span>
@@ -146,16 +147,14 @@ function Replay() {
         </p>
         <div className="relative pt-2 pb-1">
           <div className="relative h-6">
+            <div className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-raised" />
             <div
               className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full"
               style={{
                 background:
                   "linear-gradient(90deg, var(--horizon-from) 0%, var(--horizon-from) 34%, var(--dawn-soft) 86%, var(--dawn) 100%)",
+                clipPath: `inset(0 ${(1 - t) * 100}% 0 0 round 4px)`,
               }}
-            />
-            <div
-              className="absolute top-1/2 h-1 -translate-y-1/2 rounded-full bg-bg/70"
-              style={{ left: `${t * 100}%`, right: 0 }}
             />
             {done.map((n) => (
               <span
@@ -235,7 +234,21 @@ function InstallButton({ large }: { large?: boolean }) {
   );
 }
 
+/** In a preview frame the host owns the theme; standalone, the page offers a switch. */
+const EMBEDDED = (() => {
+  try {
+    return window.self !== window.top;
+  } catch {
+    return true;
+  }
+})();
+
 function ThemeSwitch() {
+  if (EMBEDDED) return null;
+  return <StandaloneThemeSwitch />;
+}
+
+function StandaloneThemeSwitch() {
   const [dark, setDark] = useState(() => {
     const set = document.documentElement.dataset.theme;
     return set ? set === "dark" : !matchMedia("(prefers-color-scheme: light)").matches;
@@ -257,14 +270,14 @@ function ThemeSwitch() {
 
 function H2({ claim, rest }: { claim: string; rest: string }) {
   return (
-    <h2 className="max-w-[860px] text-balance font-serif text-[34px] leading-[1.08] tracking-[-0.015em] sm:text-[48px]">
+    <h2 className="t-h1 max-w-[860px]">
       {claim} <span className="text-faint">{rest}</span>
     </h2>
   );
 }
 
 function Eyebrow({ children }: { children: string }) {
-  return <p className="font-mono text-[12px] text-dawn uppercase tracking-[0.08em]">{children}</p>;
+  return <p className="t-eyebrow">{children}</p>;
 }
 
 /** Section wrapper. Content is always visible: no scroll-triggered hiding, so screenshots, link previews and crawlers see the whole page. */
@@ -279,7 +292,7 @@ function Site() {
     <div className="min-h-full">
       <header className="sticky top-0 z-30 border-line border-b bg-[color-mix(in_srgb,var(--bg)_80%,transparent)] backdrop-blur-xl">
         <nav className="mx-auto flex h-14 max-w-[1120px] items-center gap-6 px-5">
-          <a href="#top" className="flex items-center gap-2.5 font-semibold tracking-[-0.01em]">
+          <a href="#top" className="flex items-center gap-2.5 font-medium text-[15px] tracking-[-0.02em]">
             <svg viewBox="0 0 32 32" className="size-[22px]" aria-hidden="true">
               <clipPath id="m">
                 <circle cx="16" cy="16" r="15" />
@@ -318,18 +331,18 @@ function Site() {
       </header>
 
       <main id="top">
-        <section className="nc-hero relative overflow-hidden">
-          <div className="mx-auto grid max-w-[1120px] gap-12 px-5 pt-16 pb-20 lg:grid-cols-[minmax(0,1fr)_minmax(0,560px)] lg:items-center lg:pt-24">
-            <div className="grid gap-6">
+        <section className="nc-hero relative mx-2 mt-2 overflow-hidden rounded-[28px] bg-surface ring-1 ring-line sm:mx-3 sm:mt-3 sm:rounded-[32px]">
+          <div className="mx-auto grid max-w-[1120px] justify-items-center gap-14 px-5 pt-20 pb-16 text-center sm:pt-28">
+            <div className="grid max-w-[860px] justify-items-center gap-6">
               <Eyebrow>Open source · runs on your machine</Eyebrow>
-              <h1 className="text-balance font-serif text-[48px] leading-[1.0] tracking-[-0.025em] sm:text-[72px]">
-                Queue it at night. <em className="text-dawn">Merge it with coffee.</em>
+              <h1 className="t-display">
+                Queue it at night. <span className="text-faint">Merge it with coffee.</span>
               </h1>
-              <p className="max-w-[520px] text-[17px] text-muted leading-relaxed">
+              <p className="t-lede max-w-[560px]">
                 NightCrew runs your coding tasks overnight with Claude, across all your repos. Every task comes back
                 with a plan, evidence it actually works, and a review by an agent whose only job is to prove it doesn't.
               </p>
-              <div className="flex flex-wrap items-center gap-3" id="start">
+              <div className="flex flex-wrap items-center justify-center gap-3" id="start">
                 <InstallButton />
                 <a
                   href={REPO}
@@ -342,7 +355,7 @@ function Site() {
                 A small task, end to end: <span className="text-fg">$0.08</span> · measured, not estimated
               </p>
             </div>
-            <div className="grid gap-2">
+            <div className="grid w-full max-w-[920px] gap-2.5">
               <Replay />
               <p className="text-center font-mono text-[11px] text-faint">
                 An example night, replayed in the real Morning Report
@@ -377,7 +390,7 @@ function Site() {
               ].map(([time, title, body]) => (
                 <div key={title} className="grid content-start gap-3 bg-surface p-7">
                   <span className="font-mono text-[12px] text-dawn">{time}</span>
-                  <h3 className="font-serif text-[28px] leading-tight tracking-[-0.01em]">{title}</h3>
+                  <h3 className="font-medium text-[22px] leading-tight tracking-[-0.025em]">{title}</h3>
                   <p className="text-[14.5px] text-muted leading-relaxed">{body}</p>
                 </div>
               ))}
@@ -436,7 +449,7 @@ function Site() {
                   ],
                 ].map(([k, v]) => (
                   <li key={k} className="grid gap-1 border-line border-b bg-surface px-5 py-4 last:border-b-0">
-                    <b className="font-semibold text-[14.5px]">{k}</b>
+                    <b className="font-medium text-[14.5px]">{k}</b>
                     <span className="text-[14px] text-muted leading-relaxed">{v}</span>
                   </li>
                 ))}
@@ -478,7 +491,7 @@ function Site() {
                   <span className="font-mono text-[11px] text-faint uppercase tracking-[0.08em]">
                     {i === 4 ? "Never" : `Level ${i}`}
                   </span>
-                  <b className="font-semibold text-[15px]">{name}</b>
+                  <b className="font-medium text-[15px]">{name}</b>
                   <span className="text-[13px] text-muted leading-relaxed">{body}</span>
                 </div>
               ))}
@@ -513,7 +526,7 @@ function Site() {
                 ["$25", "default nightly budget. The crew stops before it, and every task has its own cap."],
               ].map(([n, l]) => (
                 <div key={n} className="grid gap-2 bg-surface p-7">
-                  <span className="font-serif text-[52px] leading-none tracking-[-0.02em]">{n}</span>
+                  <span className="font-medium text-[44px] leading-none tracking-[-0.035em] tabular">{n}</span>
                   <span className="text-[14px] text-muted leading-relaxed">{l}</span>
                 </div>
               ))}
@@ -522,14 +535,14 @@ function Site() {
           <Reveal>
             <div className="grid gap-4 md:grid-cols-2">
               <div className="grid gap-2 rounded-2xl bg-surface p-6 ring-1 ring-line">
-                <b className="font-semibold text-[15px]">Self-managed, free</b>
+                <b className="font-medium text-[15px]">Self-managed, free</b>
                 <p className="text-[14px] text-muted leading-relaxed">
                   One binary on your machine. The dashboard runs at localhost, the crew uses the Claude Agent SDK with
                   your own key or Claude Code login. Your code never leaves your machine except to Claude.
                 </p>
               </div>
               <div className="grid gap-2 rounded-2xl bg-surface p-6 ring-1 ring-line">
-                <b className="font-semibold text-[15px]">Managed, experimental</b>
+                <b className="font-medium text-[15px]">Managed, experimental</b>
                 <p className="text-[14px] text-muted leading-relaxed">
                   Close the laptop. The same crew runs on Claude Managed Agents in Anthropic's sandboxes, with
                   locked-down networking and a budget per session.
@@ -540,7 +553,7 @@ function Site() {
         </section>
 
         <section className="mx-auto grid max-w-[1120px] justify-items-center gap-6 px-5 pt-16 pb-28 text-center">
-          <h2 className="text-balance font-serif text-[40px] leading-[1.05] tracking-[-0.02em] sm:text-[60px]">
+          <h2 className="text-balance font-medium text-[40px] leading-[1.04] tracking-[-0.035em] sm:text-[64px]">
             Give the crew tonight's work. <span className="text-faint">Wake up to proof.</span>
           </h2>
           <InstallButton large />

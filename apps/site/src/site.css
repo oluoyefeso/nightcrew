@@ -2,9 +2,10 @@
 .nc-hero::before {
   content: "";
   position: absolute;
-  inset: auto -20% -40% -20%;
-  height: 70%;
-  background: radial-gradient(60% 60% at 60% 100%, color-mix(in srgb, var(--dawn) 22%, transparent), transparent 70%);
+  inset: 0;
+  background:
+    radial-gradient(70% 45% at 50% 100%, color-mix(in srgb, var(--dawn) 26%, transparent), transparent 70%),
+    radial-gradient(50% 35% at 50% 0%, color-mix(in srgb, var(--sky) 10%, transparent), transparent 70%);
   pointer-events: none;
 }
 .nc-hero > * {

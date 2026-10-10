@@ -29,7 +29,7 @@ export function SettingsPage() {
   return (
     <div className="mx-auto grid max-w-[860px] gap-10 px-4 pt-8 pb-28 sm:px-8 lg:pt-12">
       <header className="grid gap-2">
-        <h1 className="font-serif text-[40px] leading-none tracking-[-0.01em] sm:text-[48px]">Settings</h1>
+        <h1 className="t-h1">Settings</h1>
         <p className="text-[14px] text-muted">
           Crew engine: <span className="font-mono text-fg">{crew.data?.engine ?? "…"}</span>
           {crew.data?.engine === "demo" && " (pretend runs, nothing is spent or pushed)"}
@@ -38,7 +38,7 @@ export function SettingsPage() {
 
       {s && (
         <section className="grid gap-5">
-          <h2 className="font-semibold text-[15px]">The night</h2>
+          <h2 className="font-medium text-[16px] tracking-[-0.02em]">The night</h2>
           <div className="grid gap-4 sm:grid-cols-3">
             <Field label="Start time" htmlFor="start" hint="24-hour, your local time.">
               <TextInput
@@ -97,7 +97,7 @@ export function SettingsPage() {
 
       <section className="grid gap-5">
         <div className="grid gap-1">
-          <h2 className="font-semibold text-[15px]">Repos</h2>
+          <h2 className="font-medium text-[16px] tracking-[-0.02em]">Repos</h2>
           <p className="text-[13.5px] text-muted">
             Where the crew may work. Each task gets its own worktree under the repo's{" "}
             <span className="font-mono">.worktrees</span> folder.
@@ -131,7 +131,7 @@ function RepoCard({ repo }: { repo: Repo }) {
     <article className="grid gap-4 rounded-2xl bg-surface p-5 ring-1 ring-line">
       <div className="flex items-start justify-between gap-3">
         <div className="grid gap-0.5">
-          <h3 className="font-semibold text-[15px]">{repo.name}</h3>
+          <h3 className="font-medium text-[16px] tracking-[-0.02em]">{repo.name}</h3>
           <span className="font-mono text-[11.5px] text-faint">{repo.path}</span>
         </div>
         <button

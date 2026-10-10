@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "bun --watch src/main.ts serve --no-open --dev",
-    "build": "bun scripts/embed-web.ts && bun build src/main.ts --compile --minify --outfile dist/nightcrew; status=$?; rm -f src/web-assets.gen.ts; exit $status"
+    "build": "bun scripts/embed-web.ts && bun build src/main.ts --compile --minify --external \"chromium-bidi/*\" --outfile dist/nightcrew; status=$?; rm -f src/web-assets.gen.ts; exit $status"
   },
   "dependencies": {
     "@nightcrew/core": "workspace:*",

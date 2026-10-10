@@ -1,13 +1,14 @@
+/// <reference path="./assets.d.ts" />
 // Evidence NightCrew gathers itself, independent of what the agent claims:
 // before/after screenshots with visual diffs, accessibility scans, console
 // errors, and for bug fixes a test that fails on the base branch and passes
 // on the fix.
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { dirname, extname, join, normalize } from "node:path";
 import { EVIDENCE_FOR, type Repo, slugify, type Task } from "@nightcrew/core";
 import { matchesAny } from "@nightcrew/core/guard";
+import axeSource from "axe-core/axe.min.js" with { type: "text" };
 import { baseWorktree, changedFiles, run } from "./git";
 
 interface A11yIssue {
@@ -193,7 +194,7 @@ async function screenshots(o: EvidenceOptions, baseDir: string, ev: Evidence) {
   if (!o.repo.previewCommand) return;
   const { chromium } = await import("playwright-core");
   const browser = await chromium.launch({ channel: "chrome" }).catch(() => chromium.launch());
-  const axeSource = readAxe();
+  const axe = readAxe();
   const shotsDir = join(o.artifactsDir, "shots");
   mkdirSync(shotsDir, { recursive: true });
   const paths = o.repo.previewPaths.length ? o.repo.previewPaths.slice(0, 6) : ["/"];
@@ -232,9 +233,9 @@ async function screenshots(o: EvidenceOptions, baseDir: string, ev: Evidence) {
             const file = join(shotsDir, `${key}-${label}.png`);
             await page.screenshot({ path: file, fullPage: false });
             const a11y = new Map<string, A11yIssue>();
-            if (axeSource && viewport === "desktop" && theme === "light") {
+            if (axe && viewport === "desktop" && theme === "light") {
               try {
-                await page.addScriptTag({ content: axeSource });
+                await page.addScriptTag({ content: axe });
                 const violations = (await page.evaluate(
                   "axe.run(document, { resultTypes: ['violations'] }).then(r => r.violations.map(v => ({ id: v.id, impact: v.impact, help: v.help, count: v.nodes.length })))",
                 )) as {
@@ -293,7 +294,7 @@ async function screenshots(o: EvidenceOptions, baseDir: string, ev: Evidence) {
       }
     }
     ev.consoleErrors = [...new Set(ev.consoleErrors)].slice(0, 20);
-    if (axeSource) {
+    if (axe) {
       const newIssues = [...a11yAfter.values()].filter((v) => {
         const prior = a11yBefore?.get(v.id);
         return !prior || v.count > prior.count;
@@ -344,12 +345,8 @@ async function diffImages(a: string, b: string, out: string): Promise<{ file: st
 }
 
 function readAxe(): string | null {
-  try {
-    const require = createRequire(import.meta.url);
-    return readFileSync(require.resolve("axe-core/axe.min.js"), "utf8");
-  } catch {
-    return null;
-  }
+  // Embedded at build time so the compiled binary carries it too.
+  return axeSource || null;
 }
 
 async function freePort(): Promise<number> {

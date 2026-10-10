@@ -14,7 +14,8 @@
     "typecheck": "tsc -p packages/core && tsc -p packages/db && tsc -p packages/runner && tsc -p apps/cli && tsc -p apps/web && tsc -p apps/site",
     "lint": "biome check .",
     "classic:test": "cd classic && SHELL=/opt/homebrew/bin/bash bats tests/",
-    "build:site": "bun run --filter '@nightcrew/site' build"
+    "build:site": "bun run --filter '@nightcrew/site' build",
+    "site": "bun run --filter '@nightcrew/site' build && cd apps/site && bunx vite preview --port 3722 --strictPort"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

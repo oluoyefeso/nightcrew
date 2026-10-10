@@ -12,14 +12,15 @@ import {
   getRepo,
   getRoutine,
   getTrain,
+  listRoutines,
   openDb,
   setRunTrain,
   updateRepo,
   upsertRuns,
 } from "@nightcrew/db";
-import { Hono } from "hono";
 // The lock pullCar waits on; holding it lets a test board a car mid-pull.
-import { withRepoLock } from "../../../packages/runner/src/git";
+import { withRepoLock } from "@nightcrew/runner";
+import { Hono } from "hono";
 import { mountTrustRoutes } from "./trust-routes";
 
 let db: Db;
@@ -58,6 +59,16 @@ describe("promote", () => {
     expect(ok.status).toBe(200);
     expect(getRepo(db, repo.id)?.level).toBe("ship");
   });
+
+  // Value: protects=promote and Settings share one ship rule, so promote refuses shipping to the default branch; fails_when=promote checks only the repo's own protected list again; why_new=the two routes had drifted; seam=none
+  test("to ship with the default branch as ship branch → 400", async () => {
+    const repo = addRepo(db, { name: "acme", path: "/code/acme", defaultBranch: "trunk" });
+    updateRepo(db, repo.id, { level: "train", shipBranch: "trunk", allowShip: ["src/**"] });
+    const res = await send("POST", `/api/repos/${repo.id}/promote`, { level: "ship" });
+    expect(res.status).toBe(400);
+    expect(await errorOf(res)).toBe("trunk is protected. Pick a branch like dev or staging.");
+    expect(getRepo(db, repo.id)?.level).toBe("train");
+  });
 });
 
 describe("PATCH /api/routines/:id", () => {
@@ -75,6 +86,11 @@ describe("PATCH /api/routines/:id", () => {
     [{ enabled: "no" }, 400, "true or false"],
     [{}, 400, "Nothing to change"],
     [{ repoId: "repo_other", lastNight: "2026-10-10" }, 400, "Nothing to change"],
+    [{ brief: 42 }, 400, "brief as text"],
+    [{ scope: "src/**" }, 400, "list of file globs"],
+    [{ scope: ["src/**", 3] }, 400, "list of file globs"],
+    [{ criteria: "Tests pass" }, 400, "list of sentences"],
+    [{ criteria: [null] }, 400, "list of sentences"],
   ])("%p → %d", async (body, status, message) => {
     const r = routine();
     const res = await send("PATCH", `/api/routines/${r.id}`, body);
@@ -103,6 +119,21 @@ describe("PATCH /api/routines/:id", () => {
       criteria: ["Tests pass"],
     });
     expect((await send("PATCH", "/api/routines/routine_missing", { enabled: true })).status).toBe(404);
+  });
+});
+
+describe("POST /api/routines", () => {
+  // Value: protects=new routines get the same brief, scope and criteria type checks as edits; fails_when=create skips them and a string scope reaches the tasks a routine spawns; why_new=only PATCH-style fields were checked on create; seam=none
+  test.each([
+    [{ brief: ["x"] }, "brief as text"],
+    [{ scope: "src/**" }, "list of file globs"],
+    [{ criteria: [1] }, "list of sentences"],
+  ])("%p → 400", async (extra, message) => {
+    const repo = addRepo(db, { name: "acme", path: "/code/acme", defaultBranch: "main" });
+    const res = await send("POST", "/api/routines", { repoId: repo.id, title: "Bump deps", days: [1], ...extra });
+    expect(res.status).toBe(400);
+    expect(await errorOf(res)).toContain(message);
+    expect(listRoutines(db)).toEqual([]);
   });
 });
 

@@ -17,7 +17,7 @@ import {
 } from "../api";
 import { AddRepo } from "../components/add-repo";
 import { AgentBoard, CrewSummary } from "../components/agent-board";
-import { ChipsEditor, ListEditor, Select, TextInput } from "../components/form";
+import { ChipsEditor, inlineEdit, ListEditor, Select, TextInput } from "../components/form";
 import { Button } from "../components/ui";
 import { isTypingTarget } from "../lib";
 
@@ -274,7 +274,10 @@ function Drafts({
                 value={d.title}
                 onChange={(e) => update(i, { title: e.target.value })}
                 aria-label="Title"
-                className="-ml-1.5 min-w-0 flex-1 rounded-md bg-transparent px-1.5 font-medium text-[15px] tracking-[-0.015em] outline-none transition-[background-color,box-shadow] duration-150 ease-out hover:bg-raised/50 focus-visible:bg-transparent focus-visible:ring-1 focus-visible:ring-[color-mix(in_srgb,var(--dawn)_45%,transparent)]"
+                className={clsx(
+                  "-ml-1.5 min-w-0 flex-1 rounded-md bg-transparent px-1.5 font-medium text-[15px] tracking-[-0.015em] outline-none transition-[background-color,box-shadow] duration-150 ease-out hover:bg-raised/50 focus:bg-transparent",
+                  inlineEdit,
+                )}
               />
               <span
                 className={clsx(

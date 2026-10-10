@@ -497,13 +497,24 @@ function allowedPush(
   return new RegExp(`^git\\s+push\\s+origin\\s+HEAD:(refs/heads/)?${branch}$`).test(cmd);
 }
 
-/** Sandbox paths, rewritten to the worktree so the guard can judge them. */
+/**
+ * Sandbox paths, rewritten to the worktree so the guard can judge them. Only
+ * the guard sees the rewrite; the agent's call runs as sent. Shell commands
+ * get the mount prefix swapped wherever it starts a path, so
+ * `rm -rf /workspace/<repo>/dist` is judged as a delete inside the worktree.
+ */
 function toLocalPaths(input: Record<string, unknown>, mount: string, worktree: string): Record<string, unknown> {
   const out: Record<string, unknown> = { ...input };
   for (const key of ["file_path", "notebook_path", "path"]) {
     const v = out[key];
     if (typeof v === "string" && (v === mount || v.startsWith(`${mount}/`)))
       out[key] = worktree + v.slice(mount.length);
+  }
+  if (typeof out.command === "string") {
+    const escaped = mount.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Not part of a longer path on either side: /x/workspace/r and /workspace/r2 stay.
+    const prefix = new RegExp(`(?<![\\w./~-])${escaped}(?![\\w.-])`, "g");
+    out.command = out.command.replace(prefix, () => worktree);
   }
   return out;
 }

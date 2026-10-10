@@ -18,9 +18,11 @@ Both themes are first-class. The app follows the system setting by default, and 
 | `line` | ink at 9% | ink at 10% | Hairlines |
 | `fg` | `#ECE8E1` | `#141A26` | Text |
 | `muted` | `#8B92A3` | `#5E6676` | Secondary text |
-| `faint` | `#6B7386` | `#7D8494` | Labels, timestamps, the second half of two-tone headings |
+| `faint` | `#6B7386` | `#7D8494` | Labels, timestamps, the second half of two-tone headings, at 12px and up |
 | `dawn` | `#F2A65A` | `#B65A12` | The accent: primary buttons, focus, active tab |
 | `ok` / `bad` / `sky` | green / red / blue | darker variants | Semantic state only |
+
+`faint` is too light to read at small sizes, so labels and timestamps under 12px use `muted` instead.
 
 Semantic colours mark state (shipped, failed, ready) and are never decoration. `dawn` also means "needs your eyes".
 

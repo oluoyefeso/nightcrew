@@ -2,6 +2,7 @@
 // Pure: given a tool call and the task's limits, allow it or say why not.
 
 import { realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { isAbsolute, normalize, relative, resolve } from "node:path";
 
 export interface GuardContext {
@@ -14,6 +15,8 @@ export interface GuardContext {
   protectedBranches: string[];
   /** Research tasks read and write reports only. */
   readOnly: boolean;
+  /** More directories a recursive rm may clear inside (besides the worktree, writableDirs and the temp dir). */
+  extraRoots?: string[];
 }
 
 export type GuardDecision = { allow: true } | { allow: false; reason: string };
@@ -45,7 +48,10 @@ const GIT_OPT = String.raw`(?:-[cC]\s+\S+|--(?:git-dir|work-tree|namespace|confi
 const git = (sub: string) => new RegExp(String.raw`\bgit(?:\s+${GIT_OPT})*\s+(?:${sub})`);
 
 const BASH_RULES: { test: RegExp; reason: string }[] = [
-  { test: git(String.raw`push\b`), reason: "NightCrew pushes the branch itself after checks pass." },
+  {
+    test: new RegExp(`${git(String.raw`(push|send-pack|receive-pack)\b`).source}|\\bgit-(send|receive)-pack\\b`),
+    reason: "NightCrew pushes the branch itself after checks pass.",
+  },
   {
     test: git(String.raw`reset\b[^;&|]*--hard|clean\b[^;&|]*(\s-[a-zA-Z]*f|--force)`),
     reason: "Destructive git commands are blocked.",
@@ -57,6 +63,10 @@ const BASH_RULES: { test: RegExp; reason: string }[] = [
     reason: "Deleting branches and tagging are blocked.",
   },
   { test: /\bgh\s+(pr|release|repo|api|secret|workflow)\b/, reason: "NightCrew opens the pull request itself." },
+  {
+    test: /\bgh\s+auth\s+(token|login|logout|refresh|setup-git|switch)\b|\bgh\s+auth\s+status\b[^;&|]*(--show-token|\s-t\b)/,
+    reason: "GitHub credentials are off limits.",
+  },
   {
     test: /\b(npm|pnpm|yarn|bun)\s+publish\b|\bcargo\s+publish\b|\btwine\s+upload\b/,
     reason: "Publishing packages is blocked.",
@@ -174,10 +184,26 @@ function protectedBranchIn(words: string[], protectedBranches: string[]): string
   if (sub === "update-ref" || sub === "symbolic-ref") {
     return args.filter((a) => a.startsWith("refs/heads/")).find(isProtected);
   }
+  if (sub === "fetch" || sub === "pull") {
+    // A refspec's destination is written: git fetch origin +HEAD:refs/heads/main.
+    return args
+      .filter((a) => !a.startsWith("-") && a.includes(":"))
+      .map((a) => a.slice(a.lastIndexOf(":") + 1))
+      .find(isProtected);
+  }
   return undefined;
 }
 
-/** rm -r aimed at /, ~, $HOME or .. (absolute paths inside the worktree are fine). */
+/** The temp dirs the OS sandbox lets agents write: os.tmpdir(), $TMPDIR and /tmp. */
+function tempRoots(): string[] {
+  return [tmpdir(), process.env.TMPDIR ?? "", "/tmp"].filter((d) => isAbsolute(d));
+}
+
+/**
+ * rm -r aimed at /, ~, $HOME or .. Absolute paths strictly inside the
+ * worktree, writableDirs, extraRoots or the temp dir are fine (the OS sandbox
+ * allows tmp anyway); the roots themselves are not.
+ */
 function deletesOutside(words: string[], ctx: GuardContext): boolean {
   const i = words.findIndex((w) => isCmd(w, "rm"));
   if (i < 0) return false;
@@ -189,8 +215,14 @@ function deletesOutside(words: string[], ctx: GuardContext): boolean {
   return targets.some((t) => {
     if (/^(~|\$HOME|\$\{HOME\})/.test(t) || t === ".." || t.startsWith("../") || t.includes("/../")) return true;
     if (!t.startsWith("/")) return false;
-    const abs = normalize(t);
-    return ![ctx.worktree, ...ctx.writableDirs].some((d) => isInside(abs, d) && abs !== normalize(d));
+    // Each root under every name it goes by (macOS: /var/folders/.. is /private/var/folders/..).
+    const roots = [ctx.worktree, ...ctx.writableDirs, ...(ctx.extraRoots ?? []), ...tempRoots()]
+      .map((d) => normalize(d).replace(/(.)\/+$/, "$1"))
+      .flatMap((d) => [d, realPath(d)]);
+    const within = (p: string) => roots.some((d) => isInside(p, d) && p !== d);
+    // Both the path as written and where it really leads (a symlink in tmp can point anywhere).
+    const abs = normalize(t).replace(/(.)\/+$/, "$1");
+    return !within(abs) || !within(realPath(abs));
   });
 }
 

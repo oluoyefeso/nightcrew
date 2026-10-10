@@ -518,7 +518,7 @@ function Site() {
                   key={name as string}
                   className={clsx(
                     "grid content-start gap-2 rounded-2xl p-5",
-                    i === 4 ? "border border-line border-dashed" : "bg-surface ring-1",
+                    i === 4 ? "border border-line-strong border-dashed" : "bg-surface ring-1",
                     i === 3 ? "ring-[color-mix(in_srgb,var(--dawn)_55%,transparent)]" : i < 4 && "ring-line",
                   )}
                   style={{ minHeight: `${120 + (h as number) * 36}px` }}

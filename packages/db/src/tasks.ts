@@ -142,7 +142,8 @@ export function createTask(db: Db, input: NewTask): Task {
     status,
     position: nextPosition(db, status),
     dependsOn: input.dependsOn ?? [],
-    tokenBudget: input.tokenBudget ?? DEFAULT_TASK_TOKENS,
+    // The default never exceeds the daily budget, or the task could never start.
+    tokenBudget: input.tokenBudget ?? Math.min(DEFAULT_TASK_TOKENS, getSettings(db).dailyTokenBudget),
     maxMinutes: input.maxMinutes ?? DEFAULT_TASK_MINUTES,
     branch: uniqueBranch(db, input.repoId, branchFor(input.title, type)),
     model: input.model ?? null,

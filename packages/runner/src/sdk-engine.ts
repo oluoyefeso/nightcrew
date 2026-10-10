@@ -1,9 +1,9 @@
 // Runs a phase through the Claude Agent SDK on this machine. Uses
 // ANTHROPIC_API_KEY when it's set, otherwise the local Claude Code login.
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import {
   type HookCallback,
   type Options,
@@ -232,21 +232,48 @@ export class SdkEngine implements AgentEngine {
 /** Prefixes of real remote URLs. Pushes to them are rewritten to a scheme git can't speak. */
 const PUSH_PREFIXES = ["https://", "http://", "ssh://", "git://", "git@"];
 
+/** Credentials the agent has no use for. The claude process keeps ANTHROPIC_* and CLAUDE_* to sign in. */
+const CREDENTIAL_VARS = new Set([
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "GH_ENTERPRISE_TOKEN",
+  "GITHUB_ENTERPRISE_TOKEN",
+  "GITHUB_PAT",
+  "NPM_TOKEN",
+  "NODE_AUTH_TOKEN",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "TYPESAFE_API_KEY",
+]);
+const CREDENTIAL_PREFIXES = ["AWS_", "AZURE_", "SLACK_"];
+
+/** The environment without cloud, registry and chat credentials. */
+export function withoutCredentials(base: NodeJS.ProcessEnv): Record<string, string | undefined> {
+  return Object.fromEntries(
+    Object.entries(base).filter(([k]) => !CREDENTIAL_VARS.has(k) && !CREDENTIAL_PREFIXES.some((p) => k.startsWith(p))),
+  );
+}
+
 /**
- * The agent's environment: this process's, plus git config that makes any
- * `git push` to a real remote fail. Only the agent's subprocess gets it; this
- * process still pushes task branches itself. The SDK's `env` replaces the
- * child's environment, so the base is copied in.
+ * The agent's environment: this process's, minus credentials, plus git config
+ * that makes any `git push` to a real remote fail. Only the agent's
+ * subprocess gets it; this process still pushes task branches itself. The
+ * SDK's `env` replaces the child's environment, so the base is copied in.
  */
 export function agentEnv(base: NodeJS.ProcessEnv): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = { ...base, GIT_TERMINAL_PROMPT: "0" };
+  const env: Record<string, string | undefined> = { ...withoutCredentials(base), GIT_TERMINAL_PROMPT: "0" };
+  // pushInsteadOf matches URL prefixes, which misses scp-style aliases like
+  // `gh:acme/widgets`. A push URL on origin covers those for origin.
+  const entries: [string, string][] = [
+    ...PUSH_PREFIXES.map((prefix): [string, string] => ["url.nightcrew-blocked://.pushInsteadOf", prefix]),
+    ["remote.origin.pushurl", "nightcrew-blocked://blocked"],
+  ];
   // Append after any GIT_CONFIG_* entries already set, rather than clobber them.
   const start = Number.parseInt(base.GIT_CONFIG_COUNT ?? "0", 10) || 0;
-  PUSH_PREFIXES.forEach((prefix, i) => {
-    env[`GIT_CONFIG_KEY_${start + i}`] = "url.nightcrew-blocked://.pushInsteadOf";
-    env[`GIT_CONFIG_VALUE_${start + i}`] = prefix;
+  entries.forEach(([key, value], i) => {
+    env[`GIT_CONFIG_KEY_${start + i}`] = key;
+    env[`GIT_CONFIG_VALUE_${start + i}`] = value;
   });
-  env.GIT_CONFIG_COUNT = String(start + PUSH_PREFIXES.length);
+  env.GIT_CONFIG_COUNT = String(start + entries.length);
   return env;
 }
 
@@ -263,19 +290,19 @@ const CACHE_DIRS = [
 
 /**
  * OS sandbox for Bash (Seatbelt on macOS, bubblewrap on Linux). Writes are
- * limited to the worktree, its git data (not hooks or config), the artifact
- * folder, temp and package caches. The model can't opt out of it. Network is
- * left open: tests and installs need it, and the guard handles network writes.
- * Where the sandbox can't start (Linux without bubblewrap), Bash runs
- * unsandboxed with the guard only.
+ * limited to the worktree, the git data a commit on the task branch needs,
+ * the artifact folder, temp and package caches. The model can't opt out of
+ * it. Network is left open: tests and installs need it, and the guard handles
+ * network writes. Where the sandbox can't start (Linux without bubblewrap),
+ * Bash runs unsandboxed with the guard only.
  */
 export function sandboxFor(req: PhaseRequest, home = homedir()): SandboxSettings {
-  const git = gitDirs(req.cwd);
+  const git = gitWrites(req.cwd, req.guard.protectedBranches);
   const allowWrite = [
     req.cwd,
     ...req.guard.writableDirs,
     tmpdir(),
-    ...(git ? [git.dir, join(git.common, "objects"), join(git.common, "refs"), join(git.common, "logs")] : []),
+    ...(git?.allow ?? []),
     ...CACHE_DIRS.map((d) => join(home, d)),
   ];
   return {
@@ -285,26 +312,124 @@ export function sandboxFor(req: PhaseRequest, home = homedir()): SandboxSettings
     allowUnsandboxedCommands: false,
     filesystem: {
       allowWrite: [...new Set(allowWrite)],
-      // Hooks and config would run code on this machine at NightCrew's next git command.
-      ...(git ? { denyWrite: [join(git.common, "hooks"), join(git.common, "config")] } : {}),
+      ...(git ? { denyWrite: git.deny } : {}),
     },
     network: { allowedDomains: ["*"], allowLocalBinding: true },
   };
 }
 
-/** The worktree's own git dir and the repo's shared one. Null if cwd isn't a repo root. */
-function gitDirs(cwd: string): { dir: string; common: string } | null {
+/**
+ * The git paths the agent may write, and the ones it may not. A commit in a
+ * linked worktree writes the worktree's own git dir (index, logs/HEAD, a
+ * short-lived HEAD.lock), new objects, and the task branch's ref through
+ * `<ref>.lock` then a rename; stash writes refs/stash. Those are allowed.
+ *
+ * Claude Code's sandbox also opens the whole shared .git to a linked
+ * worktree, so the denies are the real boundary, and they win over any allow:
+ * every other branch that exists now and every protected branch (main, the
+ * ship and train branches) even if it doesn't exist yet, tags, packed-refs,
+ * the other worktrees, the main checkout's HEAD and index, this worktree's
+ * HEAD (so it can't be pointed at another branch for NightCrew's next git
+ * command), the pointer files (so another repo can't be swapped in), and
+ * hooks, config, legacy remotes, submodules and alternates (code or URLs this
+ * machine's git would act on). A branch the agent creates under a new name is
+ * not covered; it can't move one NightCrew relies on.
+ */
+function gitWrites(cwd: string, protectedBranches: string[]): { allow: string[]; deny: string[] } | null {
+  const git = gitDirs(cwd);
+  if (!git) return null;
+  const { dir, common, branch } = git;
+  const deny = [
+    join(dir, "HEAD"),
+    join(common, "HEAD"),
+    join(common, "index"),
+    join(common, "hooks"),
+    join(common, "config"),
+    join(common, "config.worktree"),
+    join(common, "info"),
+    join(common, "commondir"),
+    join(common, "packed-refs"),
+    join(common, "remotes"),
+    join(common, "branches"),
+    join(common, "modules"),
+    join(common, "objects", "info", "alternates"),
+    join(common, "refs", "tags"),
+  ];
+  // The repo's main checkout: its .git sits inside the writable cwd, so deny
+  // every ref. Tasks always run in linked worktrees; this covers compose.
+  if (dir === common) return { allow: [], deny: [...new Set([...deny, join(common, "refs")])] };
+
+  deny.push(join(cwd, ".git"), join(dir, "commondir"), join(dir, "gitdir"), join(dir, "config.worktree"));
+  for (const other of [...new Set([...localBranches(common), ...protectedBranches])]) {
+    if (other === branch && !protectedBranches.includes(other)) continue;
+    const ref = join(common, "refs", "heads", other);
+    deny.push(ref, `${ref}.lock`);
+  }
+  for (const wt of listDir(join(common, "worktrees"))) {
+    if (join(common, "worktrees", wt) !== dir) deny.push(join(common, "worktrees", wt));
+  }
+
+  const allow = [dir, join(common, "objects")];
+  for (const ref of ["refs/stash", ...(branch ? [`refs/heads/${branch}`] : [])]) {
+    const file = join(common, ref);
+    const log = join(common, "logs", ref);
+    allow.push(file, `${file}.lock`, log);
+    // A branch with a slash lives in a nested folder, and a packed branch has
+    // none; make it here, on the host, in case the sandbox can't.
+    for (const d of [dirname(file), dirname(log)]) {
+      try {
+        mkdirSync(d, { recursive: true });
+      } catch {}
+    }
+  }
+  return { allow, deny: [...new Set(deny)] };
+}
+
+/** Local branch names: loose ref files under refs/heads plus packed ones. */
+function localBranches(common: string): string[] {
+  const heads = join(common, "refs", "heads");
+  const loose = listDir(heads, true).filter((f) => !f.endsWith(".lock"));
+  let packed: string[] = [];
+  try {
+    packed = [...readFileSync(join(common, "packed-refs"), "utf8").matchAll(/^[0-9a-f]+ refs\/heads\/(.+)$/gm)].map(
+      (m) => m[1] as string,
+    );
+  } catch {}
+  return [...new Set([...loose, ...packed])];
+}
+
+/** File names in a folder (relative paths when recursive). Empty if it can't be read. */
+function listDir(path: string, recursive = false): string[] {
+  try {
+    return readdirSync(path, { withFileTypes: true, recursive })
+      .filter((e) => (recursive ? e.isFile() : true))
+      .map((e) => relative(path, join(e.parentPath, e.name)));
+  } catch {
+    return [];
+  }
+}
+
+/** The worktree's own git dir, the repo's shared one and the checked out branch. Null if cwd isn't a repo root. */
+function gitDirs(cwd: string): { dir: string; common: string; branch: string | null } | null {
   const dotGit = join(cwd, ".git");
   try {
-    if (statSync(dotGit).isDirectory()) return { dir: dotGit, common: dotGit };
-    const pointer = readFileSync(dotGit, "utf8")
-      .match(/^gitdir:\s*(.+)$/m)?.[1]
+    let dir = dotGit;
+    let common = dotGit;
+    if (!statSync(dotGit).isDirectory()) {
+      const pointer = readFileSync(dotGit, "utf8")
+        .match(/^gitdir:\s*(.+)$/m)?.[1]
+        ?.trim();
+      if (!pointer) return null;
+      dir = resolve(cwd, pointer);
+      const commondir = join(dir, "commondir");
+      common = existsSync(commondir) ? resolve(dir, readFileSync(commondir, "utf8").trim()) : dir;
+    }
+    const head = readFileSync(join(dir, "HEAD"), "utf8")
+      .match(/^ref:\s*refs\/heads\/(.+)$/m)?.[1]
       ?.trim();
-    if (!pointer) return null;
-    const dir = resolve(cwd, pointer);
-    const commondir = join(dir, "commondir");
-    const common = existsSync(commondir) ? resolve(dir, readFileSync(commondir, "utf8").trim()) : dir;
-    return { dir, common };
+    // A name that climbs out of refs/heads gets no ref at all.
+    const branch = head && !head.split("/").includes("..") ? head : null;
+    return { dir, common, branch };
   } catch {
     return null;
   }

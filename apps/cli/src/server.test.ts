@@ -7,6 +7,8 @@ import { createApp } from "./server";
 
 let db: Db;
 let app: ReturnType<typeof createApp>;
+const KEY = "k".repeat(64);
+let locked: ReturnType<typeof createApp>;
 
 beforeEach(() => {
   db = openDb(":memory:");
@@ -14,6 +16,7 @@ beforeEach(() => {
   const dataDir = join(tmpdir(), "nc-server");
   const crew = new Crew({ db, engine, dataDir, publish: false });
   app = createApp({ db, cwd: dataDir, crew, engine, dataDir, publish: false });
+  locked = createApp({ db, cwd: dataDir, crew, engine, dataDir, publish: false, token: KEY });
 });
 
 const error = async (res: Response) => ((await res.json()) as { error: string }).error;
@@ -83,5 +86,72 @@ describe("local API guard", () => {
     const res = await app.request("/api/boom");
     expect(res.status).toBe(500);
     expect(await error(res)).toBe("Something broke.");
+  });
+});
+
+describe("per-launch key", () => {
+  const host = "localhost:3721";
+
+  test("the API refuses a caller without the key", async () => {
+    // Value: protects=a local process or another localhost page can't read or drive the API without the printed link; fails_when=the token check is dropped from the /api middleware; why_new=D10 adds the per-launch key; seam=none
+    const res = await locked.request("/api/crew", { headers: { host } });
+    expect(res.status).toBe(401);
+    expect(await error(res)).toBe("Open NightCrew from the link it printed in your terminal.");
+    const wrong = await locked.request("/api/crew", { headers: { host, "x-nightcrew-token": "nope" } });
+    expect(wrong.status).toBe(401);
+    const wrongCookie = await locked.request("/api/crew", { headers: { host, cookie: "nc_session_3721=nope" } });
+    expect(wrongCookie.status).toBe(401);
+  });
+
+  test("the printed link sets the cookie and redirects without the key", async () => {
+    // Value: protects=opening ?t=<key> logs the browser in with an HttpOnly SameSite=Strict cookie and strips the key from the URL; fails_when=the cookie flags change or the redirect keeps ?t; why_new=D10 adds the per-launch key; seam=none
+    const res = await locked.request(`http://${host}/?t=${KEY}&night=n1`);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/?night=n1");
+    const cookie = res.headers.get("set-cookie") ?? "";
+    expect(cookie).toContain(`nc_session_3721=${KEY}`);
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("SameSite=Strict");
+    expect(cookie).toContain("Path=/");
+  });
+
+  test("the cookie or the header opens the API", async () => {
+    // Value: protects=the dashboard (cookie) and scripted callers (X-NightCrew-Token) still get in with the key; fails_when=hasKey stops reading either one; why_new=D10 adds the per-launch key; seam=none
+    const byCookie = await locked.request("/api/crew", {
+      headers: { host, cookie: `other=1; nc_session_3721=${KEY}` },
+    });
+    expect(byCookie.status).toBe(200);
+    const byHeader = await locked.request("/api/crew", { headers: { host, "x-nightcrew-token": KEY } });
+    expect(byHeader.status).toBe(200);
+  });
+
+  test("a page without the key gets the explainer, its assets still load", async () => {
+    // Value: protects=a stray tab gets a plain explanation, not the dashboard shell; fails_when=the page gate is dropped or blocks /assets; why_new=D10 adds the per-launch key; seam=none
+    const page = await locked.request("/", { headers: { host } });
+    expect(page.status).toBe(401);
+    expect(await page.text()).toContain("Open NightCrew from the link it printed in your terminal.");
+    const asset = await locked.request("/assets/app.js", { headers: { host } });
+    expect(asset.status).not.toBe(401);
+  });
+
+  test("a write from another localhost port is refused, even body-less", async () => {
+    // Value: protects=a page on localhost:5173 (or any other port) can't fire body-less POSTs like stop-all at the dashboard; fails_when=the Origin check goes back to any-localhost; why_new=the Origin check ignored the port; seam=none
+    const res = await locked.request("/api/crew/pause", {
+      method: "POST",
+      headers: { host, origin: "http://localhost:5173", "x-nightcrew-token": KEY },
+    });
+    expect(res.status).toBe(403);
+    expect(getSettings(db).dispatch).toBe(true);
+    const same = await locked.request("/api/crew/pause", {
+      method: "POST",
+      headers: { host, origin: `http://${host}`, "x-nightcrew-token": KEY },
+    });
+    expect(same.status).toBe(200);
+  });
+
+  test("without a token option the app answers as before", async () => {
+    // Value: protects=tests and dev (NIGHTCREW_DEV, --dev) work without a key; fails_when=the token check runs when no token was given; why_new=D10 made the key optional; seam=none
+    expect((await app.request("/api/crew", { headers: { host } })).status).toBe(200);
+    expect((await app.request(`/?t=${KEY}`, { headers: { host } })).status).not.toBe(302);
   });
 });

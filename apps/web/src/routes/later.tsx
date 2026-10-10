@@ -11,7 +11,8 @@ export function LaterPage() {
   const archived = useQuery(tasksQuery(["archived", "done"]));
   const invalidate = useInvalidateTasks();
   const move = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: string }) => api.patch(`/api/tasks/${id}`, { status }),
+    mutationFn: ({ id, ...patch }: { id: string; status: string; runAt?: null }) =>
+      api.patch(`/api/tasks/${id}`, patch),
     onSuccess: invalidate,
   });
 
@@ -62,7 +63,7 @@ export function LaterPage() {
                   {t.repoName} · {TASK_TYPE_LABEL[t.type]} · ≤{formatTokens(t.tokenBudget)} tokens
                 </span>
               </Link>
-              <Button size="sm" onClick={() => move.mutate({ id: t.id, status: "queued" })}>
+              <Button size="sm" onClick={() => move.mutate({ id: t.id, status: "queued", runAt: null })}>
                 Run now
               </Button>
               <button

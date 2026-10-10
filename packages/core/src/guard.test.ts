@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type GuardContext, globToRegExp, guardToolCall } from "./guard";
@@ -270,5 +270,67 @@ describe("globToRegExp", () => {
     ["./README.md", "README.md", true],
   ])("%s ~ %s → %p", (glob, path, expected) => {
     expect(globToRegExp(glob).test(path)).toBe(expected);
+  });
+});
+
+describe("cycle 2 guard rows", () => {
+  test.each([
+    "git fetch origin +HEAD:refs/heads/main",
+    "git fetch origin crew/x:main",
+    "git fetch . HEAD:production",
+    "git -C . fetch origin +refs/heads/x:refs/heads/main",
+    "git pull origin crew/x:main",
+    "git send-pack origin HEAD:main",
+    "git receive-pack .",
+    "git-send-pack origin main",
+  ])("writing a protected branch another way is refused: %s", (command) => {
+    // Value: protects=fetch refspecs and the plumbing behind push can't land commits on a protected branch; fails_when=protectedBranchIn stops reading fetch/pull refspec destinations or the push rule drops send-pack; why_new=only checkout, branch and update-ref were covered; seam=none
+    expect(allowed("Bash", { command })).toBe(false);
+  });
+
+  test.each([
+    "git fetch origin",
+    "git fetch origin main",
+    "git fetch origin main:refs/remotes/origin/main",
+    "git pull --ff-only",
+  ])("ordinary fetches still pass: %s", (command) => {
+    // Value: protects=agents can still update remote-tracking refs; fails_when=the refspec rule over-matches plain fetches; why_new=the fetch rule is new; seam=none
+    expect(allowed("Bash", { command })).toBe(true);
+  });
+
+  test.each([
+    ["gh auth token", false],
+    ["gh auth token --hostname github.com", false],
+    ["gh auth status --show-token", false],
+    ["gh auth status -t", false],
+    ["gh auth setup-git", false],
+    ["gh auth status", true],
+  ])("GitHub credentials stay hidden: %s → allowed %p", (command, expected) => {
+    // Value: protects=an agent can't print the GitHub token and leak it into logs or the network; fails_when=the gh auth rule is dropped or loosened; why_new=gh auth token was allowed; seam=none
+    expect(allowed("Bash", { command })).toBe(expected);
+  });
+
+  test("recursive rm may clear inside the temp dir, never the temp dir itself", () => {
+    // Value: protects=agents can clean up scratch folders under os.tmpdir() and /tmp (the OS sandbox allows them) while /, ~ and other absolute paths stay refused; fails_when=deletesOutside stops adding temp roots, or allows the root itself or a symlink out of tmp; why_new=rm -rf in tmp was refused; seam=none
+    const scratch = mkdtempSync(join(tmpdir(), "nc-guard-rm-"));
+    mkdirSync(join(scratch, "out"));
+    symlinkSync("/usr", join(scratch, "escape"));
+    expect(allowed("Bash", { command: `rm -rf ${join(scratch, "out")}` })).toBe(true);
+    expect(allowed("Bash", { command: `rm -rf ${scratch}` })).toBe(true);
+    expect(allowed("Bash", { command: "rm -rf /tmp/nc-build" })).toBe(true);
+    expect(allowed("Bash", { command: `rm -rf ${tmpdir()}` })).toBe(false);
+    expect(allowed("Bash", { command: "rm -rf /tmp" })).toBe(false);
+    expect(allowed("Bash", { command: "rm -rf /tmp/../etc" })).toBe(false);
+    expect(allowed("Bash", { command: `rm -rf ${join(scratch, "escape")}/` })).toBe(false);
+    expect(allowed("Bash", { command: "rm -rf /var/lib" })).toBe(false);
+    expect(allowed("Bash", { command: "rm -rf ~/scratch" })).toBe(false);
+  });
+
+  test("extra roots widen where recursive rm may reach", () => {
+    // Value: protects=callers (managed mode) can allow cleanup under their own folders without loosening anything else; fails_when=extraRoots is ignored or allows its own root; why_new=GuardContext.extraRoots is new; seam=none
+    const extra = { ...ctx, extraRoots: ["/workspace/cache"] };
+    expect(allowed("Bash", { command: "rm -rf /workspace/cache/build" }, extra)).toBe(true);
+    expect(allowed("Bash", { command: "rm -rf /workspace/cache" }, extra)).toBe(false);
+    expect(allowed("Bash", { command: "rm -rf /workspace/cache/build" })).toBe(false);
   });
 });

@@ -3,7 +3,7 @@ export * from "./crew";
 export { DemoEngine } from "./demo-engine";
 export * from "./engine";
 export { type Evidence, type Shot, summarizeEvidence } from "./evidence";
-export { detectPreview, detectSetupCommand, detectTestCommand, inspectRepo, type RepoInfo } from "./git";
+export { detectPreview, detectSetupCommand, detectTestCommand, inspectRepo, type RepoInfo, withRepoLock } from "./git";
 export { canShip, publishTrain, pullCar, shipTask, undoShip } from "./landing";
 export { ManagedEngine, type ManagedEngineOptions } from "./managed-engine";
 export * from "./pipeline";

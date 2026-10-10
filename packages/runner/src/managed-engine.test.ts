@@ -376,6 +376,35 @@ describe("ManagedEngine", () => {
     expect(events.some((e) => e.kind === "denied" && e.text.includes(".env"))).toBe(true);
   });
 
+  // Value: protects=managed agents cleaning build output by its sandbox path; fails_when=Bash commands are judged with the /workspace mount path instead of the local worktree; why_new=only file_path/path were rewritten before; seam=none
+  test("shell commands are judged with the mount path mapped to the worktree", async () => {
+    let calls = 0;
+    // Only a whole mount path is mapped, not one inside a longer path or name.
+    const cmds = [
+      "rm -rf /workspace/widgets/dist",
+      "rm -rf /srv/workspace/widgets/dist",
+      "rm -rf /workspace/widgets-old",
+    ];
+    const fake = new FakeClient(async function* () {
+      if (calls++) return;
+      const uses = cmds.map((command) => toolUse("bash", { command }, "ask"));
+      for (const u of uses) yield u;
+      yield idle("requires_action", { event_ids: uses.map((u) => u.id) });
+      yield idle("end_turn");
+    });
+    const events: EngineEvent[] = [];
+    await engineFor(fake).runPhase(request(), (e) => events.push(e));
+    const confirmations = fake.sent().filter((e) => e.type === "user.tool_confirmation");
+    expect(confirmations.map((c) => c.type === "user.tool_confirmation" && c.result)).toEqual([
+      "allow",
+      "deny",
+      "deny",
+    ]);
+    // What the agent runs and what the live view shows keep the sandbox path.
+    const allowed = events.find((e) => e.kind === "tool");
+    expect(allowed?.kind === "tool" && allowed.input).toEqual({ command: "rm -rf /workspace/widgets/dist" });
+  });
+
   test("a 429 surfaces as rateLimited", async () => {
     const fake = new FakeClient(script());
     fake.sessionError = Object.assign(new Error("429 rate_limit_error"), { status: 429 });

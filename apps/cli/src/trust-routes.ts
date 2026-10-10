@@ -23,6 +23,7 @@ import {
 } from "@nightcrew/db";
 import { pullCar, undoShip } from "@nightcrew/runner";
 import type { Hono } from "hono";
+import { pick, shipBlocker } from "./routes";
 
 export function mountTrustRoutes(app: Hono, deps: { db: Db; publish: boolean }) {
   const { db } = deps;
@@ -42,12 +43,8 @@ export function mountTrustRoutes(app: Hono, deps: { db: Db; publish: boolean }) 
     const repo = getRepo(db, c.req.param("id"));
     if (!repo) return c.json({ error: "Repo not found." }, 404);
     if (level !== "train" && level !== "ship") return c.json({ error: "Promote to train or ship." }, 400);
-    if (
-      level === "ship" &&
-      (!repo.shipBranch || repo.protectedBranches.includes(repo.shipBranch) || !repo.allowShip.length)
-    ) {
-      return c.json({ error: "Set a ship branch and the paths allowed to ship in Settings first." }, 400);
-    }
+    const blocker = level === "ship" ? shipBlocker(repo) : null;
+    if (blocker) return c.json({ error: blocker }, 400);
     return c.json(updateRepo(db, repo.id, { level }));
   });
 
@@ -98,17 +95,15 @@ export function mountTrustRoutes(app: Hono, deps: { db: Db; publish: boolean }) 
     if (!r.repoId || !getRepo(db, r.repoId)) return c.json({ error: "Pick a repo." }, 400);
     if (!r.days?.length) return c.json({ error: "Pick at least one day." }, 400);
     if (r.type && !TASK_TYPES.includes(r.type)) return c.json({ error: "Unknown task type." }, 400);
+    const err = routineTextError(r);
+    if (err) return c.json({ error: err }, 400);
     return c.json(createRoutine(db, { ...r, title: r.title, repoId: r.repoId, days: r.days }), 201);
   });
   app.patch("/api/routines/:id", async (c) => {
     const id = c.req.param("id");
     if (!getRoutine(db, id)) return c.json({ error: "Routine not found." }, 404);
     const raw = await body<NonNullable<Parameters<typeof updateRoutine>[2]>>(c);
-    const r = Object.fromEntries(
-      (["title", "brief", "type", "days", "enabled", "scope", "criteria"] as const).flatMap((k) =>
-        raw[k] === undefined ? [] : [[k, raw[k]]],
-      ),
-    ) as typeof raw;
+    const r = pick(raw, ["title", "brief", "type", "days", "enabled", "scope", "criteria"]);
     if (Object.keys(r).length === 0) return c.json({ error: "Nothing to change." }, 400);
     if (r.title !== undefined && !(typeof r.title === "string" && r.title.trim()))
       return c.json({ error: "Give the routine a title." }, 400);
@@ -120,6 +115,8 @@ export function mountTrustRoutes(app: Hono, deps: { db: Db; publish: boolean }) 
       return c.json({ error: "Pick at least one day." }, 400);
     if (r.enabled !== undefined && typeof r.enabled !== "boolean")
       return c.json({ error: "Turn the routine on or off (true or false)." }, 400);
+    const err = routineTextError(r);
+    if (err) return c.json({ error: err }, 400);
     return c.json(updateRoutine(db, id, r));
   });
   app.delete("/api/routines/:id", (c) => {
@@ -183,4 +180,13 @@ export function mountTrustRoutes(app: Hono, deps: { db: Db; publish: boolean }) 
     }
     return c.json({ added, errors });
   });
+}
+
+/** The brief is text, scope and criteria are lists of text, on create and edit alike. */
+function routineTextError(r: { brief?: unknown; scope?: unknown; criteria?: unknown }): string | null {
+  const strings = (v: unknown) => Array.isArray(v) && v.every((x) => typeof x === "string");
+  if (r.brief !== undefined && typeof r.brief !== "string") return "Write the brief as text.";
+  if (r.scope !== undefined && !strings(r.scope)) return "Scope is a list of file globs, like src/**.";
+  if (r.criteria !== undefined && !strings(r.criteria)) return "Criteria are a list of sentences.";
+  return null;
 }

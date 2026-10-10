@@ -2,8 +2,8 @@
 // repair attempt) → review → commit, push and draft PR. Every step is written
 // to run_events so the dashboard can show it live.
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { formatTokens, nightIdFor, type Repo, type Task } from "@nightcrew/core";
 import { ALWAYS_PROTECTED, matchesAny } from "@nightcrew/core/guard";
 import {
@@ -16,6 +16,7 @@ import {
   getRepo,
   getTask,
   listNotes,
+  listTrains,
   markShipped,
   type RunEvent,
   setRunTrain,
@@ -32,6 +33,8 @@ import {
   dropSetupFiles,
   ensureWorktree,
   fingerprints,
+  forkPoint,
+  git,
   openOrUpdatePr,
   push,
   run,
@@ -49,6 +52,7 @@ import {
   reviewPrompt,
 } from "./prompts";
 import { chooseWorkflow, NoReflexes, type Reflexes, scoreConfidence } from "./reflexes";
+import { runCheck } from "./sandbox";
 
 export interface PipelineDeps {
   db: Db;
@@ -70,7 +74,7 @@ export interface TaskOutcome {
   tokens: number;
   prUrl: string | null;
   reason: string | null;
-  /** An engine reported a rate limit and the run didn't finish. */
+  /** The run failed and its last phase hit a rate limit. */
   rateLimited: boolean;
   /** Tail of the failing check's output, or the last error, for telling flaky from real. */
   log?: string;
@@ -169,7 +173,8 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
   };
   const onEngine = (e: EngineEvent) => emit(e.kind, e.text, "tool" in e ? { tool: e.tool } : null);
   const account = (r: PhaseResult) => {
-    if (r.rateLimited) state.rateLimited = true;
+    // Only the latest phase counts: an early rate limit the run got past isn't why it ended.
+    state.rateLimited = r.rateLimited;
     state.costUsd += r.costUsd;
     state.tokensIn += r.tokensIn;
     state.tokensOut += r.tokensOut;
@@ -226,7 +231,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       tokens: used(),
       prUrl: state.prUrl,
       reason,
-      rateLimited: status !== "complete" && state.rateLimited,
+      rateLimited: status === "failed" && state.rateLimited,
       log: status === "complete" ? undefined : (state.log ?? reason ?? "").slice(-4000),
     };
   };
@@ -237,6 +242,9 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     phase("setup", "Preparing the worktree");
     const worktree = await ensureWorktree(repo.path, task.branch, repo.defaultBranch);
     state.worktree = worktree;
+    // Pinned before any agent runs: an agent can move the default branch, not this sha.
+    const forkSha = await pinnedBase(deps.dataDir, task.id, worktree, repo.defaultBranch);
+    const warn = (text: string) => emit("info", text);
     // A fresh worktree has no dependencies; tests and previews need them.
     // Whatever the install itself writes is NightCrew's, not the agent's.
     if (
@@ -244,11 +252,11 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       !(repo.setupCommand.match(/\b(bun|npm|pnpm|yarn)\b/) && existsSync(join(worktree, "node_modules")))
     ) {
       emit("info", `Installing dependencies: ${repo.setupCommand}`);
-      const before = new Set(await changedFiles(worktree, repo.defaultBranch));
-      const setup = await run(["sh", "-c", repo.setupCommand], worktree, { timeoutMs: 10 * 60_000, signal: stop });
+      const before = new Set(await changedFiles(worktree, forkSha));
+      const setup = await runCheck(repo.setupCommand, worktree, { timeoutMs: 10 * 60_000, signal: stop, warn });
       if (!setup.ok)
         emit("info", `Dependency install failed (exit ${setup.code}). Continuing; the crew can install what it needs.`);
-      const touched = (await changedFiles(worktree, repo.defaultBranch)).filter((f) => !before.has(f));
+      const touched = (await changedFiles(worktree, forkSha)).filter((f) => !before.has(f));
       setupFiles = await fingerprints(worktree, touched);
     }
     if (stop.aborted) return await halt("while preparing the worktree");
@@ -257,7 +265,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       repo,
       artifactsDir,
       feedback: listNotes(db, task.id),
-      resumeCommits: await commitsAhead(worktree, repo.defaultBranch),
+      resumeCommits: await commitsAhead(worktree, forkSha),
     };
     const base = {
       cwd: worktree,
@@ -265,7 +273,8 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         worktree,
         writableDirs: [artifactsDir],
         scope: task.scope,
-        protectedBranches: repo.protectedBranches,
+        // Integration branches too: only NightCrew's landing code moves them.
+        protectedBranches: [...new Set([...repo.protectedBranches, ...integrationBranches(db, repo, startedAt)])],
         readOnly: false,
       },
       signal: stop,
@@ -369,7 +378,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
 
     // Validate, with one repair attempt
     phase("validate", "Checking the work");
-    let check = await validate(worktree, task, repo, setupFiles, stop);
+    let check = await validate(worktree, task, repo, setupFiles, stop, forkSha, warn);
     artifact("tests", "Checks", check.log);
     if (stop.aborted) return await halt("while checking the work");
     if (!check.ok) {
@@ -392,7 +401,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       account(fix);
       if (stop.aborted) return await halt("while repairing");
       phase("validate", "Checking the repair");
-      check = await validate(worktree, task, repo, setupFiles, stop);
+      check = await validate(worktree, task, repo, setupFiles, stop, forkSha, warn);
       artifact("tests", "Checks", check.log);
       if (stop.aborted) return await halt("while checking the repair");
     }
@@ -410,6 +419,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         task,
         repo,
         worktree,
+        base: forkSha,
         artifactsDir,
         branchTestsPassed: check.ok,
         log: (text) => emit("info", text),
@@ -441,9 +451,11 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     if (stop.aborted) return await halt("while reviewing");
     const verdict = review.ok ? normalizeReview(review.structured) : null;
     if (verdict) {
-      // Missing evidence, or criteria the Skeptic never checked, means a person should look.
-      const unchecked = task.criteria.length > 0 && verdict.criteria.length === 0;
-      state.verdict = verdict.verdict === "ready" && !evidence?.missing.length && !unchecked ? "ready" : "needs_eyes";
+      // Missing evidence, or a criterion unmet or never checked, means a person should look.
+      const unchecked = verdict.criteria.length < task.criteria.length;
+      const unmet = verdict.criteria.some((c) => !c.met);
+      state.verdict =
+        verdict.verdict === "ready" && !evidence?.missing.length && !unchecked && !unmet ? "ready" : "needs_eyes";
       artifact("review", "REVIEW.md", renderReview(verdict));
       if (verdict.summary) state.summary = state.summary ?? verdict.summary;
     } else {
@@ -451,7 +463,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       artifact("review", "REVIEW.md", review.text || `The review didn't finish: ${review.error ?? "unknown error"}`);
     }
     // The reviewer may have fixed small things; checks must still pass.
-    const recheck = await validate(worktree, task, repo, setupFiles, stop);
+    const recheck = await validate(worktree, task, repo, setupFiles, stop, forkSha, warn);
     if (stop.aborted) return await halt("while rechecking after review");
     if (!recheck.ok) {
       state.log = recheck.log;
@@ -470,9 +482,9 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     phase("publish", "Committing");
     await dropSetupFiles(worktree, setupFiles);
     await commitAll(worktree, `${task.title}\n\nNightCrew task ${task.id}, run ${runId}.`);
-    state.stat = await diffStat(worktree, repo.defaultBranch);
+    state.stat = await diffStat(worktree, forkSha);
     const hasRemote = (await run(["git", "remote", "get-url", "origin"], worktree)).ok;
-    const files = await changedFiles(worktree, repo.defaultBranch);
+    const files = await changedFiles(worktree, forkSha);
 
     // Ship to dev: the crew merges it itself, when everything lines up.
     if (repo.level === "ship") {
@@ -510,7 +522,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         getOpenTrain(db, repo.id, nightId) ??
         createTrain(db, { repoId: repo.id, nightId, branch: trainBranch(nightId) });
       if (deps.publish && hasRemote) await push(worktree, task.branch);
-      const boarded = await boardTrain(repo, train, task.branch, task.title);
+      const boarded = await boardTrain(repo, train, task.branch, task.title, deps.publish);
       if (boarded.ok) {
         addCar(db, train.id, { runId, taskId: task.id, title: task.title, mergeSha: boarded.sha, state: "on" });
         setRunTrain(db, runId, train.id);
@@ -574,11 +586,12 @@ export async function validate(
   repo: Repo,
   setupFiles: Map<string, string> = new Map(),
   signal?: AbortSignal,
+  /** The pinned fork point; the default branch's name only when there's none. */
+  base: string = repo.defaultBranch,
+  warn?: (text: string) => void,
 ): Promise<CheckResult> {
   const fromSetup = await untouchedSetupFiles(worktree, setupFiles);
-  const files = (await changedFiles(worktree, repo.defaultBranch)).filter(
-    (f) => !f.startsWith(".worktrees/") && !fromSetup.has(f),
-  );
+  const files = (await changedFiles(worktree, base)).filter((f) => !f.startsWith(".worktrees/") && !fromSetup.has(f));
   const lines: string[] = [`Changed files (${files.length}):`, ...files.map((f) => `  ${f}`)];
   if (files.length === 0)
     return { ok: false, noChanges: true, reason: "No files changed.", log: lines.join("\n"), files };
@@ -599,7 +612,7 @@ export async function validate(
 
   const cmd = task.testCommand ?? repo.testCommand;
   if (cmd) {
-    const t = await run(["sh", "-c", cmd], worktree, { timeoutMs: 15 * 60_000, signal });
+    const t = await runCheck(cmd, worktree, { timeoutMs: 15 * 60_000, signal, warn });
     const out = `${t.stdout}\n${t.stderr}`.trim();
     lines.push("", `$ ${cmd}  (exit ${t.code})`, out.length > 8000 ? `…\n${out.slice(-8000)}` : out);
     if (!t.ok)
@@ -614,6 +627,33 @@ export async function validate(
     lines.push("", "No test command configured for this repo.");
   }
   return { ok: true, noChanges: false, reason: null, log: lines.join("\n"), files };
+}
+
+const SHA = /^[0-9a-f]{40,64}$/;
+
+/**
+ * The task's fork point, kept in NightCrew's data folder (which agents can't
+ * write) so a resumed task diffs against the same commit. Recomputed only
+ * when the saved one is no longer under the branch, e.g. after a rebase.
+ */
+async function pinnedBase(dataDir: string, taskId: string, worktree: string, defaultBranch: string): Promise<string> {
+  const file = join(dataDir, "bases", `${taskId}.sha`);
+  const saved = existsSync(file) ? readFileSync(file, "utf8").trim() : "";
+  if (SHA.test(saved) && (await git(worktree, "merge-base", "--is-ancestor", saved, "HEAD")).ok) return saved;
+  const sha = await forkPoint(worktree, defaultBranch);
+  if (SHA.test(sha)) {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${sha}\n`);
+  }
+  return sha;
+}
+
+/** The repo's ship branch and its train branches: tasks may never move them. */
+function integrationBranches(db: Db, repo: Repo, startedAt: string): string[] {
+  const trains = listTrains(db)
+    .filter((t) => t.repoId === repo.id && (t.status === "open" || t.status === "published"))
+    .map((t) => t.branch);
+  return [...(repo.shipBranch ? [repo.shipBranch] : []), trainBranch(nightIdFor(startedAt)), ...trains];
 }
 
 const VERDICTS = new Set(["ready", "needs_eyes", "not_done"]);

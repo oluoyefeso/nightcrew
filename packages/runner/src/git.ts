@@ -15,7 +15,13 @@ const KILL_GRACE_MS = 2000;
 export async function run(
   cmd: string[],
   cwd: string,
-  opts: { timeoutMs?: number; env?: Record<string, string>; signal?: AbortSignal } = {},
+  opts: {
+    timeoutMs?: number;
+    env?: Record<string, string>;
+    /** The environment to start from instead of NightCrew's own. */
+    baseEnv?: Record<string, string>;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<Exec> {
   if (opts.signal?.aborted) return { ok: false, code: -1, stdout: "", stderr: "Stopped." };
   try {
@@ -23,7 +29,7 @@ export async function run(
       cwd,
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, ...opts.env, GIT_TERMINAL_PROMPT: "0" },
+      env: { ...(opts.baseEnv ?? process.env), ...opts.env, GIT_TERMINAL_PROMPT: "0" },
     });
     const timer = opts.timeoutMs ? setTimeout(() => proc.kill(), opts.timeoutMs) : undefined;
     let stopped = false;
@@ -359,8 +365,28 @@ export async function commitsAhead(dir: string, base: string): Promise<number> {
   return Number((await git(dir, "rev-list", "--count", `${base}..HEAD`)).stdout.trim()) || 0;
 }
 
-export async function push(dir: string, branch: string): Promise<Exec> {
-  return git(dir, "push", "-u", "origin", branch);
+/**
+ * The commit a task branch forked from. Diffs and scope checks use this sha,
+ * not the default branch's name, so moving the local default branch can't
+ * hide a change. Computed on the host before any agent runs.
+ */
+export async function forkPoint(dir: string, defaultBranch: string): Promise<string> {
+  const sha = async (ref: string) => {
+    const r = await git(dir, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`);
+    return r.ok ? r.stdout.trim() : null;
+  };
+  const head = await sha("HEAD");
+  // A fresh branch sits exactly on the default branch it was made from.
+  if (head && head === (await sha(`refs/heads/${defaultBranch}`))) return head;
+  for (const ref of [`refs/remotes/origin/${defaultBranch}`, `refs/heads/${defaultBranch}`]) {
+    const mb = await git(dir, "merge-base", ref, "HEAD");
+    if (mb.ok && mb.stdout.trim()) return mb.stdout.trim();
+  }
+  return (await sha(defaultBranch)) ?? defaultBranch;
+}
+
+export async function push(dir: string, branch: string, timeoutMs?: number): Promise<Exec> {
+  return run(["git", "push", "-u", "origin", branch], dir, { timeoutMs });
 }
 
 export interface PrRef {

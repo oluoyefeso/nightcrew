@@ -109,7 +109,11 @@ export function SettingsPage() {
                 id="schedule"
                 type="time"
                 defaultValue={s.scheduleAt}
-                onBlur={(e) => e.target.value !== s.scheduleAt && save.mutate({ scheduleAt: e.target.value })}
+                onBlur={(e) => {
+                  // A cleared time field means "no change"; the schedule always needs a time.
+                  if (!e.target.value) e.target.value = s.scheduleAt;
+                  else if (e.target.value !== s.scheduleAt) save.mutate({ scheduleAt: e.target.value });
+                }}
                 className="font-mono"
               />
             </Field>
@@ -176,10 +180,25 @@ export function SettingsPage() {
 
 function RepoCard({ repo }: { repo: Repo }) {
   const qc = useQueryClient();
+  // A level picked here but not saved yet: Ship to dev needs a ship branch and
+  // allowed paths first, so picking it shows those fields and saves once they're set.
+  const [picked, setPicked] = useState<AutonomyLevel | null>(null);
+  const level = picked ?? repo.level;
+  const shipReady = (r: Pick<Repo, "shipBranch" | "allowShip">) => Boolean(r.shipBranch && r.allowShip.length);
   const update = useMutation({
-    mutationFn: (patch: Partial<Repo>) => api.patch(`/api/repos/${repo.id}`, patch),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["repos"] }),
+    mutationFn: (patch: Partial<Repo>) => api.patch<Repo>(`/api/repos/${repo.id}`, patch),
+    onSuccess: (saved, patch) => {
+      if (patch.level) setPicked(null);
+      // Ship was picked and this save completed its branch and paths: save the level now.
+      else if (picked === "ship" && saved.level !== "ship" && shipReady(saved)) update.mutate({ level: "ship" });
+      return qc.invalidateQueries({ queryKey: ["repos"] });
+    },
   });
+  const pickLevel = (l: AutonomyLevel) => {
+    setPicked(l === repo.level ? null : l);
+    if (l === "ship" && !shipReady(repo)) return update.reset();
+    if (l !== repo.level) update.mutate({ level: l });
+  };
   const remove = useMutation({
     mutationFn: () => api.del(`/api/repos/${repo.id}`),
     onSuccess: () => qc.invalidateQueries(),
@@ -203,12 +222,16 @@ function RepoCard({ repo }: { repo: Repo }) {
         </button>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Autonomy" htmlFor={`level-${repo.id}`} hint={LEVEL_HINT[repo.level]}>
-          <Select
-            id={`level-${repo.id}`}
-            value={repo.level}
-            onChange={(e) => update.mutate({ level: e.target.value as AutonomyLevel })}
-          >
+        <Field
+          label="Autonomy"
+          htmlFor={`level-${repo.id}`}
+          hint={
+            picked === "ship" && repo.level !== "ship"
+              ? "Not saved yet. Set a ship branch and the paths allowed to ship below."
+              : LEVEL_HINT[level]
+          }
+        >
+          <Select id={`level-${repo.id}`} value={level} onChange={(e) => pickLevel(e.target.value as AutonomyLevel)}>
             {(Object.keys(AUTONOMY_LABEL) as AutonomyLevel[]).map((l) => (
               <option key={l} value={l}>
                 {AUTONOMY_LABEL[l]}
@@ -227,7 +250,7 @@ function RepoCard({ repo }: { repo: Repo }) {
         </Field>
       </div>
       {update.error && <p className="text-[12.5px] text-bad">{update.error.message}</p>}
-      {(repo.level === "ship" || repo.level === "train") && (
+      {(level === "ship" || level === "train") && (
         <div className="grid gap-4 rounded-xl bg-raised/50 p-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field
@@ -238,7 +261,10 @@ function RepoCard({ repo }: { repo: Repo }) {
               <TextInput
                 id={`ship-${repo.id}`}
                 defaultValue={repo.shipBranch ?? ""}
-                onBlur={(e) => update.mutate({ shipBranch: e.target.value.trim() || null })}
+                onBlur={(e) => {
+                  const shipBranch = e.target.value.trim() || null;
+                  if (shipBranch !== repo.shipBranch) update.mutate({ shipBranch });
+                }}
                 placeholder="dev"
                 className="font-mono"
               />

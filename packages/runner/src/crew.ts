@@ -3,7 +3,7 @@
 // limits and the daily budget); scheduled tasks wait for their time. Each
 // agent reports back when it finishes.
 
-import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, openSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { formatTokens, nightIdFor, planQueue } from "@nightcrew/core";
 import {
@@ -57,6 +57,7 @@ export type CrewEvent =
 
 const RATE_LIMIT_WAITS_MS = [5, 10, 20].map((m) => m * 60_000);
 const TICK_MS = 15_000;
+const CRASH_RETRY_MS = 10 * 60_000;
 
 interface Running {
   agent: ActiveAgent;
@@ -236,7 +237,13 @@ export class Crew {
     )
       .then((outcome) => this.finished(task.id, task.title, task.repoId, outcome))
       .catch((e) => {
-        this.message = `"${task.title}" crashed: ${e instanceof Error ? e.message : String(e)}`;
+        // A crash must not strand the task in "running". It waits a while
+        // before the next try so a task that always crashes can't spin.
+        if (getTask(db, taskId)?.status === "running") {
+          const runAt = new Date(Date.now() + CRASH_RETRY_MS).toISOString();
+          updateTask(db, taskId, { status: "queued", runAt });
+        }
+        this.message = `"${task.title}" crashed: ${e instanceof Error ? e.message : String(e)} It goes back in the queue and tries again in ${CRASH_RETRY_MS / 60_000} minutes.`;
       })
       .finally(() => {
         this.running.delete(taskId);
@@ -249,6 +256,19 @@ export class Crew {
 
   private async finished(taskId: string, title: string, repoId: string, outcome: TaskOutcome) {
     const { db } = this.deps;
+
+    // Quitting: work cut short goes back in the queue for the next start, and
+    // nothing else happens (no retries, no pushes) on the way out.
+    if (this.halted) {
+      if (outcome.status === "timeout" || outcome.rateLimited) {
+        updateTask(db, taskId, { status: "queued" });
+        this.message = `"${title}" was stopped for quitting and goes back in the queue.`;
+      } else {
+        this.emit({ type: "report", outcome: { ...outcome, title, taskId } });
+      }
+      return;
+    }
+
     this.emit({ type: "report", outcome: { ...outcome, title, taskId } });
 
     if (outcome.rateLimited) {
@@ -285,7 +305,7 @@ export class Crew {
 
   /** Push the repo's open train and open (or refresh) its one PR. */
   private async publishTrains(repoId: string) {
-    if (!this.deps.publish) return;
+    if (!this.deps.publish || this.halted) return;
     const repo = getRepo(this.deps.db, repoId);
     if (!repo) return;
     for (const train of listTrains(this.deps.db).filter(
@@ -347,57 +367,139 @@ export class Crew {
 
 // ── One dispatcher at a time ────────────────────────────────────────────────
 
-export type CrewLock = { ok: true; release: () => void } | { ok: false; pid: number };
+export type CrewLock = { ok: true; release: () => void } | { ok: false; pid: number; file: string };
 
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    // EPERM: it exists, it just isn't ours.
-    return (e as NodeJS.ErrnoException).code === "EPERM";
-  }
+interface LockInfo {
+  pid: number;
+  startedAt: string;
+  nonce: string;
+  /** The owner's command line as `ps` showed it when it took the lock. */
+  command: string;
 }
 
 /**
  * Only one process may dispatch the queue (the dashboard or `nightcrew run`).
- * The lock is <dataDir>/crew.lock holding the owner's pid; a lock whose
- * process is gone is stale and taken over.
+ * The lock is <dataDir>/crew.lock naming its owner (pid, start time, a nonce
+ * and its command line). A lock is stale when its process is gone, or when
+ * that pid now belongs to some other program (pids get reused after a
+ * reboot); a stale lock is taken over.
  */
 export function takeCrewLock(dataDir: string): CrewLock {
   const file = join(dataDir, "crew.lock");
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const fd = openSync(file, "wx");
-      writeSync(fd, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
-      closeSync(fd);
-      let released = false;
-      return {
-        ok: true,
-        release: () => {
-          if (released) return;
-          released = true;
-          try {
-            if (lockPid(file) === process.pid) unlinkSync(file);
-          } catch {}
-        },
-      };
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-      const pid = lockPid(file);
-      if (pid && pid !== process.pid && alive(pid)) return { ok: false, pid };
-      try {
-        unlinkSync(file);
-      } catch {}
-    }
+  const mine: LockInfo = {
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+    nonce: crypto.randomUUID(),
+    command: processInfo(process.pid)?.command ?? "",
+  };
+  const body = JSON.stringify(mine);
+  const held = (): CrewLock => {
+    let released = false;
+    return {
+      ok: true,
+      release: () => {
+        if (released) return;
+        released = true;
+        try {
+          if (readLock(file)?.nonce === mine.nonce) unlinkSync(file);
+        } catch {}
+      },
+    };
+  };
+
+  try {
+    const fd = openSync(file, "wx");
+    writeSync(fd, body);
+    closeSync(fd);
+    return held();
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
   }
-  throw new Error(`Couldn't take the crew lock at ${file}.`);
+
+  const raw = readRaw(file);
+  const owner = readLock(file);
+  if (owner && owner.pid !== process.pid && ownsLock(owner)) return { ok: false, pid: owner.pid, file };
+
+  // Stale. Swap our lock in with one rename (no unlink-then-create gap), then
+  // read it back: if two processes raced, only the one whose nonce is there won.
+  const tmp = `${file}.${mine.nonce}.tmp`;
+  writeFileSync(tmp, body);
+  try {
+    if (readRaw(file) !== raw) {
+      // Someone else changed it while we looked: let their lock decide.
+      const now = readLock(file);
+      return { ok: false, pid: now?.pid ?? owner?.pid ?? 0, file };
+    }
+    renameSync(tmp, file);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+  const now = readLock(file);
+  if (now?.nonce === mine.nonce) return held();
+  return { ok: false, pid: now?.pid ?? owner?.pid ?? 0, file };
 }
 
-function lockPid(file: string): number | null {
+/** Is the lock's owner still alive and still a NightCrew process? */
+function ownsLock(owner: LockInfo): boolean {
   try {
-    const pid = Number((JSON.parse(readFileSync(file, "utf8")) as { pid?: unknown }).pid);
-    return Number.isInteger(pid) && pid > 0 ? pid : null;
+    process.kill(owner.pid, 0);
+  } catch {
+    // ESRCH: gone. EPERM: another user's process, so not a NightCrew of ours.
+    return false;
+  }
+  const info = processInfo(owner.pid);
+  if (!info) return false;
+  // A process that started after the lock was written can't have written it.
+  const lockedAt = Date.parse(owner.startedAt);
+  if (info.startedAt !== null && Number.isFinite(lockedAt) && info.startedAt > lockedAt + 5_000) return false;
+  if (owner.command && info.command === owner.command) return true;
+  return /nightcrew/i.test(info.command) || (Boolean(Bun.main) && info.command.includes(Bun.main));
+}
+
+/** The command line and start time of a live process, from `ps`. */
+function processInfo(pid: number): { command: string; startedAt: number | null } | null {
+  try {
+    const ps = Bun.spawnSync(["ps", "-o", "etime=", "-o", "command=", "-p", String(pid)], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    const line = ps.stdout.toString().trim();
+    if (!ps.success || !line) return null;
+    const [etime = "", ...rest] = line.split(/\s+/);
+    const secs = elapsedSeconds(etime);
+    return { command: rest.join(" "), startedAt: secs === null ? null : Date.now() - secs * 1000 };
+  } catch {
+    return null;
+  }
+}
+
+/** `ps` elapsed time, [[dd-]hh:]mm:ss, in seconds. */
+function elapsedSeconds(etime: string): number | null {
+  const m = etime.match(/^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/);
+  if (!m) return null;
+  const [, d = "0", h = "0", min = "0", sec = "0"] = m;
+  return ((Number(d) * 24 + Number(h)) * 60 + Number(min)) * 60 + Number(sec);
+}
+
+function readRaw(file: string): string | null {
+  try {
+    return readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+function readLock(file: string): LockInfo | null {
+  try {
+    const j = JSON.parse(readFileSync(file, "utf8")) as Partial<LockInfo>;
+    const pid = Number(j.pid);
+    if (!Number.isInteger(pid) || pid <= 0) return null;
+    return {
+      pid,
+      startedAt: String(j.startedAt ?? ""),
+      nonce: String(j.nonce ?? ""),
+      command: String(j.command ?? ""),
+    };
   } catch {
     return null;
   }

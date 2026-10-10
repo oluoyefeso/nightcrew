@@ -162,9 +162,10 @@ export function CrewSummary() {
           </span>
         </p>
         <div className="h-1 w-56 max-w-full overflow-hidden rounded-full bg-raised">
+          {/* Clip a full-width bar instead of scaling it, so the rounded end keeps its shape at low values. */}
           <div
-            className="h-full w-full origin-left rounded-full bg-dawn transition-transform duration-200 ease-out motion-reduce:transition-none"
-            style={{ transform: `scaleX(${pct / 100})` }}
+            className="h-full w-full rounded-full bg-dawn transition-[clip-path] duration-200 ease-out motion-reduce:transition-none"
+            style={{ clipPath: `inset(0 ${100 - pct}% 0 0 round 999px)` }}
           />
         </div>
       </div>

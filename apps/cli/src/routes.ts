@@ -71,7 +71,7 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
     try {
       const info = await inspectRepo(expanded);
       // git-lfs, git-crypt and sparse checkouts don't survive a plain clone yet.
-      const unsupported = repoSupport(info.path);
+      const unsupported = await repoSupport(info.path);
       if (unsupported) return c.json({ error: unsupported }, 400);
       const preview = detectPreview(info.path);
       const repo = addRepo(db, {

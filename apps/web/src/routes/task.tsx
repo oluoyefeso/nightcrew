@@ -8,7 +8,7 @@ import { ApiError, api, reposQuery, settingsQuery, taskQuery, useInvalidateTasks
 import { ChipsEditor, Field, inlineEdit, ListEditor, Select, TextArea, TextInput } from "../components/form";
 import { Button, Pill } from "../components/ui";
 import { fmtDay, fmtTime } from "../lib";
-import { dropStash, RESTORED_NOTE, unstash, useStashOnReload } from "../pending";
+import { dropStash, unstash, useStashOnReload } from "../pending";
 
 const STATUS_COPY: Record<Task["status"], { label: string; color: string }> = {
   draft: { label: "Draft", color: "var(--muted)" },
@@ -33,10 +33,63 @@ const CONTENT_FIELDS = [
   "repoId",
 ] as const satisfies readonly (keyof Task)[];
 
-function contentOf(patch: Partial<Task> | null): Partial<Task> {
-  const content: Partial<Task> = {};
+type Edits = Partial<Task>;
+
+function contentOf(patch: Edits | null): Edits {
+  const content: Edits = {};
   for (const k of CONTENT_FIELDS) if (patch && k in patch) Object.assign(content, { [k]: patch[k] });
   return content;
+}
+
+const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+/** The fields of `from` named in `keys`. */
+function pick(from: Edits, keys: Edits): Edits {
+  const out: Edits = {};
+  for (const k of CONTENT_FIELDS) if (k in keys) Object.assign(out, { [k]: from[k] });
+  return out;
+}
+
+/** What a restart stashes for a task: the edits, and the server's values for those fields at the time. */
+interface TaskStash {
+  edits: Edits;
+  /** Null for a stash written before bases were kept: treated as changed since. */
+  base: Edits | null;
+}
+
+/** Kept until the run ends; put back and saving; or waiting on Use mine / Discard. */
+type Restore = { kind: "locked" | "saving" | "conflict"; stash: TaskStash } | null;
+
+const RESTORE_COPY: Record<NonNullable<Restore>["kind"], string> = {
+  locked: "Your unsaved edits from before the restart are kept until this run finishes.",
+  saving: "Put back your unsaved edits from before NightCrew restarted. They're saving now.",
+  conflict: "You had unsaved edits from before the restart, but this task changed since.",
+};
+
+function readStash(id: string): TaskStash | null {
+  const raw = unstash<unknown>(id);
+  if (!raw || typeof raw !== "object") return null;
+  if ("edits" in raw) {
+    const s = raw as TaskStash;
+    return { edits: contentOf(s.edits), base: s.base && typeof s.base === "object" ? s.base : null };
+  }
+  return { edits: contentOf(raw as Edits), base: null };
+}
+
+/** Weigh a stash against the server copy. Only fields that differ from it come back. */
+function decide(task: Task, s: TaskStash | null): Restore {
+  if (!s) return null;
+  const edits: Edits = {};
+  for (const k of CONTENT_FIELDS)
+    if (k in s.edits && !same(s.edits[k], task[k])) Object.assign(edits, { [k]: s.edits[k] });
+  if (!Object.keys(edits).length) {
+    dropStash(task.id);
+    return null;
+  }
+  const stash = { edits, base: s.base };
+  if (task.status === "running") return { kind: "locked", stash };
+  const changed = !s.base || Object.keys(edits).some((k) => !same(s.base?.[k as keyof Task], task[k as keyof Task]));
+  return { kind: changed ? "conflict" : "saving", stash };
 }
 
 export function TaskPage({ taskId }: { taskId: string }) {
@@ -55,12 +108,12 @@ function TaskEditor({
   notes: { id: number; author: string; body: string; at: string }[];
   runs: { id: string; status: string; startedAt: string | null; reason: string | null }[];
 }) {
-  // Edits a restart's reload stashed (pending.ts) go back in the form and the save queue.
-  const [restored] = useState(() => {
-    const content = contentOf(unstash<Partial<Task>>(initial.id));
-    return Object.keys(content).length ? content : null;
-  });
-  const [t, setT] = useState(() => ({ ...initial, ...restored }));
+  // Edits a restart's reload stashed (pending.ts). Put back and saved only if the
+  // task is editable and unchanged since; otherwise kept until you choose.
+  const [restore, setRestore] = useState<Restore>(() => decide(initial, readStash(initial.id)));
+  const restoreRef = useRef(restore);
+  restoreRef.current = restore;
+  const [t, setT] = useState(() => ({ ...initial, ...(restore?.kind === "saving" ? restore.stash.edits : {}) }));
   const [saved, setSaved] = useState(false);
   const repos = useQuery(reposQuery);
   const settings = useQuery(settingsQuery);
@@ -70,24 +123,47 @@ function TaskEditor({
   const navigate = useNavigate();
   const locked = initial.status === "running";
 
+  // Autosave edits after a short pause. Edits within the pause merge, so a
+  // quick title-then-brief change saves both; leaving the page saves the rest.
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const pending = useRef<Edits>(restore?.kind === "saving" ? restore.stash.edits : {});
+  /** The patch on the wire. A 401 reloads before onError can queue it again, so the stash reads it here. */
+  const inflight = useRef<Edits>({});
+  /** The last copy the server sent, for a stash's base. */
+  const server = useRef(initial);
+  /** Server values to send back once the save on the wire lands: Discard came too late to stop it. */
+  const revert = useRef<Edits | null>(null);
+  /** A stash still waiting on the run or on Use mine / Discard isn't dropped by other saves. */
+  const keepStash = () => restoreRef.current?.kind === "locked" || restoreRef.current?.kind === "conflict";
+
   // A refetch keeps edits that haven't saved yet.
-  useEffect(() => setT({ ...initial, ...pending.current }), [initial]);
+  useEffect(() => {
+    server.current = initial;
+    setT({ ...initial, ...pending.current });
+  }, [initial]);
 
   const save = useMutation({
-    mutationFn: (patch: Partial<Task>) => {
+    mutationFn: (patch: Edits) => {
       inflight.current = patch;
       return api.patch<Task>(`/api/tasks/${t.id}`, patch);
     },
     onSettled: () => {
       inflight.current = {};
+      const back = revert.current;
+      revert.current = null;
+      if (back) save.mutate(back);
     },
     onSuccess: (next) => {
+      server.current = next;
       // Keep anything typed while this save was in flight.
       setT({ ...next, ...pending.current });
       invalidate();
       const done = Object.keys(pending.current).length === 0;
       setSaved(done);
-      if (done) dropStash(initial.id);
+      if (done && !keepStash()) {
+        dropStash(initial.id);
+        setRestore((r) => (r?.kind === "saving" ? null : r));
+      }
     },
     // A save that didn't get through (offline, a server error, locked out) puts its
     // text back in the queue so it isn't lost; newer edits win, and the next save
@@ -95,7 +171,10 @@ function TaskEditor({
     // later would be a surprise. A refusal (400, 409) shows its error instead.
     onError: (err, patch) => {
       setSaved(false);
-      if (err instanceof ApiError && err.status !== 401 && err.status < 500) return dropStash(initial.id);
+      if (err instanceof ApiError && err.status !== 401 && err.status < 500) {
+        if (!keepStash()) dropStash(initial.id);
+        return;
+      }
       pending.current = { ...contentOf(patch), ...pending.current };
     },
   });
@@ -107,17 +186,15 @@ function TaskEditor({
     },
   });
 
-  // Autosave edits after a short pause. Edits within the pause merge, so a
-  // quick title-then-brief change saves both; leaving the page saves the rest.
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const pending = useRef<Partial<Task>>(restored ?? {});
-  /** The patch on the wire. A 401 reloads before onError can queue it again, so the stash reads it here. */
-  const inflight = useRef<Partial<Task>>({});
   useStashOnReload(initial.id, () => {
-    const content = contentOf({ ...inflight.current, ...pending.current });
-    return Object.keys(content).length ? content : null;
+    const edits = contentOf({ ...inflight.current, ...pending.current });
+    const kept = keepStash() ? restoreRef.current?.stash : null;
+    if (!Object.keys(edits).length) return kept ?? null;
+    const base = pick(server.current, edits);
+    if (!kept) return { edits, base } satisfies TaskStash;
+    return { edits: { ...kept.edits, ...edits }, base: kept.base && { ...kept.base, ...base } } satisfies TaskStash;
   });
-  const flush = useRef((_extra?: Partial<Task>) => {});
+  const flush = useRef((_extra?: Edits) => {});
   // Run now and Move to Later go through here too, so the agent gets the latest text.
   flush.current = (extra = {}) => {
     clearTimeout(timer.current);
@@ -125,17 +202,43 @@ function TaskEditor({
     pending.current = {};
     if (Object.keys(patch).length) save.mutate(patch);
   };
-  const edit = (patch: Partial<Task>) => {
+  const edit = (patch: Edits) => {
     setT((prev) => ({ ...prev, ...patch }));
     setSaved(false);
     pending.current = { ...pending.current, ...patch };
     clearTimeout(timer.current);
     timer.current = setTimeout(() => flush.current(), 600);
   };
+  const keepMine = () => {
+    const next = decide({ ...initial, status: "draft" }, restore?.stash ?? null);
+    if (!next) return setRestore(null);
+    setRestore({ kind: "saving", stash: next.stash });
+    edit(next.stash.edits);
+  };
+  const discard = () => {
+    const edits = restore?.stash.edits ?? {};
+    clearTimeout(timer.current);
+    pending.current = {};
+    if (Object.keys(inflight.current).length) revert.current = pick(server.current, edits);
+    dropStash(initial.id);
+    setRestore(null);
+    setSaved(false);
+    setT({ ...server.current });
+  };
   useEffect(() => {
-    if (restored) timer.current = setTimeout(() => flush.current(), 600);
+    if (restoreRef.current?.kind === "saving") timer.current = setTimeout(() => flush.current(), 600);
     return () => flush.current();
-  }, [restored]);
+  }, []);
+  // A run that held a stash has finished: weigh it again now the task is editable.
+  const unlocked = !locked && restore?.kind === "locked";
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs once when the lock lifts
+  useEffect(() => {
+    const r = restoreRef.current;
+    if (!unlocked || !r) return;
+    const next = decide(server.current, r.stash);
+    setRestore(next);
+    if (next?.kind === "saving") edit(next.stash.edits);
+  }, [unlocked]);
 
   const status = STATUS_COPY[t.status];
 
@@ -162,7 +265,23 @@ function TaskEditor({
       </div>
 
       <header className="grid gap-3">
-        {restored && <p className="text-[13px] text-muted">{RESTORED_NOTE}</p>}
+        {restore && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl bg-raised px-3.5 py-2.5">
+            <p className="min-w-0 flex-1 basis-60 text-[13px] text-muted">{RESTORE_COPY[restore.kind]}</p>
+            {restore.kind !== "locked" && (
+              <div className="flex gap-2">
+                {restore.kind === "conflict" && (
+                  <Button size="sm" onClick={keepMine}>
+                    Use mine
+                  </Button>
+                )}
+                <Button size="sm" variant="ghost" onClick={discard}>
+                  Discard
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-2">
           <Pill color={status.color}>{status.label}</Pill>
           <span className="font-mono text-[11.5px] text-faint">

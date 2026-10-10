@@ -22,7 +22,7 @@ Everything is set in the dashboard. This page explains what each setting does.
 |---|---|
 | Brief | Everything the crew should know. Nobody answers questions at 3am. |
 | Type | Feature, Bug fix, UI, Tests, Refactor, Research. Decides the evidence required. |
-| Scope | Globs the crew may change. Writes elsewhere are refused as they happen and checked again afterwards. Empty means the whole repo. |
+| Scope | Globs the crew may change. Writes elsewhere are refused as they happen, and the task's whole change against the default branch is checked again afterwards. Empty means the whole repo. |
 | Acceptance criteria | The Skeptic checks each one against evidence. |
 | Token budget | A hard cap on input, cache and output tokens for the task: 50k up to the daily budget (default 1M, or the daily budget if that's lower). Planning is capped, and the review always keeps a reserve. The agent stops when it reaches the cap. |
 | Time cap | 1 to 600 minutes. Default 45. |
@@ -44,7 +44,7 @@ Everything is set in the dashboard. This page explains what each setting does.
 
 Each task works in its own clone at `<data>/work/<repo id>/<task id>`. The data folder is `~/.nightcrew` unless you set `NIGHTCREW_HOME` or pass `--data`. Settings → Repos shows the real path. If you delete a clone, the task starts a new one from its last saved work.
 
-Repos that use git-lfs, git-crypt or sparse checkout are refused for now. Support is coming.
+Repos that use git-lfs, git-crypt or sparse checkout are refused for now. Only settings actually in effect count. Support is coming.
 
 ## Guardrails that aren't settings
 

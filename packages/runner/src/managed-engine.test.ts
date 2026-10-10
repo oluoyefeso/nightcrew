@@ -487,7 +487,7 @@ describe("ManagedEngine", () => {
     expect(fake.calls).toHaveLength(0);
   });
   test("a task's clone: the start is pushed from your repo by sha, and the cloud's work comes back through it", async () => {
-    // Value: protects=managed mode runs no host git in the task's clone: the starting point is pushed from your repo by sha, the cloud's commits are fetched into refs/nightcrew/tasks/<id> in your repo, and the clone is updated from there; fails_when=the engine reads the clone's (missing) origin, pushes by branch name, or fetches straight into the clone with host git; why_new=D12 managed mode; seam=none
+    // Value: protects=managed mode runs no host git in the task's clone: the starting point is pushed from your repo by sha, the cloud's commits are fetched into refs/nightcrew/wip/<id> in your repo (the result ref waits for the pipeline's gate), and the clone is updated from there; fails_when=the engine reads the clone's (missing) origin, pushes by branch name, or fetches straight into the clone with host git; why_new=D12 managed mode; seam=none
     const base = (await git(work, "rev-parse", "main")).stdout.trim();
     const ws = await ensureWorkspace({
       dataDir: join(root, "data"),
@@ -509,7 +509,8 @@ describe("ManagedEngine", () => {
     expect(r.error).toBeNull();
     expect(r.ok).toBe(true);
     const cloud = (await git(bare, "rev-parse", BRANCH)).stdout.trim();
-    expect((await git(work, "rev-parse", "refs/nightcrew/tasks/task_1")).stdout.trim()).toBe(cloud);
+    expect((await git(work, "rev-parse", "refs/nightcrew/wip/task_1")).stdout.trim()).toBe(cloud);
+    expect((await git(work, "rev-parse", "--verify", "--quiet", "refs/nightcrew/tasks/task_1")).ok).toBe(false);
     expect((await git(ws.dir, "rev-parse", "HEAD")).stdout.trim()).toBe(cloud);
     expect(readFileSync(join(ws.dir, "fix.txt"), "utf8")).toBe("fixed\n");
     expect((await git(ws.dir, "remote")).stdout.trim()).toBe("");
@@ -540,7 +541,7 @@ describe("ManagedEngine", () => {
     );
     expect(r.ok).toBe(false);
     expect(r.error).toBe("The cloud session's changes couldn't be pulled cleanly.");
-    expect((await git(work, "rev-parse", "refs/nightcrew/tasks/task_2")).stdout.trim()).toBe(base);
+    expect((await git(work, "rev-parse", "refs/nightcrew/wip/task_2")).stdout.trim()).toBe(base);
     expect(existsSync(join(ws.dir, "new.txt"))).toBe(false);
   });
 });

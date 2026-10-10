@@ -67,6 +67,61 @@ describe("run with a stop signal", () => {
   });
 });
 
+describe("run kills the whole process group", () => {
+  /** pids still in process group `pgid`. */
+  const inGroup = (pgid: number) =>
+    Bun.spawnSync(["ps", "-A", "-o", "pid=,pgid="])
+      .stdout.toString()
+      .split("\n")
+      .map((l) => l.trim().split(/\s+/).map(Number))
+      .filter(([, g]) => g === pgid)
+      .map(([pid]) => pid);
+  // A check leads its own group (it starts a new session), like this wrapper.
+  const leader = (script: string) => [
+    "perl",
+    "-e",
+    'use POSIX qw(setsid); setsid() >= 0 or die "setsid: $!"; exec { $ARGV[0] } @ARGV or die "exec: $!"',
+    "sh",
+    "-c",
+    script,
+  ];
+
+  // Value: protects=a stopped or timed-out check leaves no grandchildren behind (ppid 1) and run() returns promptly even when one holds stdout or ignores SIGTERM; fails_when=run() signals only the leader pid, drops the group SIGKILL after the grace, or awaits a timed-out command's pipes forever; why_new=K4 setsid made checks their own group; seam=none
+  test.each([
+    ["stop", "(sleep 60 &) ; sleep 60"],
+    ["timeout", "(sleep 60 &) ; sleep 60"],
+    ["stop", "(trap '' TERM; sleep 60 &) ; sleep 60"],
+    ["timeout", "(trap '' TERM; sleep 60 &) ; sleep 60"],
+  ])(
+    "%s: %s",
+    async (how, script) => {
+      const dir = mkdtempSync(join(tmpdir(), "nc-run-"));
+      try {
+        const pidFile = join(dir, "pid");
+        const stop = new AbortController();
+        if (how === "stop") setTimeout(() => stop.abort(), 300);
+        const started = Date.now();
+        const r = await run(leader(`echo $$ > ${pidFile}; ${script}`), dir, {
+          signal: stop.signal,
+          timeoutMs: how === "timeout" ? 300 : undefined,
+        });
+        expect(Date.now() - started).toBeLessThan(3000);
+        expect(r.ok).toBe(false);
+        expect(r.stderr).toContain(how === "stop" ? "Stopped." : "Timed out.");
+        const pgid = Number(readFileSync(pidFile, "utf8").trim());
+        expect(pgid).toBeGreaterThan(1);
+        // SIGTERM reaches the group at once, SIGKILL after the 2s grace.
+        const deadline = Date.now() + 4000;
+        while (inGroup(pgid).length && Date.now() < deadline) await sleep(100);
+        expect(inGroup(pgid)).toEqual([]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
+});
+
 describe("withRepoLock with a stop signal", () => {
   // Value: protects=a stopped task stops waiting for the repo lock at once and its work never runs, while work that already holds the lock finishes; fails_when=withRepoLock ignores the signal (a stopped task queues behind a long clone or merge) or abandons a holder mid-way; why_new=G10 lock waits ignored stops; seam=none
   test("a stop gives up the wait, and the queued work never runs", async () => {

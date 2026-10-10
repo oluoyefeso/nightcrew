@@ -44,11 +44,20 @@ export const ALWAYS_PROTECTED = [
   ".worktrees/**",
 ];
 
+/**
+ * A repo-relative path NightCrew never lets a task change. Case-insensitive:
+ * on macOS's default file system git reads .GITATTRIBUTES as .gitattributes.
+ */
+export function isAlwaysProtected(path: string): boolean {
+  return matchesAny(path.replace(/^(\.\/)+/, ""), ALWAYS_PROTECTED, true);
+}
+
 /** Secret file names: .env, .env.local, key.pem, id_rsa. Not .envrc, environment or a template like .env.example. */
 const SECRET_NAMES = [".env", ".env.*", "*.pem", "id_rsa*"];
-const ENV_TEMPLATE = /^\.env\.(example|sample|template|dist)$/;
+// Case-insensitive throughout: .ENV and KEY.PEM open the same files on macOS.
+const ENV_TEMPLATE = /^\.env\.(example|sample|template|dist)$/i;
 const SECRET_WORD =
-  /(^|[\s/=<>:;&|(`])(\.env(?!\.(example|sample|template|dist)(?=$|[\s;&|)<>`]))(\.[\w.-]+)?|[\w.-]*\.pem|id_rsa[\w.-]*)(?=$|[\s;&|)<>`])/;
+  /(^|[\s/=<>:;&|(`])(\.env(?!\.(example|sample|template|dist)(?=$|[\s;&|)<>`]))(\.[\w.-]+)?|[\w.-]*\.pem|id_rsa[\w.-]*)(?=$|[\s;&|)<>`])/i;
 
 // Git global options (-C dir, -c k=v, --git-dir x, --no-pager) may sit before the subcommand.
 const GIT_OPT = String.raw`(?:-[cC]\s+\S+|--(?:git-dir|work-tree|namespace|config-env)\s+\S+|-[\w-]+(?:=\S+)?)`;
@@ -135,10 +144,10 @@ export function guardToolCall(tool: string, input: Record<string, unknown>, ctx:
 function isSecret(target: string): boolean {
   const last = baseName(target.replace(/\/+$/, ""));
   if (ENV_TEMPLATE.test(last)) return false;
-  if (matchesAny(last, SECRET_NAMES)) return true;
+  if (matchesAny(last, SECRET_NAMES, true)) return true;
   // A glob like **/.env* or *.{pem,key}: does it reach a secret name?
-  if (!/[*?{]/.test(last) || !/\.env|pem|id_rsa/.test(last)) return false;
-  const re = globToRegExp(last);
+  if (!/[*?{]/.test(last) || !/\.env|pem|id_rsa/i.test(last)) return false;
+  const re = globToRegExp(last, true);
   return [".env", ".env.local", "key.pem", "id_rsa"].some((name) => re.test(name));
 }
 
@@ -244,7 +253,7 @@ function guardWrite(path: string, ctx: GuardContext): GuardDecision {
   if (ctx.readOnly) return deny("Research tasks don't change the code. Write the report to the artifacts folder.");
 
   const rel = relative(ctx.worktree, abs);
-  if (matchesAny(rel, ALWAYS_PROTECTED)) return deny(`${rel} is protected (workflows, secrets and git config).`);
+  if (isAlwaysProtected(rel)) return deny(`${rel} is protected (workflows, secrets and git config).`);
   if (ctx.scope.length && !matchesAny(rel, ctx.scope)) {
     return deny(`${rel} is outside this task's scope (${ctx.scope.join(", ")}).`);
   }
@@ -264,16 +273,18 @@ function baseName(p: string): string {
   return p.split("/").pop() ?? p;
 }
 
-export function matchesAny(path: string, globs: string[]): boolean {
-  return globs.some((g) => globToRegExp(g).test(path));
+/** `ignoreCase` is for NightCrew's own protected and secret names, never a task's scope. */
+export function matchesAny(path: string, globs: string[], ignoreCase = false): boolean {
+  return globs.some((g) => globToRegExp(g, ignoreCase).test(path));
 }
 
 const cache = new Map<string, RegExp>();
 
 /** Glob → RegExp supporting **, *, ? and {a,b}. Paths use forward slashes. */
-export function globToRegExp(input: string): RegExp {
+export function globToRegExp(input: string, ignoreCase = false): RegExp {
   const glob = input.replace(/^\.\//, "").replace(/\/+$/, "");
-  const hit = cache.get(glob);
+  const key = `${ignoreCase ? "i" : "s"}:${glob}`;
+  const hit = cache.get(key);
   if (hit) return hit;
   let re = "";
   for (let i = 0; i < glob.length; i++) {
@@ -299,7 +310,7 @@ export function globToRegExp(input: string): RegExp {
   }
   // A bare directory ("src/auth" or "src/auth/") covers everything under it.
   const dirLike = !/[*?{]/.test(glob) && !/\.[^/]+$/.test(glob);
-  const out = new RegExp(`^${re}${dirLike ? "(?:/.*)?" : ""}$`);
-  cache.set(glob, out);
+  const out = new RegExp(`^${re}${dirLike ? "(?:/.*)?" : ""}$`, ignoreCase ? "i" : "");
+  cache.set(key, out);
   return out;
 }

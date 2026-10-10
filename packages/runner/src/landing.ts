@@ -144,12 +144,25 @@ const identity = ["-c", "user.name=NightCrew", "-c", "user.email=crew@nightcrew.
 
 /** What the final gate approved: the diff from `base` to the task's sha touches exactly `files`. */
 export interface Approved {
-  /** The commit the task started from, pinned in your repo. */
+  /**
+   * Where the task's work forks from the default branch: a default-branch
+   * commit, worked out in your repo from the task's sha.
+   */
   base: string;
-  /** The files the gate checked. */
+  /** The files the gate checked: the task's whole change against `base`. */
   files: string[];
-  /** Checks to run again on the files the merge actually changed; a reason to refuse, or null. */
+  /** Checks to run again before the merge stays; a reason to refuse, or null. */
   recheck?: (files: string[]) => string | null;
+  /**
+   * This task's earlier tips that NightCrew landed on this branch and that are
+   * still there by its records (cars on the train, ships not undone). A merge
+   * may build on one of them and land only what's new since.
+   */
+  landed?: string[];
+  /** This task's earlier tips that were landed here and then taken off (pulled or undone). */
+  takenOff?: string[];
+  /** How to start the task over, for when its earlier work was taken off. */
+  restart?: string;
 }
 
 const lines = (out: string) => out.split("\0").filter(Boolean);
@@ -172,23 +185,46 @@ async function mergeInto(
   if ((await git(dir, "merge-base", "--is-ancestor", sha, "HEAD")).ok)
     return { ok: false, error: `Already on ${lane.branch}; nothing new to merge.` };
   // git merges against the merge base of the branch and the task. The gate
-  // diffed from the pinned base, so the merge base must sit at or under it.
-  // A task whose history takes in the branch's own tip (a merge commit made
-  // in the clone, which can see your repo's objects) would otherwise move it,
-  // and the merge would undo branch changes the gate never saw.
+  // diffed from the default branch, so the merge base must sit at or under
+  // the gate's base, or be this task's own earlier work that's still landed
+  // here (then only what's new since lands). A task whose history takes in
+  // the branch's own tip (a merge commit made in the clone, which can see
+  // your repo's objects) would otherwise move it, and the merge would undo
+  // branch changes the gate never saw.
   const bases = await git(dir, "merge-base", "--all", "HEAD", sha);
   const mergeBases = bases.ok ? bases.stdout.split("\n").filter(Boolean) : [];
   if (!mergeBases.length)
     return { ok: false, error: `The task's work shares no history with ${lane.branch}, so it wasn't merged.` };
   for (const mb of mergeBases) {
-    if (!(await git(dir, "merge-base", "--is-ancestor", mb, approved.base)).ok)
+    if (approved.landed?.includes(mb)) continue;
+    if ((await git(dir, "merge-base", "--is-ancestor", mb, approved.base)).ok) continue;
+    if (approved.takenOff?.includes(mb))
       return {
         ok: false,
-        error: `The task's history takes in commits from ${lane.branch} that its checks didn't cover, so it wasn't merged.`,
+        error: `This task's earlier work was taken off ${lane.branch} (pulled or undone), so merging again would land only part of it. ${approved.restart ?? "Start the task fresh and run it again."}`,
       };
+    return {
+      ok: false,
+      error: `The task's history takes in commits from ${lane.branch} that its checks didn't cover, so it wasn't merged.`,
+    };
   }
   const before = await startLanding(lane, `merge ${sha}`);
-  const m = await git(dir, ...identity, "merge", "--no-ff", "--no-edit", "-m", message, sha);
+  // Renames off, so the paths that land are the paths the gate listed (it
+  // diffs with --no-renames). Directory renames need their own switch.
+  const m = await git(
+    dir,
+    ...identity,
+    "-c",
+    "merge.directoryRenames=false",
+    "merge",
+    "--no-ff",
+    "--no-edit",
+    "-X",
+    "no-renames",
+    "-m",
+    message,
+    sha,
+  );
   if (!m.ok) {
     await git(dir, "merge", "--abort");
     await git(dir, "reset", "--hard", before);
@@ -209,8 +245,9 @@ async function mergeInto(
 
 /**
  * Every file the merge changed on the branch is one the gate approved, or
- * one the default branch changed between the branch and the pinned base
- * (worked out from your repo's commits only). A reason to refuse, or null.
+ * one the default branch changed between the branch and the gate's base (a
+ * default-branch commit, so worked out from the default branch only). The
+ * checks run again on the task's whole change. A reason to refuse, or null.
  */
 async function checkLanded(lane: Lane, before: string, approved: Approved): Promise<string | null> {
   const landed = await git(lane.dir, "diff", "--name-only", "-z", "--no-renames", before, "HEAD");
@@ -226,9 +263,8 @@ async function checkLanded(lane: Lane, before: string, approved: Approved): Prom
   }
   const unapproved = files.filter((f) => !allowed.has(f) && !fromBase.has(f));
   if (unapproved.length)
-    return `The merge changed files the task's checks never saw (${unapproved.slice(0, 4).join(", ")}), so it was taken back off.`;
-  const fromTask = files.filter((f) => allowed.has(f));
-  const again = approved.recheck?.(fromTask) ?? null;
+    return `Merging into ${lane.branch} changed files outside what the task's checks covered (${unapproved.slice(0, 4).join(", ")}). That can happen when ${lane.branch} renamed or moved files the task changed. It was taken back off.`;
+  const again = approved.recheck?.(approved.files) ?? null;
   return again ? `${again} It was taken back off.` : null;
 }
 

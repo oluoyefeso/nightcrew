@@ -21,6 +21,25 @@ export interface Exec {
 
 /** How long a stopped command gets to exit after SIGTERM before SIGKILL. */
 const KILL_GRACE_MS = 2000;
+/** How long a killed command's output gets once it has exited; its children can hold the pipes. */
+const PIPE_GRACE_MS = 1000;
+
+/**
+ * Signal a command and everything in its process group. Checks lead their own
+ * group (they start a new session), so a stop also reaches what they spawned.
+ * A command that isn't a group leader gets the signal by pid.
+ */
+function signalTree(pid: number, sig: NodeJS.Signals | 0, fallback: () => void): boolean {
+  try {
+    process.kill(-pid, sig);
+    return true;
+  } catch {
+    try {
+      fallback();
+    } catch {}
+    return false;
+  }
+}
 
 export async function run(
   cmd: string[],
@@ -41,26 +60,35 @@ export async function run(
       stderr: "pipe",
       env: { ...(opts.baseEnv ?? process.env), ...opts.env, GIT_TERMINAL_PROMPT: "0" },
     });
-    const timer = opts.timeoutMs ? setTimeout(() => proc.kill(), opts.timeoutMs) : undefined;
-    let stopped = false;
+    let killed: "Stopped." | "Timed out." | undefined;
+    let group = false;
     let forceKill: ReturnType<typeof setTimeout> | undefined;
-    const onAbort = () => {
-      stopped = true;
-      proc.kill("SIGTERM");
-      forceKill = setTimeout(() => proc.kill("SIGKILL"), KILL_GRACE_MS);
+    const kill = (why: "Stopped." | "Timed out.") => {
+      if (killed) return;
+      killed = why;
+      group = signalTree(proc.pid, "SIGTERM", () => proc.kill("SIGTERM"));
+      // The grace covers the whole group: children that outlive their leader still get SIGKILL.
+      forceKill = setTimeout(() => {
+        if (group) signalTree(proc.pid, "SIGKILL", () => {});
+        else if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGKILL");
+      }, KILL_GRACE_MS);
     };
+    const timer = opts.timeoutMs ? setTimeout(() => kill("Timed out."), opts.timeoutMs) : undefined;
+    const onAbort = () => kill("Stopped.");
     opts.signal?.addEventListener("abort", onAbort, { once: true });
     const output = Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
     const code = await proc.exited;
     clearTimeout(timer);
-    clearTimeout(forceKill);
     opts.signal?.removeEventListener("abort", onAbort);
-    // A stopped command's children can hold its pipes open; don't wait on them.
-    const [stdout, stderr] = stopped
-      ? await Promise.race([output, Bun.sleep(1000).then(() => ["", ""] as const)])
-      : await output;
-    if (stopped) return { ok: false, code: code ?? -1, stdout, stderr: `${stderr}\nStopped.`.trim() };
-    return { ok: code === 0, code, stdout, stderr };
+    // Nothing left to SIGKILL once the leader is gone and so is its group.
+    if (!group || !signalTree(proc.pid, 0, () => {})) clearTimeout(forceKill);
+    if (!killed) {
+      const [stdout, stderr] = await output;
+      return { ok: code === 0, code, stdout, stderr };
+    }
+    // A killed command's children can hold its pipes open; don't wait on them.
+    const [stdout, stderr] = await Promise.race([output, Bun.sleep(PIPE_GRACE_MS).then(() => ["", ""] as const)]);
+    return { ok: false, code: code ?? -1, stdout, stderr: `${stderr}\n${killed}`.trim() };
   } catch (e) {
     return { ok: false, code: -1, stdout: "", stderr: e instanceof Error ? e.message : String(e) };
   }

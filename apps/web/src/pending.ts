@@ -5,21 +5,27 @@
 import { useEffect, useRef } from "react";
 
 const PREFIX = "nc-pending-";
-const RETURN_TO = "nc-return-to";
+const RETURN_TO = "return-to";
 /** A stash older than this is dropped rather than restored over newer work. */
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
-
-export const RESTORED_NOTE = "Restored unsaved edits from before the restart.";
 
 type Saver = () => unknown;
 const savers = new Map<string, Saver>();
 
-/** Write a stash now. A null or empty value clears it. */
-export function stash(key: string, value: unknown) {
+const isEmpty = (value: unknown) => value == null || (typeof value === "string" && !value.trim());
+
+/** Write a stash now. A null or empty value clears it. Returns whether it kept anything. */
+export function stash(key: string, value: unknown): boolean {
   try {
-    if (value == null || (typeof value === "string" && !value.trim())) localStorage.removeItem(PREFIX + key);
-    else localStorage.setItem(PREFIX + key, JSON.stringify({ at: Date.now(), value }));
-  } catch {}
+    if (isEmpty(value)) {
+      localStorage.removeItem(PREFIX + key);
+      return false;
+    }
+    localStorage.setItem(PREFIX + key, JSON.stringify({ at: Date.now(), value }));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** A stash written in the last day, or null. Reading doesn't clear it. */
@@ -65,13 +71,9 @@ export function stashBeforeReload() {
     try {
       value = get();
     } catch {}
-    stash(key, value);
-    if (value != null && !(typeof value === "string" && !value.trim())) kept = true;
+    if (stash(key, value)) kept = true;
   }
-  try {
-    if (kept)
-      localStorage.setItem(RETURN_TO, JSON.stringify({ at: Date.now(), path: location.pathname + location.search }));
-  } catch {}
+  if (kept) stash(RETURN_TO, location.pathname + location.search);
 }
 
 /**
@@ -79,13 +81,10 @@ export function stashBeforeReload() {
  * go back there once so they're restored.
  */
 export function resumeReturnPath() {
+  const path = unstash<string>(RETURN_TO);
+  dropStash(RETURN_TO);
+  if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//")) return;
   try {
-    const raw = localStorage.getItem(RETURN_TO);
-    if (!raw) return;
-    localStorage.removeItem(RETURN_TO);
-    const { at, path } = JSON.parse(raw) as { at: number; path: string };
-    if (Date.now() - at > MAX_AGE_MS || typeof path !== "string" || !path.startsWith("/") || path.startsWith("//"))
-      return;
     if (location.pathname === "/" && !location.search && path !== "/") history.replaceState(null, "", path);
   } catch {}
 }

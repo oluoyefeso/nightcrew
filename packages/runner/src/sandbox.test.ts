@@ -89,6 +89,13 @@ describe("seatbelt profile", () => {
     expect(p).toContain('(deny file-ioctl (literal "/dev/tty") (regex #"^/dev/ttys"))');
   });
 
+  // Value: protects=what's typed in NightCrew's and the user's other terminals from a check reading it; fails_when=the file-read deny on /dev/tty, /dev/ttysN or /dev/ptmx goes missing, or widens to all of /dev; why_new=K2 probe opened /dev/ttys000 read-only; seam=none
+  test("denies reading terminals and the pty master, not other devices", () => {
+    const p = seatbeltProfile(clone, { clone: true });
+    expect(p).toContain('(deny file-read* (literal "/dev/tty") (regex #"^/dev/ttys[0-9]+$") (literal "/dev/ptmx"))');
+    expect(p).not.toContain('(deny file-read* (subpath "/dev")');
+  });
+
   // Value: protects=a check on Linux from writing a worktree's pointer, from injecting into the caller's terminal, and from outliving NightCrew; fails_when=the deny is bound before the writable mount it narrows (later mounts win), or --new-session, --die-with-parent or --unshare-pid go missing; why_new=S5; seam=none
   test("bubblewrap binds the dir writable, then the pointer read-only", () => {
     const a = bwrapArgs(wt).join(" ");
@@ -98,6 +105,22 @@ describe("seatbelt profile", () => {
     const wtBind = a.indexOf(`--bind ${wt} ${wt}`);
     expect(wtBind).toBeGreaterThan(0);
     expect(a.indexOf(`--ro-bind ${join(wt, ".git")} `)).toBeGreaterThan(wtBind);
+  });
+
+  // Value: protects=a clone of a repo under /tmp can read the objects it borrows inside bwrap, from paths NightCrew passes, never its alternates file; fails_when=the objects bind lands before --tmpfs /tmp (hidden again), is writable, or comes from the clone's alternates; why_new=K5 private /tmp hid the alternates target; seam=none
+  test("bubblewrap binds a clone's borrowed objects read-only after the private /tmp", () => {
+    const objects = join(repo, ".git", "objects");
+    const a = bwrapArgs(clone, { clone: true, objects: [objects, join(dir, "missing")] });
+    const bind = a.findIndex((x, i) => x === "--ro-bind" && a[i + 1] === objects && a[i + 2] === objects);
+    expect(bind).toBeGreaterThan(a.indexOf("--tmpfs"));
+    expect(bind).toBeGreaterThan(a.indexOf(clone));
+    expect(a).not.toContain(join(dir, "missing"));
+    expect(a.slice(-2)).toEqual(["--chdir", clone]);
+    // Nothing is read from the clone: with no objects given, no repo path appears.
+    writeFileSync(join(clone, ".git", "objects", "info", "alternates"), `${join(dir, "elsewhere")}\n`);
+    const plain = bwrapArgs(clone, { clone: true }).join(" ");
+    expect(plain).not.toContain(repo);
+    expect(plain).not.toContain(join(dir, "elsewhere"));
   });
 });
 
@@ -155,11 +178,12 @@ describe.skipIf(process.platform !== "darwin")("real sandbox on macOS", () => {
     expect(r.stdout.split("\n").filter(Boolean)).toEqual(["ok-commit", "ok-stash", "ok-hooks"]);
   });
 
-  // Value: protects=NightCrew's terminal from a check (typing into it, writing to it); fails_when=checks inherit the controlling tty or /dev is writable whole; why_new=F3, Seatbelt allowed all of /dev and checks kept the session; seam=none
+  // Value: protects=NightCrew's terminal from a check (typing into it, writing to it, reading other terminals); fails_when=checks inherit the controlling tty, /dev is writable whole, or /dev/ttysN and /dev/ptmx can be opened for reading; why_new=F3, Seatbelt allowed all of /dev and checks kept the session; K2 added the read probe; seam=none
   test("a check has no terminal and can't write to one", async () => {
     const r = await runCheck(
       [
         "(exec 3</dev/tty) 2>/dev/null && echo LEAK-tty-open",
+        'python3 -c \'import os,glob; [os.open(p, os.O_RDONLY|os.O_NONBLOCK|os.O_NOCTTY) for p in glob.glob("/dev/ttys[0-9]*") + ["/dev/ptmx"]]\' 2>/dev/null && echo LEAK-tty-read',
         "sh -c 'echo x > /dev/tty' 2>/dev/null && echo LEAK-tty-write",
         "echo x > /dev/null && head -c1 /dev/urandom >/dev/null && echo ok-dev",
         "true",

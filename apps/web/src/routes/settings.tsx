@@ -163,8 +163,12 @@ export function SettingsPage() {
           <h2 className="font-medium text-[16px] tracking-[-0.02em]">Repos</h2>
           <p className="text-[13.5px] text-muted">
             Where the crew may work. Each task gets its own clone in{" "}
-            <span className="font-mono">{info.data?.workDir ?? "NightCrew's work folder"}</span>, and its result lands
-            in your repo by commit.
+            {info.data?.workDir ? (
+              <span className="break-all font-mono">{info.data.workDir}</span>
+            ) : (
+              "NightCrew's work folder"
+            )}
+            , and its result lands in your repo by commit.
           </p>
         </div>
         <div className="grid gap-3">

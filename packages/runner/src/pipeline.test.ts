@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { guardToolCall } from "@nightcrew/core/guard";
@@ -11,6 +21,7 @@ import {
   getRun,
   getTask,
   listRunEvents,
+  listTrains,
   openDb,
   updateRepo,
   updateTask,
@@ -19,6 +30,7 @@ import { ScriptedEngine } from "./engine";
 import { git } from "./git";
 import { normalizeReview, runTask, scopeCheck } from "./pipeline";
 import type { ReviewOutput } from "./prompts";
+import { TAMPERED } from "./sdk-engine";
 import { workspaceDir } from "./workspace";
 
 let dir: string;
@@ -110,7 +122,7 @@ describe("runTask", () => {
   });
 
   test("a task sent back after boarding the train boards again with its new work", async () => {
-    // Value: protects=re-running a task whose earlier result already landed still lands, checked from what landed; fails_when=the base isn't re-pinned and the merge-base rule refuses the task's own landed commits; why_new=send back after a train boarding had no test; seam=none
+    // Value: protects=re-running a task whose earlier result is still on the train boards again, landing only what's new while the gate checks the task's whole change; fails_when=the merge-base rule refuses the task's own car, or the gate goes back to checking only the new delta; why_new=D16 replaced the re-pinned base; seam=none
     const task = setupTask();
     updateRepo(db, task.repoId, { level: "train" });
     let attempt = 0;
@@ -133,8 +145,11 @@ describe("runTask", () => {
     expect(second.status).toBe("complete");
     expect(texts.some((t) => t.includes("takes in commits"))).toBe(false);
     expect(texts.some((t) => t.includes("On today's train"))).toBe(true);
-    // Only the new work was checked the second time.
-    expect(getRun(db, second.runId)?.run.changedFiles).toBe(1);
+    // The gate checked the task's whole change; only the new file landed the second time.
+    expect(getRun(db, second.runId)?.run.changedFiles).toBe(2);
+    const car = listTrains(db)[0]?.cars.find((c) => c.runId === second.runId);
+    const landed = await git(repoPath, "diff", "--name-only", `${car?.mergeSha}^1`, `${car?.mergeSha}`);
+    expect(landed.stdout.trim()).toBe("src/extra.ts");
   });
 
   test("failed checks get one repair attempt with the failure output", async () => {
@@ -475,7 +490,12 @@ describe("pinned base", () => {
     });
     const out = await runTask(deps(engine), task.id, new AbortController().signal);
     expect(out.status).toBe("failed");
-    expect(out.reason).toContain("outside scope: .github/workflows/ci.yml");
+    expect(out.reason).toBe(
+      ".github/workflows/ci.yml is always protected (workflows, secrets and git settings NightCrew won't land); take it out of the change.",
+    );
+    // A failed gate leaves the work in progress, not a result.
+    expect((await git(repoPath, "rev-parse", "--verify", "--quiet", `refs/nightcrew/wip/${task.id}`)).ok).toBe(true);
+    expect((await git(repoPath, "rev-parse", "--verify", "--quiet", `refs/nightcrew/tasks/${task.id}`)).ok).toBe(false);
   });
 });
 
@@ -599,8 +619,10 @@ describe("task clones", () => {
     });
     const halted = await runTask(deps(first), task.id, stop.signal);
     expect(halted.status).toBe("timeout");
-    const wip = (await git(repoPath, "log", "-1", "--format=%s", `refs/nightcrew/tasks/${task.id}`)).stdout;
+    const wip = (await git(repoPath, "log", "-1", "--format=%s", `refs/nightcrew/wip/${task.id}`)).stdout;
     expect(wip).toContain("WIP: Add the feature");
+    // Unchecked work never becomes the task's result.
+    expect((await git(repoPath, "rev-parse", "--verify", "--quiet", `refs/nightcrew/tasks/${task.id}`)).ok).toBe(false);
 
     updateTask(db, task.id, { status: "queued", testCommand: "test -f src/feature.ts" });
     const again = new ScriptedEngine({
@@ -659,6 +681,42 @@ describe("the final gate and what the task leaves behind", () => {
     expect(scopeCheck([".worktrees/_dev/planted.ts", "src/a.ts"], { scope: [] } as never).ok).toBe(false);
   });
 
+  // Value: protects=protected paths are reported apart from out-of-scope ones, and matched case-insensitively (macOS reads .GITATTRIBUTES as .gitattributes), as are NightCrew's own paths; fails_when=scopeCheck folds protected files into "outside scope" or matches them case-sensitively; why_new=D16 item 8; seam=none
+  test("protected files are named apart from out-of-scope ones, whatever their case", () => {
+    const task = { scope: ["src/**"] } as never;
+    expect(scopeCheck([".GITATTRIBUTES", "src/a.ts"], task).reason).toBe(
+      ".GITATTRIBUTES is always protected (workflows, secrets and git settings NightCrew won't land); take it out of the change.",
+    );
+    expect(scopeCheck(["src/.Gitmodules", ".gitmodules"], { scope: [] } as never).reason).toContain(
+      ".gitmodules is always protected",
+    );
+    expect(scopeCheck([".WorkTrees/_dev/x.ts"], { scope: [] } as never).reason).toContain(
+      "Changed files in .worktrees",
+    );
+    expect(scopeCheck(["README.md"], task).reason).toBe("Changed files outside scope: README.md");
+  });
+
+  // Value: protects=a clone whose .git is swapped mid-run (here for a symlink to your repo's git dir) fails the task as tampered before NightCrew runs any git there, and the unfinished work isn't committed through it into your repo; fails_when=validate, commitInClone or the WIP save run git in a clone without checking .git is still a folder; why_new=D16 item 7; seam=none
+  test("a clone whose .git is swapped mid-run fails as tampered", async () => {
+    const task = setupTask();
+    const mainBefore = (await git(repoPath, "rev-parse", "main")).stdout.trim();
+    const engine = new ScriptedEngine({
+      implement: (req) => {
+        writeFileSync(join(req.cwd, "src", "feature.ts"), "x\n");
+        rmSync(join(req.cwd, ".git"), { recursive: true, force: true });
+        symlinkSync(join(repoPath, ".git"), join(req.cwd, ".git"));
+        return { text: "Done." };
+      },
+      review: () => ({ structured: READY }),
+    });
+    const out = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(out.status).toBe("failed");
+    expect(out.reason).toBe(TAMPERED);
+    expect(engine.calls.map((c) => c.phase)).toEqual(["plan", "implement"]);
+    expect((await git(repoPath, "rev-parse", "main")).stdout.trim()).toBe(mainBefore);
+    expect((await git(repoPath, "status", "--porcelain")).stdout).toBe("");
+  });
+
   // Value: protects=a repo that relies on git-lfs fails the task up front with the plain-words reason, before any clone or agent phase; fails_when=runTask stops calling repoSupport, so the agent works in a clone with LFS pointer files; why_new=G6 (D15); seam=none
   test("a repo that uses git-lfs fails the task before anything runs", async () => {
     const task = setupTask();
@@ -667,7 +725,7 @@ describe("the final gate and what the task leaves behind", () => {
     const out = await runTask(deps(engine), task.id, new AbortController().signal);
     expect(out.status).toBe("failed");
     expect(out.reason).toBe(
-      "NightCrew can't work in this repo yet: it uses git-lfs. Support is coming; see docs/security.md.",
+      "NightCrew can't work in this repo yet: it uses git-lfs (.gitattributes: *.bin filter=lfs). Support is coming; see docs/security.md.",
     );
     expect(engine.calls).toHaveLength(0);
     expect(existsSync(workspaceDir(join(dir, "data"), task.repoId, task.id))).toBe(false);
@@ -695,5 +753,76 @@ describe("the final gate and what the task leaves behind", () => {
     expect((await git(repoPath, "rev-parse", task.branch)).stdout.trim()).toBe(
       (await git(repoPath, "rev-parse", "main")).stdout.trim(),
     );
+  });
+});
+
+describe("the task branch outside NightCrew", () => {
+  const ID = ["-c", "user.name=t", "-c", "user.email=t@t"];
+  const head = async (ref: string) => (await git(repoPath, "rev-parse", ref)).stdout.trim();
+  const writes = (...files: string[]) =>
+    new ScriptedEngine({
+      implement: (req) => {
+        for (const f of files) writeFileSync(join(req.cwd, f), `export const v = "${f}";\n`);
+        return { text: "Done." };
+      },
+      review: () => ({ structured: READY }),
+    });
+
+  // Value: protects=GitHub's "Update branch" (main merged into the task branch on origin) is taken in with an info event instead of a refusal, and the gate still sees only the task's own files because the base moves to main's tip; fails_when=ensureWorkspace refuses origin commits that build on NightCrew's work, or the gate base stays at the old fork point and main's files fail scope; why_new=D16 item 6; seam=none
+  test("origin's Update branch merge is picked up and the scope check still passes", async () => {
+    const task = setupTask();
+    expect((await runTask(deps(writes("src/feature.ts")), task.id, new AbortController().signal)).status).toBe(
+      "complete",
+    );
+    const first = await head(`refs/nightcrew/tasks/${task.id}`);
+    writeFileSync(join(repoPath, "README.md"), "main moved\n");
+    await git(repoPath, "add", "-A");
+    await git(repoPath, ...ID, "commit", "-qm", "main moves");
+    const mainTip = await head("main");
+    const tree = (await git(repoPath, "merge-tree", "--write-tree", first, mainTip)).stdout.trim();
+    const update = (
+      await git(repoPath, ...ID, "commit-tree", tree, "-p", first, "-p", mainTip, "-m", "Merge branch 'main'")
+    ).stdout.trim();
+    await git(repoPath, "update-ref", `refs/remotes/origin/${task.branch}`, update);
+    await git(repoPath, "update-ref", "refs/remotes/origin/main", mainTip);
+
+    updateTask(db, task.id, { status: "queued" });
+    const out = await runTask(deps(writes("src/feature.ts", "src/extra.ts")), task.id, new AbortController().signal);
+    const texts = listRunEvents(db, out.runId).map((e) => e.text);
+    expect(out.reason).toBeNull();
+    expect(out.status).toBe("complete");
+    expect(texts).toContain(`Picked up 1 commit from origin/${task.branch}.`);
+    expect(getRun(db, out.runId)?.run.changedFiles).toBe(2);
+    expect((await git(repoPath, "merge-base", "--is-ancestor", update, `refs/nightcrew/tasks/${task.id}`)).ok).toBe(
+      true,
+    );
+  });
+
+  // Value: protects=when the crew amends its earlier commit the run says so and carries on (the gate checks the whole change), the local branch moves off NightCrew's own old result, and the next run doesn't blame you for the old commit; fails_when=a rewrite leaves the local branch behind and the next run refuses with "commits NightCrew didn't make"; why_new=D16 item 6 rewrite; seam=none
+  test("a crew that amends its commit is noted, and the next run isn't blocked", async () => {
+    const task = setupTask();
+    await runTask(deps(writes("src/feature.ts")), task.id, new AbortController().signal);
+    expect(await head(task.branch)).toBe(await head(`refs/nightcrew/tasks/${task.id}`));
+    updateTask(db, task.id, { status: "queued" });
+    const amend = new ScriptedEngine({
+      implement: async (req) => {
+        writeFileSync(join(req.cwd, "src", "extra.ts"), "x\n");
+        await git(req.cwd, "add", "-A");
+        await git(req.cwd, ...ID, "commit", "-q", "--amend", "-m", "one commit");
+        return { text: "Done." };
+      },
+      review: () => ({ structured: READY }),
+    });
+    const second = await runTask(deps(amend), task.id, new AbortController().signal);
+    expect(second.status).toBe("complete");
+    expect(listRunEvents(db, second.runId).map((e) => e.text)).toContain(
+      "The crew rewrote the branch history this run. NightCrew checks the whole change either way.",
+    );
+    expect(await head(task.branch)).toBe(await head(`refs/nightcrew/tasks/${task.id}`));
+
+    updateTask(db, task.id, { status: "queued" });
+    const third = await runTask(deps(writes("src/third.ts")), task.id, new AbortController().signal);
+    expect(third.reason).toBeNull();
+    expect(third.status).toBe("complete");
   });
 });

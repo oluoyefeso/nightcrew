@@ -362,6 +362,48 @@ describe("task status, budgets and timing", () => {
     expect(note.status).toBe(404);
     expect(await errorOf(note)).toBe("Task not found.");
   });
+
+  test("a composer batch links dependencies by index, parks questions as drafts, and an answer clears the question", async () => {
+    // Value: protects=composer drafts keep their order of work (dependsOnIndex → the created ids), a draft with a question waits as a draft, when=later/schedule park or time the rest, and answering keeps the Q&A as a note; fails_when=dependsOnIndex maps to the wrong task or is dropped (a dependent runs first), a question task gets queued, or the answer isn't saved or the question isn't cleared; why_new=batch tests cover status and limits only, PATCH answer had no test; seam=none; no_claim=what the composer drafts (no LLM; the batch body is written by hand)
+    await patch({ dispatch: false });
+    const r = repo();
+    const later = await send("POST", "/api/tasks/batch", {
+      when: "later",
+      tasks: [
+        { repoId: r.id, title: "Add the API" },
+        { repoId: r.id, title: "Use it in the UI", dependsOnIndex: [0, 7] },
+        { repoId: r.id, title: "Pick a chart", question: "Bar or line?", dependsOnIndex: [1] },
+      ],
+    });
+    expect(later.status).toBe(201);
+    const [api, ui, chart] = (await later.json()) as { id: string; status: string; dependsOn: string[] }[];
+    expect([api?.status, ui?.status, chart?.status]).toEqual(["later", "later", "draft"]);
+    expect(ui?.dependsOn).toEqual([api?.id as string]);
+    expect(chart?.dependsOn).toEqual([ui?.id as string]);
+
+    const scheduled = await send("POST", "/api/tasks/batch", {
+      when: "schedule",
+      tasks: [{ repoId: r.id, title: "Overnight cleanup" }],
+    });
+    const [night] = (await scheduled.json()) as { status: string; runAt: string | null }[];
+    expect(night?.status).toBe("queued");
+    const [h = -1, m = -1] = getSettings(db).scheduleAt.split(":").map(Number);
+    const at = new Date(night?.runAt ?? "");
+    expect([at.getHours(), at.getMinutes()]).toEqual([h, m]);
+    expect(at.getTime()).toBeGreaterThan(Date.now());
+
+    const refused = await send("PATCH", `/api/tasks/${chart?.id}`, { answer: "Line.", status: "running" });
+    expect(refused.status).toBe(400);
+    expect(getTask(db, chart?.id as string)?.question).toBe("Bar or line?");
+    const before = await (await app.request(`/api/tasks/${chart?.id}`)).json();
+    expect((before as { notes: unknown[] }).notes).toEqual([]);
+
+    const answered = await send("PATCH", `/api/tasks/${chart?.id}`, { answer: "  Line.  " });
+    expect(answered.status).toBe(200);
+    expect(getTask(db, chart?.id as string)?.question).toBeNull();
+    const notes = await (await app.request(`/api/tasks/${chart?.id}`)).json();
+    expect((notes as { notes: { body: string }[] }).notes.map((n) => n.body)).toEqual(["Q: Bar or line?\nA: Line."]);
+  });
 });
 
 describe("GET /api/runs/:id/files/*", () => {

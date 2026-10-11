@@ -4,6 +4,7 @@
 set -eu
 
 REPO="oluoyefeso/nightcrew"
+RELEASE_TAG="${NIGHTCREW_VERSION:-v1.0.0-alpha.2}"
 DEST="${NIGHTCREW_INSTALL_DIR:-$HOME/.nightcrew/bin}"
 
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -19,7 +20,7 @@ case "$arch" in
 esac
 
 asset="nightcrew-$os-$arch"
-url="https://github.com/$REPO/releases/latest/download/$asset"
+url="https://github.com/$REPO/releases/download/$RELEASE_TAG/$asset"
 echo "Downloading $asset…"
 mkdir -p "$DEST"
 tmp=$(mktemp)

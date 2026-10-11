@@ -377,6 +377,40 @@ describe("ManagedEngine", () => {
     expect(events.some((e) => e.kind === "denied" && e.text.includes(".env"))).toBe(true);
   });
 
+  test("only the exact push of its own branch skips the guard, never one chained or look-alike", async () => {
+    // Value: protects=the one push a cloud write phase may make can't carry a second command or reach another branch past the guard; fails_when=allowedPush loses its ^...$ anchors or exact-branch match, or ignores readOnly; why_new=tests cover the exact own-branch push and a push to main only; seam=none; no_claim=what the real cloud sandbox runs (fake Managed Agents client; guard decisions only)
+    const confirmed = async (cmds: string[], over: Partial<PhaseRequest> = {}) => {
+      let calls = 0;
+      const fake = new FakeClient(async function* () {
+        if (calls++) return;
+        const uses = cmds.map((command) => toolUse("bash", { command }, "ask"));
+        for (const u of uses) yield u;
+        yield idle("requires_action", { event_ids: uses.map((u) => u.id) });
+        yield idle("end_turn");
+      });
+      await engineFor(fake).runPhase(request(over), () => {});
+      const sent = fake.sent().flatMap((c) => (c.type === "user.tool_confirmation" ? [c.result] : []));
+      return sent;
+    };
+    expect(
+      await confirmed([
+        `git push origin HEAD:refs/heads/${BRANCH}`,
+        `git push origin HEAD:${BRANCH} && git push origin HEAD:main`,
+        `git push origin HEAD:${BRANCH}; git push origin HEAD:release`,
+        `git push origin HEAD:${BRANCH}-other`,
+        `git push origin HEAD:${BRANCH}\ngit push origin HEAD:main`,
+        `git push --force origin HEAD:${BRANCH}`,
+      ]),
+    ).toEqual(["allow", "deny", "deny", "deny", "deny", "deny"]);
+    // A read-only phase may not push even its own branch.
+    expect(
+      await confirmed([`git push origin HEAD:${BRANCH}`], {
+        phase: "review",
+        guard: { ...request().guard, readOnly: true },
+      }),
+    ).toEqual(["deny"]);
+  });
+
   // Value: protects=managed agents cleaning build output by its sandbox path; fails_when=Bash commands are judged with the /workspace mount path instead of the local worktree; why_new=only file_path/path were rewritten before; seam=none
   test("shell commands are judged with the mount path mapped to the worktree", async () => {
     let calls = 0;

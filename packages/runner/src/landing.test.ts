@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -22,6 +22,7 @@ import {
   boardTrain,
   canShip,
   landingFile,
+  publishTrain,
   pullCar,
   setLandingHome,
   shipTask,
@@ -183,6 +184,29 @@ describe("ship to dev", () => {
     expect(
       canShip({ repo: { ...(repo as object), shipBranch: "main" } as never, files: ["src/a.ts"], ...ok }).reasons[0],
     ).toContain("protected");
+
+    // Value: protects=Ship to dev waits for you on a non-ready verdict, missing evidence, a non-ship level, no ship branch or an empty ship list; fails_when=one of those canShip reasons is dropped and unreviewed work merges itself; why_new=only paths, always-ask, confidence and protected rows existed; seam=none; no_claim=the pure gate only (pipeline wiring covered by the ship-to-dev runTask tests)
+    const blocked: [Omit<Partial<Parameters<typeof canShip>[0]>, "repo"> & { repo?: object }, string][] = [
+      [{ verdict: "needs_eyes" }, "Skeptic wants a person"],
+      [{ verdict: null }, "Skeptic wants a person"],
+      [{ evidenceMissing: ["screenshots"] }, "evidence is missing"],
+      [{ repo: { level: "train" } }, "isn't at the Ship to dev level"],
+      [{ repo: { shipBranch: null } }, "No ship branch"],
+      [{ repo: { allowShip: [] } }, "No paths are allowed to ship"],
+    ];
+    for (const [over, reason] of blocked) {
+      const check = canShip({
+        files: ["src/a.ts"],
+        ...ok,
+        ...over,
+        repo: { ...(repo as object), ...over.repo } as never,
+      });
+      expect(check.ok).toBe(false);
+      expect(check.reasons.join(" ")).toContain(reason);
+    }
+    // No confidence score (no reflexes) and exactly the 80% bar both pass.
+    expect(canShip({ repo, files: ["src/a.ts"], ...ok, confidence: null }).ok).toBe(true);
+    expect(canShip({ repo, files: ["src/a.ts"], ...ok, confidence: 0.8 }).ok).toBe(true);
   });
 
   test("falls back to a draft PR path when the gate says no", async () => {
@@ -379,6 +403,95 @@ describe("landing against a real origin", () => {
     const files = await tree("dev", origin);
     expect(files).toContain("src/a.ts");
     expect(files).toContain("src/b.ts");
+  });
+
+  test("the train's push and its one PR list the cars on it and the ones taken off", async () => {
+    // Value: protects=publishTrain pushes the train to origin and opens one draft PR whose body ticks only cars still on and names pulled/broken ones as taken off;
+    // fails_when=pulled cars are listed as on, the PR goes up before the push, or a failed push is swallowed instead of thrown; why_new=publishTrain had no test (crew.test.ts stubs it);
+    // seam=none; no_claim=GitHub acceptance of the PR (fake gh first on PATH records the create call; bare local origin stands in for GitHub)
+    const origin = await withOrigin();
+    const repo = shipRepo();
+    const branch = "crew/train-2026-10-10";
+    const a = await taskBranch("crew/a", "src/a.ts");
+    const b = await taskBranch("crew/b", "src/b.ts");
+    const onA = await boardTrain(repo, { branch, cars: [] } as never, a, "Add A", true, ap(a));
+    if (!onA.ok) throw new Error(onA.error);
+    const onB = await boardTrain(repo, { branch, cars: [] } as never, b, "Add B", true, ap(b));
+    if (!onB.ok) throw new Error(onB.error);
+    expect(await pullCar(repo, { branch, cars: [] } as never, onB.sha, false)).toEqual({ ok: true });
+    expect((await git(origin, "rev-parse", "--verify", "--quiet", branch)).ok).toBe(false);
+
+    const out = join(dir, "gh-out");
+    const bin = join(dir, "bin");
+    mkdirSync(out);
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "gh"),
+      `#!/bin/sh
+echo "$*" >> '${out}/calls'
+case "$2" in
+  list) echo '[]' ;;
+  create)
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --body-file) cp "$2" '${out}/body.md' ;;
+        --title) printf '%s' "$2" > '${out}/title' ;;
+        --head) printf '%s' "$2" > '${out}/head' ;;
+      esac
+      shift
+    done
+    echo https://github.com/o/acme/pull/9 ;;
+  *) exit 2 ;;
+esac
+`,
+    );
+    chmodSync(join(bin, "gh"), 0o755);
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    try {
+      const train = {
+        nightId: "2026-10-10",
+        branch,
+        cars: [
+          { title: "Add A", state: "on", mergeSha: onA.sha },
+          { title: "Add B", state: "pulled", mergeSha: onB.sha },
+          { title: "Add C", state: "broke", mergeSha: "" },
+        ],
+      } as never;
+      const pr = await publishTrain(repo, train);
+      expect(pr).toMatchObject({ prUrl: "https://github.com/o/acme/pull/9", prNumber: 9 });
+      expect(pr?.warning).toBeUndefined();
+      // Pushed before the PR: origin's train has A and not the pulled B.
+      const files = await tree(branch, origin);
+      expect(files).toContain("src/a.ts");
+      expect(files).not.toContain("src/b.ts");
+      expect(readFileSync(join(out, "head"), "utf8")).toBe(branch);
+      expect(readFileSync(join(out, "title"), "utf8")).toBe("Daily train 2026-10-10: 1 task");
+      const body = readFileSync(join(out, "body.md"), "utf8");
+      expect(body).toContain("Today's train for acme: 1 task, tested together.");
+      expect(body).toContain("- [x] Add A");
+      expect(body).not.toContain("- [x] Add B");
+      expect(body).not.toContain("- [x] Add C");
+      expect(body).toContain("Taken off the train:\n- Add B (pulled by you)\n- Add C (broke the tests)");
+
+      // A train with nothing on it publishes nothing.
+      const calls = readFileSync(join(out, "calls"), "utf8");
+      expect(
+        await publishTrain(repo, {
+          nightId: "2026-10-10",
+          branch,
+          cars: [{ title: "Add B", state: "pulled" }],
+        } as never),
+      ).toBeNull();
+      expect(readFileSync(join(out, "calls"), "utf8")).toBe(calls);
+
+      // A push that fails throws, and no PR call is made.
+      await rejectPushes(origin);
+      await expect(publishTrain(repo, train)).rejects.toThrow("Couldn't push the train");
+      expect(readFileSync(join(out, "calls"), "utf8")).toBe(calls);
+    } finally {
+      process.env.PATH = path;
+    }
   });
 
   test("dependencies are reinstalled when a merge changes a manifest", async () => {

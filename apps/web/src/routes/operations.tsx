@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { api, missionsQuery, reposQuery } from "../api";
 import { OperationProgress, operationActive } from "../components/operation-progress";
+import { RepositoryReadinessPanel } from "../components/repository-readiness";
 import { Button } from "../components/ui";
 
 interface Operations {
@@ -80,8 +81,8 @@ export function OperationsPage() {
       <section className="grid gap-3">
         <h2 className="text-[18px] font-medium">Running and recent operations</h2>
         <p className="text-[13px] text-muted">
-          Follow mission verification and delivery here, including work started automatically. Progress survives a page
-          reload; a runner restart marks unfinished work interrupted.
+          Follow repository setup, mission verification and delivery here, including work started automatically.
+          Progress survives a page reload; a runner restart marks unfinished work interrupted.
         </p>
         {!data?.jobs.length && (
           <p className="text-[13px] text-muted">Start mission verification or delivery to see its progress here.</p>
@@ -92,7 +93,7 @@ export function OperationsPage() {
               <h3 className="font-medium break-words">
                 {job.kind === "mission"
                   ? `${missions.data?.find((m) => m.id === job.subjectId)?.title ?? "Mission"} · acceptance`
-                  : `${repos.data?.find((r) => r.id === job.subjectId)?.name ?? "Repository"} · ${job.stage}`}
+                  : `${repos.data?.find((r) => r.id === job.subjectId)?.name ?? "Repository"} · ${job.kind === "repository" ? "setup verification" : job.stage}`}
               </h3>
               {job.kind === "mission" && missions.data?.some((m) => m.id === job.subjectId) && (
                 <Link to="/missions/$missionId" params={{ missionId: job.subjectId }} className="text-[13px] text-dawn">
@@ -102,6 +103,11 @@ export function OperationsPage() {
               {job.kind === "delivery" && data?.deliveries.some((d) => d.id === job.resultId) && (
                 <a href={`#${job.resultId}`} className="text-[13px] text-dawn">
                   View delivery result →
+                </a>
+              )}
+              {job.kind === "repository" && (
+                <a href={`#setup-${job.subjectId}`} className="text-[13px] text-dawn">
+                  View setup result →
                 </a>
               )}
             </div>
@@ -233,7 +239,11 @@ export function OperationsPage() {
           inspecting real outcomes. Optional checks below depend on the work you dispatch.
         </p>
         {data?.setup.map((repo) => (
-          <div key={repo.repoId} className="rounded-2xl bg-surface p-5 ring-1 ring-line">
+          <div
+            key={repo.repoId}
+            id={`setup-${repo.repoId}`}
+            className="scroll-mt-20 rounded-2xl bg-surface p-5 ring-1 ring-line"
+          >
             <h3 className="font-medium">{repo.name}</h3>
             <ul className="mt-2 grid gap-1 text-[13px] text-muted">
               {repo.checks.map((check) => (
@@ -245,6 +255,9 @@ export function OperationsPage() {
             <Link to="/settings" className="mt-3 inline-block text-[13px] text-dawn">
               Review repository settings →
             </Link>
+            {repos.data?.find((r) => r.id === repo.repoId) && (
+              <RepositoryReadinessPanel repo={repos.data.find((r) => r.id === repo.repoId)!} />
+            )}
           </div>
         ))}
       </section>

@@ -1,5 +1,7 @@
 # NightCrew TODOs
 
+This file tracks the classic runner. See the [open-source conductor roadmap](docs/roadmap.md) for current product work.
+
 ## Controlled Benchmark Fixture
 **Priority:** P3 | **Effort:** S (human: ~4h / CC: ~15min)
 **Depends on:** Token compression benchmark subcommand (v0.3.4)

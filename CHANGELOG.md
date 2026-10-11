@@ -2,6 +2,27 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.8] - 2026-10-12
+
+Rehearse repository setup before dispatching agents, and maintain a portable library of verification workflows.
+
+### Added
+- **Repository setup verification.** Run saved installation and test commands in an isolated checkout of the local default branch, without agent tokens or changes to your working directory. Settings and Operations show saved diagnostics and the tested commit.
+- **Readiness freshness.** Changed branch heads, repository paths or setup/test commands invalidate the previous result. Background progress, individual cancellation and restart interruption handling also cover setup verification.
+- **Template library management.** Rename, update and delete saved verification templates without changing repository copies. Version checks prevent stale windows from overwriting newer edits.
+- **Portable templates.** Export a versioned name-and-rules JSON preview or import one for review. Imports validate the format and policy fields; saving a template or applying repository routes remains an explicit action.
+- **Current conductor roadmap.** Separate the open-source product backlog from the older classic-runner TODOs.
+
+### Fixed
+- Setup failures retain redacted diagnostics, and setup cannot move the pinned checkout's HEAD before verification proceeds.
+- Long repository paths wrap correctly in mobile Settings.
+
+### Upgrade and limits
+- The embedded SQLite migration adds repository verification history and preserves existing settings, templates and authority.
+- Setup verification checks saved installation and test commands on committed local code. It does not validate agent sign-in, preview screenshots, remote freshness or deployment access, and does not replace task-specific evidence.
+- Portable templates exclude repository configuration and credentials; review user-authored names before sharing files.
+- Managed mode remains **Coming soon**. The local open-source runner is the supported experience.
+
 ## [1.0.0-alpha.7] - 2026-10-12
 
 Follow long-running mission verification and delivery from anywhere in the local dashboard.

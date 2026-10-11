@@ -21,6 +21,7 @@ export function OperationProgress({ job }: { job: OperationJob }) {
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: ["operations"] });
       void qc.invalidateQueries({ queryKey: ["acceptance"] });
+      void qc.invalidateQueries({ queryKey: ["repository-readiness"] });
     },
   });
   const active = operationActive(job);

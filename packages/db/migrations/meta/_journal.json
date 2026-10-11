@@ -71,6 +71,13 @@
       "when": 1791759571505,
       "tag": "0009_operation_progress",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1791761057777,
+      "tag": "0010_repository_readiness",
+      "breakpoints": true
     }
   ]
 }

@@ -9,6 +9,7 @@ export { ManagedEngine, type ManagedEngineOptions } from "./managed-engine";
 export * from "./operations";
 export * from "./pipeline";
 export { JevReflexes, NoReflexes, type Reflexes, reflexesFromEnv } from "./reflexes";
+export * from "./repository-readiness";
 export { materializeRoutines } from "./routines";
 export { SdkEngine } from "./sdk-engine";
 export { repoSupport, taskRef, wipRef, workspaceDir } from "./workspace";

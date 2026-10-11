@@ -7,3 +7,4 @@ export * from "./policy";
 export * from "./report";
 export * from "./station";
 export * from "./tasks";
+export * from "./templates";

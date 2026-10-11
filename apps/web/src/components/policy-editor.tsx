@@ -5,12 +5,15 @@ import {
   POLICY_TASK_TYPES,
   type PolicyTaskType,
   type PolicyTemplate,
+  type PortablePolicyTemplate,
   policySummary,
+  portableTemplate,
   type Repo,
   resolvePolicy,
   TASK_TYPE_LABEL,
   type TaskPolicies,
   type TaskPolicy,
+  validatePortableTemplate,
 } from "@nightcrew/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Route } from "lucide-react";
@@ -23,17 +26,93 @@ export function PolicyEditor({ repo }: { repo: Repo }) {
   const [rules, setRules] = useState<TaskPolicies>(repo.policies ?? {});
   const qc = useQueryClient();
   const [templateName, setTemplateName] = useState("");
+  const [selectedTemplate, setSelectedTemplate] = useState<PolicyTemplate | null>(null);
+  const [deleteArmed, setDeleteArmed] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
   const templates = useQuery({
     queryKey: ["policy-templates"],
     queryFn: () => api.get<PolicyTemplate[]>("/api/policy-templates"),
   });
   const saveTemplate = useMutation({
-    mutationFn: () => api.post("/api/policy-templates", { name: templateName, policies: rules }),
-    onSuccess: () => {
+    mutationFn: () => api.post<PolicyTemplate>("/api/policy-templates", { name: templateName, policies: rules }),
+    onSuccess: (row) => {
       qc.invalidateQueries({ queryKey: ["policy-templates"] });
-      setTemplateName("");
+      setSelectedTemplate(row);
+      setTemplateName(row.name);
+      toast("Saved verification template.");
     },
   });
+  const updateTemplate = useMutation({
+    mutationFn: () =>
+      api.patch<PolicyTemplate>(`/api/policy-templates/${selectedTemplate!.id}`, {
+        name: templateName,
+        policies: rules,
+        expectedUpdatedAt: selectedTemplate!.updatedAt,
+      }),
+    onSuccess: (row) => {
+      setSelectedTemplate(row);
+      toast("Updated template. Repository routes remain unchanged until you save them.");
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ["policy-templates"] });
+    },
+  });
+  const deleteTemplate = useMutation({
+    mutationFn: () =>
+      api.del(`/api/policy-templates/${selectedTemplate!.id}`, { expectedUpdatedAt: selectedTemplate!.updatedAt }),
+    onSuccess: () => {
+      setSelectedTemplate(null);
+      setDeleteArmed(false);
+      toast("Deleted template. Existing repository routes are unchanged.");
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ["policy-templates"] });
+    },
+  });
+  const previewTemplate = (template: PolicyTemplate) => {
+    setSelectedTemplate(template);
+    setTemplateName(template.name);
+    setRules(template.policies);
+    setDeleteArmed(false);
+    setImportError(null);
+    updateTemplate.reset();
+    deleteTemplate.reset();
+    saveTemplate.reset();
+  };
+  const importTemplate = async (file: File) => {
+    try {
+      if (file.size > 65536) throw new Error("Choose a template smaller than 64 KB.");
+      let value: unknown;
+      try {
+        value = JSON.parse(await file.text());
+      } catch {
+        throw new Error("The template file is not valid JSON.");
+      }
+      const error = validatePortableTemplate(value);
+      if (error) throw new Error(error);
+      const template = value as PortablePolicyTemplate;
+      setSelectedTemplate(null);
+      setDeleteArmed(false);
+      setTemplateName(template.name.trim());
+      setRules(template.policies);
+      setImportError(null);
+      updateTemplate.reset();
+      deleteTemplate.reset();
+      saveTemplate.reset();
+      toast("Imported for preview. Save a template or repository routes to keep it.");
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : "Could not read the template.");
+    }
+  };
+  const exportTemplate = () => {
+    const value = portableTemplate(templateName.trim() || "Verification workflow", rules);
+    const url = URL.createObjectURL(new Blob([`${JSON.stringify(value, null, 2)}\n`], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "nightcrew-verification.json";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
   const save = useMutation({
     mutationFn: () => api.patch<Repo>(`/api/repos/${repo.id}`, { policies: rules }),
     onSuccess: () => {
@@ -50,6 +129,7 @@ export function PolicyEditor({ repo }: { repo: Repo }) {
       if (JSON.stringify(next[type]) === JSON.stringify(DEFAULT_TASK_POLICY)) delete next[type];
       return next;
     });
+  const templateBusy = saveTemplate.isPending || updateTemplate.isPending || deleteTemplate.isPending;
   const dirty = JSON.stringify(rules) !== JSON.stringify(repo.policies ?? {});
   return (
     <details className="rounded-xl bg-raised/40 p-4">
@@ -64,16 +144,17 @@ export function PolicyEditor({ repo }: { repo: Repo }) {
           The repo's autonomy is the ceiling. Each task type can stop earlier and require extra evidence. UI screenshots
           and bug-fix regression proof remain required. Research stays read-only.
         </p>
-        <div className="grid gap-2 rounded-xl bg-surface p-3">
+        <fieldset disabled={templateBusy || save.isPending} className="grid gap-2 rounded-xl bg-surface p-3">
           <label htmlFor={`template-${repo.id}`} className="text-[12px] text-muted">
             Reusable verification workflow
           </label>
           <Select
             id={`template-${repo.id}`}
-            value=""
+            value={selectedTemplate?.id ?? ""}
             onChange={(e) => {
               const template = templates.data?.find((t) => t.id === e.target.value);
-              if (template) setRules(template.policies);
+              if (template) previewTemplate(template);
+              else setSelectedTemplate(null);
             }}
           >
             <option value="">Preview a saved template…</option>
@@ -89,7 +170,7 @@ export function PolicyEditor({ repo }: { repo: Repo }) {
           </p>
           <div className="flex flex-wrap gap-2">
             <TextInput
-              aria-label="New verification template name"
+              aria-label="Verification template name"
               value={templateName}
               maxLength={100}
               onChange={(e) => setTemplateName(e.target.value)}
@@ -99,13 +180,73 @@ export function PolicyEditor({ repo }: { repo: Repo }) {
               Save as template
             </Button>
           </div>
-          {saveTemplate.error && (
+          <div className="flex flex-wrap gap-2">
+            {selectedTemplate && (
+              <>
+                <Button
+                  disabled={!templateName.trim() || updateTemplate.isPending}
+                  onClick={() => updateTemplate.mutate()}
+                >
+                  Update saved template
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    const current = templates.data?.find((t) => t.id === selectedTemplate.id);
+                    if (current) previewTemplate(current);
+                  }}
+                >
+                  Reload saved version
+                </Button>
+                <Button variant="ghost" onClick={() => setDeleteArmed(!deleteArmed)}>
+                  Delete template
+                </Button>
+              </>
+            )}
+            <Button variant="ghost" onClick={exportTemplate}>
+              Export preview
+            </Button>
+          </div>
+          {deleteArmed && selectedTemplate && (
+            <div className="grid gap-2 rounded-lg bg-bg p-3">
+              <p className="text-[12px] text-muted">
+                Delete “{selectedTemplate.name}” from the library? Repositories keep their copied routes.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="danger" disabled={deleteTemplate.isPending} onClick={() => deleteTemplate.mutate()}>
+                  Delete saved template
+                </Button>
+                <Button variant="ghost" onClick={() => setDeleteArmed(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+          <label className="grid gap-2 text-[12px] text-muted">
+            Import verification template
+            <input
+              type="file"
+              accept="application/json,.json"
+              className="w-full min-w-0 text-[12px]"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (file) void importTemplate(file);
+              }}
+            />
+          </label>
+          <p className="text-[12px] text-muted">
+            Exports contain a name and verification rules. Repository paths, commands, credentials and authority
+            ceilings are excluded. Import previews rules; it does not dispatch work or change a repository.
+          </p>
+          {(saveTemplate.error || updateTemplate.error || deleteTemplate.error || templates.error || importError) && (
             <p role="alert" className="text-bad">
-              {saveTemplate.error.message}
+              {importError ??
+                (updateTemplate.error ?? deleteTemplate.error ?? saveTemplate.error ?? templates.error)?.message}
             </p>
           )}
-        </div>
-        <fieldset disabled={save.isPending} className="grid gap-3 disabled:opacity-60">
+        </fieldset>
+        <fieldset disabled={save.isPending || templateBusy} className="grid gap-3 disabled:opacity-60">
           {POLICY_TASK_TYPES.map((type) => {
             const rule = { ...DEFAULT_TASK_POLICY, ...rules[type] };
             const effective = resolvePolicy({ ...repo, policies: rules }, type);

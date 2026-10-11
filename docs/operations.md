@@ -2,6 +2,14 @@
 
 These features run locally in the open-source edition. Managed mode remains **Coming soon**.
 
+## Verify repository setup
+
+In repository Settings or the Operations setup section, choose **Verify repository setup**. The local runner checks out the current commit of the repository's local default branch, runs the saved install command (if configured), then the saved test command. This spends no agent tokens and preserves your working directory, including uncommitted changes. Those uncommitted changes are not part of the verification.
+
+The result records the branch, commit, outcome and redacted diagnostics. A changed branch head, repository path, install command or test command makes the result outdated. Changed settings while waiting or during setup prevent the old command from continuing. Setup and tests must preserve the pinned source files. Verification runs as a background operation with individual stop and restart interruption handling.
+
+This is an optional rehearsal, not a new dispatch gate or an authority promotion. It verifies installation and tests; it does not verify agent sign-in, preview screenshots, remote branch freshness or deployment access. Task-specific checks still run on each task's changes.
+
 ## Live operation progress
 
 Mission acceptance and delivery start as background operations owned by your local runner. You can navigate away, reload, or close the browser while the runner keeps working. **Operations** shows all active jobs and the latest 30 finished jobs, with the three most recent shown initially. The mission page also shows its latest verification operation.
@@ -48,6 +56,10 @@ In a repository's **Routes by task type**, save the current rules as a named tem
 Choose one to three independent review sessions per task type. Extra reviewers are read-only, receive the task and evidence, and must all approve. They use the configured review model, so independence means separate sessions, not different providers. Additional reviews consume the task's token allowance. Running work retains stricter requirements observed while it runs; a late increase can hold landing until fresh verification.
 
 Templates never promote the repository's autonomy ceiling, remove protected-path rules, or remove mandatory UI/bug-fix evidence.
+
+Select a saved template to rename it or change its rules, then choose **Update saved template**. Changes to the library do not alter repository copies. Updates and deletes require the version you previewed; if another window changed it, reload the saved version before continuing. Deleting a template keeps repository routes intact.
+
+**Export preview** downloads a versioned JSON file containing only the template name and task rules. **Import verification template** accepts that format, validates its fields, and previews it without saving or dispatching anything. Choose **Save as template** to keep it in the library or **Save task routes** to apply the preview to the current repository. Imports reject unsupported versions, extra fields and invalid policies. Review template names before sharing them; names are user-authored text.
 
 ## Delivery commands
 

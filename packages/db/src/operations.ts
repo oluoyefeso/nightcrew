@@ -5,6 +5,7 @@ import type {
   MissionAcceptance,
   OperationJob,
   PolicyTemplate,
+  RepositoryCheck,
 } from "@nightcrew/core";
 import { and, desc, eq, inArray, lt, notInArray, sql } from "drizzle-orm";
 import type { Db } from "./index";
@@ -41,6 +42,50 @@ export function saveTemplate(db: Db, input: Pick<PolicyTemplate, "name" | "polic
   db.insert(schema.policyTemplates).values(row).run();
   auditEvent(db, "you", "policy.template.created", row.id);
   return row;
+}
+
+export function getTemplate(db: Db, id: string): PolicyTemplate | null {
+  return db.select().from(schema.policyTemplates).where(eq(schema.policyTemplates.id, id)).get() ?? null;
+}
+
+/** Updating the library never edits a repository's copied routes. */
+export function updateTemplate(
+  db: Db,
+  id: string,
+  expectedUpdatedAt: string,
+  input: Pick<PolicyTemplate, "name" | "policies">,
+): PolicyTemplate | null {
+  return db.transaction(() => {
+    const current = getTemplate(db, id);
+    if (!current || current.updatedAt !== expectedUpdatedAt) return null;
+    const row = {
+      ...input,
+      id,
+      updatedAt: new Date(Math.max(Date.now(), Date.parse(current.updatedAt) + 1)).toISOString(),
+    };
+    const result = db
+      .update(schema.policyTemplates)
+      .set(row)
+      .where(and(eq(schema.policyTemplates.id, id), eq(schema.policyTemplates.updatedAt, expectedUpdatedAt)))
+      .returning({ id: schema.policyTemplates.id })
+      .get();
+    if (!result) return null;
+    auditEvent(db, "you", "policy.template.updated", id);
+    return row;
+  });
+}
+
+export function deleteTemplate(db: Db, id: string, expectedUpdatedAt: string): boolean {
+  return db.transaction(() => {
+    const result = db
+      .delete(schema.policyTemplates)
+      .where(and(eq(schema.policyTemplates.id, id), eq(schema.policyTemplates.updatedAt, expectedUpdatedAt)))
+      .returning({ id: schema.policyTemplates.id })
+      .get();
+    if (!result) return false;
+    auditEvent(db, "you", "policy.template.deleted", id);
+    return true;
+  });
 }
 export function missionTokens(db: Db, missionId: string): number {
   return (
@@ -150,4 +195,19 @@ export function recoverOperationJobs(db: Db) {
     })
     .where(inArray(schema.operationJobs.status, ["running", "stopping"]))
     .run();
+}
+
+export function saveRepositoryCheck(db: Db, row: RepositoryCheck) {
+  db.insert(schema.repositoryChecks).values(row).run();
+  auditEvent(db, "you", `repository.check.${row.status}`, row.repoId, row.id);
+}
+export function latestRepositoryCheck(db: Db, repoId: string): RepositoryCheck | null {
+  return (
+    (db
+      .select()
+      .from(schema.repositoryChecks)
+      .where(eq(schema.repositoryChecks.repoId, repoId))
+      .orderBy(desc(schema.repositoryChecks.at), desc(sql`rowid`))
+      .get() as RepositoryCheck) ?? null
+  );
 }

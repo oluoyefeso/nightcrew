@@ -305,3 +305,20 @@ export const operationJobs = sqliteTable(
   },
   (t) => [index("operation_jobs_subject_idx").on(t.kind, t.subjectId, t.createdAt)],
 );
+
+export const repositoryChecks = sqliteTable(
+  "repository_checks",
+  {
+    id: text("id").primaryKey(),
+    repoId: text("repo_id")
+      .notNull()
+      .references(() => repos.id, { onDelete: "cascade" }),
+    fingerprint: text("fingerprint").notNull(),
+    branch: text("branch").notNull(),
+    sha: text("sha").notNull(),
+    status: text("status").notNull(),
+    detail: text("detail").notNull(),
+    at: text("at").notNull(),
+  },
+  (t) => [index("repository_checks_repo_idx").on(t.repoId, t.at)],
+);

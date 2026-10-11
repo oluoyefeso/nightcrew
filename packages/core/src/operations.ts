@@ -3,7 +3,7 @@ import type { TaskPolicies } from "./policy";
 /** Durable progress metadata; command output remains on the verification/delivery result. */
 export interface OperationJob {
   id: string;
-  kind: "mission" | "delivery";
+  kind: "mission" | "delivery" | "repository";
   subjectId: string;
   stage: Delivery["stage"] | null;
   status: "running" | "stopping" | "passed" | "failed" | "interrupted";
@@ -13,6 +13,27 @@ export interface OperationJob {
   detail: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface RepositoryCheck {
+  id: string;
+  repoId: string;
+  fingerprint: string;
+  branch: string;
+  sha: string;
+  status: "passed" | "failed" | "interrupted";
+  detail: string;
+  at: string;
+}
+
+export interface RepositoryReadiness {
+  fingerprint: string;
+  branch: string;
+  sha: string | null;
+  blockers: string[];
+  latest: RepositoryCheck | null;
+  operation: OperationJob | null;
+  verified: boolean;
 }
 
 export interface Checkpoint {

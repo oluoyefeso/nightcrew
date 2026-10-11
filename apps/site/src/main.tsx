@@ -439,8 +439,9 @@ function Site() {
               rest="See what is moving, what is held and what needs your judgement."
             />
             <p className="max-w-[700px] text-[15px] text-muted leading-relaxed">
-              Missions connect work across repos with shared acceptance criteria, priorities and token limits. Recover
-              saved work, verify the combined result, and follow delivery under the authority you choose.
+              Plan paused missions across repos with acceptance criteria, priorities and token limits. Link tasks to
+              outcomes and see gaps before dispatch. Recover saved work, verify the combined result, and follow delivery
+              under the authority you choose.
             </p>
           </Reveal>
           <StationExample />

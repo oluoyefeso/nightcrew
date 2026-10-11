@@ -94,6 +94,10 @@ export function StationExample() {
             <p className="text-[12px] text-muted">
               Priority: High · Mission limit: 5M tokens · Acceptance: not yet verified
             </p>
+            <p className="text-[12px] text-muted">
+              Start paused while you plan. Link tasks to acceptance criteria and inspect missing coverage before
+              dispatch. Links describe the plan; evidence and combined checks determine acceptance.
+            </p>
             <p className="text-[12px] text-muted" aria-live="polite">
               {paused
                 ? "New starts are held. The agent already working continues under its repository rules."

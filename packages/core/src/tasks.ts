@@ -95,6 +95,8 @@ export interface Routine {
 export interface Task {
   id: string;
   missionId?: string | null;
+  /** Mission criteria this task is intended to support; a planning link, not acceptance evidence. */
+  missionCriteria?: string[];
   recoveryMode?: "auto" | "verify" | "rebuild";
   autoRetries?: number;
   repoId: string;

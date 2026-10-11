@@ -275,6 +275,7 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
     const clean = pick(patch, [
       "title",
       "missionId",
+      "missionCriteria",
       "brief",
       "type",
       "scope",
@@ -315,7 +316,14 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
       return c.json({ error: "Dependencies must be a list of task IDs." }, 400);
     if (clean.repoId !== undefined && !getRepo(db, clean.repoId))
       return c.json({ error: "Pick a repo for the task." }, 400);
-    const err = missionError(db, clean.missionId) ?? validateLimits(db, clean);
+    const err =
+      missionError(db, clean.missionId) ??
+      missionCriteriaError(
+        db,
+        clean.missionId === undefined ? current.missionId : clean.missionId,
+        clean.missionCriteria,
+      ) ??
+      validateLimits(db, clean);
     if (err) return c.json({ error: err }, 400);
     // Queueing (or Run now) a task that can never fit the daily budget would only stall it.
     if (clean.status === "queued" || (clean.runAt !== undefined && (clean.status ?? current.status) === "queued")) {
@@ -556,6 +564,8 @@ export function runFile(dir: string, rel: string): string | null {
 function validateTask(db: Db, t: Partial<NewTask>): string | null {
   const mission = missionError(db, t.missionId);
   if (mission) return mission;
+  const links = missionCriteriaError(db, t.missionId, t.missionCriteria);
+  if (links) return links;
   if (!t.title?.trim()) return "Every task needs a title.";
   if (!t.repoId || !getRepo(db, t.repoId)) return "Pick a repo for the task.";
   if (t.type && !TASK_TYPES.includes(t.type)) return "Unknown task type.";
@@ -567,6 +577,21 @@ function missionError(db: Db, id: unknown): string | null {
   return id == null || (typeof id === "string" && getMission(db, id))
     ? null
     : "Choose an existing mission, or leave the task unassigned.";
+}
+
+function missionCriteriaError(db: Db, missionId: string | null | undefined, value: unknown): string | null {
+  if (value === undefined) return null;
+  if (
+    !Array.isArray(value) ||
+    value.length > 30 ||
+    value.some((c) => typeof c !== "string") ||
+    new Set(value).size !== value.length
+  )
+    return "Mission links must be a list of distinct acceptance criteria.";
+  const mission = missionId ? getMission(db, missionId) : null;
+  return value.some((c) => !mission?.criteria.includes(c))
+    ? "Mission criteria changed or do not belong to this mission. Review the links before saving."
+    : null;
 }
 
 function batchDependencyError(value: unknown, index: number): string | null {

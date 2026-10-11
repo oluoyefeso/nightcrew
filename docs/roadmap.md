@@ -11,14 +11,14 @@ NightCrew is the local station for dispatching agents, verifying their work and 
 - Opt-in check → deploy → release commands on pinned local commits.
 - Persistent operation progress, individual stops and interruption records.
 
-## Completed in this batch
+## Completed batches
 
 - **Repository readiness:** rehearse installation and verification before dispatching agents; retain results tied to the tested commit and configuration.
 - **Workflow library:** edit and manage reusable verification templates, with portable import/export and previews before applying them.
 
-## Next
+- **Mission planning:** set complete controls at creation, start paused, link tasks to acceptance criteria, inspect missing coverage, and repair outdated links.
 
-- **Mission planning:** set complete mission controls at creation, inspect the proposed work against acceptance criteria, and keep handoffs clear before dispatch.
+## Next
 - **Delivery readiness:** explain stage eligibility against the current commit and policy, with direct access to historical results.
 - **Operational decisions:** make holds and failed outcomes easier to find and act on across repositories.
 

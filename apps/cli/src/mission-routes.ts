@@ -9,6 +9,7 @@ import {
   latestOperationJob,
   listMissions,
   listTasks,
+  type NewMission,
   updateMission,
 } from "@nightcrew/db";
 import type { Crew } from "@nightcrew/runner";
@@ -42,7 +43,7 @@ export function mountMissionRoutes(app: Hono, { db, crew }: { db: Db; crew: Crew
     const value: unknown = await c.req.json().catch(() => null);
     const error = validate(value, true);
     if (error) return c.json({ error }, 400);
-    const input = value as Pick<Mission, "title" | "objective">;
+    const input = value as NewMission;
     return c.json(createMission(db, input), 201);
   });
   app.patch("/api/missions/:id", async (c) => {
@@ -87,12 +88,7 @@ function validate(value: unknown, creating: boolean): string | null {
   const input = value as Record<string, unknown>;
   if (
     Object.keys(input).some(
-      (key) =>
-        ![
-          "title",
-          "objective",
-          ...(creating ? [] : ["paused", "criteria", "tokenBudget", "priority", "deadline"]),
-        ].includes(key),
+      (key) => !["title", "objective", "paused", "criteria", "tokenBudget", "priority", "deadline"].includes(key),
     )
   )
     return "Unknown mission field.";

@@ -34,11 +34,11 @@ One failed validation can invoke one repair. A flaky failed run can receive one 
 
 ## Mission controls and acceptance
 
-Edit a mission to set acceptance criteria, a token limit, priority (Normal through Urgent), and an optional ISO start deadline. Higher priorities go first; deadlines break ties, followed by queue position. Dependencies, schedules, repository capacity and verification setup still apply. A passed start deadline holds new starts; it does not terminate an active agent. Pause has the same active-run behavior.
+Set mission acceptance criteria, a token limit, priority (Normal through Urgent), and an optional start deadline when creating or editing a mission. The dashboard uses your browser’s local timezone and stores the deadline in UTC; the API accepts an ISO date with a timezone. New dashboard missions start paused by default so you can review the plan; API clients retain the active default unless they send `paused: true`. Higher priorities go first; deadlines break ties, followed by queue position. Dependencies, schedules, repository capacity and verification setup still apply. A passed start deadline holds new starts; it does not terminate an active agent. Pause has the same active-run behavior.
 
 Mission token usage is charged at dispatch, across retries. Changing membership or deleting a task does not refund it. Running tasks reserve their remaining task caps. Migration assigns historical local attempts to each task's mission at upgrade time. Unassigned and classic work is not retroactively charged. Token limits govern dispatch capacity; provider token accounting can arrive after a model turn, so they are not financial guarantees. Command execution has timeouts rather than a token cost.
 
-Draft work from the mission to have the composer propose tasks, prerequisites and a final integration check using its objective and criteria. Review drafts before dispatch.
+Draft work from the mission to have the composer propose tasks, prerequisites and a final integration check using its objective and criteria. Review drafts before dispatch. Each draft can link to the exact mission criteria it supports; the batch shows missing links, and the mission page shows coverage across saved tasks. Links describe planned work, not proof of completion or a dispatch gate. If criteria change, outdated links remain visible until repaired in the task editor. Moving a task to another mission clears its old links.
 
 Task counts do not certify the objective. Acceptance requires:
 

@@ -28,6 +28,7 @@ import missionsMigration from "../migrations/0007_missions.sql" with { type: "te
 import operationsMigration from "../migrations/0008_conductor_operations.sql" with { type: "text" };
 import progressMigration from "../migrations/0009_operation_progress.sql" with { type: "text" };
 import readinessMigration from "../migrations/0010_repository_readiness.sql" with { type: "text" };
+import planningMigration from "../migrations/0011_mission_planning.sql" with { type: "text" };
 import { auditEvent } from "./operations";
 import * as schema from "./schema";
 import { listTasks } from "./tasks";
@@ -52,6 +53,7 @@ const MIGRATIONS: [name: string, sql: string][] = [
   ["0008_conductor_operations", operationsMigration],
   ["0009_operation_progress", progressMigration],
   ["0010_repository_readiness", readinessMigration],
+  ["0011_mission_planning", planningMigration],
 ];
 
 export type Db = BunSQLiteDatabase<typeof schema> & { $client: Database };

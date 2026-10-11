@@ -6,6 +6,7 @@ import { useState } from "react";
 import { api, missionQuery, missionsQuery, tasksQuery, useInvalidateTasks } from "../api";
 import { Field, Select, TextArea, TextInput } from "../components/form";
 import { MissionAcceptancePanel } from "../components/mission-acceptance";
+import { MissionControls, missionControlPatch, missionControlValues } from "../components/mission-controls";
 import { Button } from "../components/ui";
 
 export function MissionCard({ mission }: { mission: MissionSummary }) {
@@ -35,10 +36,13 @@ export function MissionsPage() {
   const missions = useQuery(missionsQuery);
   const [title, setTitle] = useState("");
   const [objective, setObjective] = useState("");
+  const [controls, setControls] = useState(() => missionControlValues());
+  const [paused, setPaused] = useState(true);
   const invalidate = useInvalidateTasks();
   const navigate = useNavigate();
   const create = useMutation({
-    mutationFn: () => api.post<Mission>("/api/missions", { title, objective }),
+    mutationFn: () =>
+      api.post<Mission>("/api/missions", { title, objective, paused, ...missionControlPatch(controls) }),
     onSuccess: (mission) => {
       invalidate();
       navigate({ to: "/missions/$missionId", params: { missionId: mission.id } });
@@ -85,6 +89,19 @@ export function MissionsPage() {
             rows={3}
           />
         </Field>
+        <MissionControls values={controls} onChange={setControls} />
+        <label className="flex items-center gap-2 text-[13px]">
+          <input
+            type="checkbox"
+            checked={paused}
+            onChange={(e) => setPaused(e.target.checked)}
+            className="accent-dawn"
+          />
+          Start paused while I plan
+        </label>
+        <p className="text-[12px] text-muted">
+          A paused mission can be drafted and reviewed. Resume it when new tasks may start.
+        </p>
         <p className="text-[12.5px] text-muted">
           Agents receive this objective alongside their task. Scope, verification and merge authority still come from
           each task and repository.
@@ -232,8 +249,8 @@ export function MissionPage({ missionId }: { missionId: string }) {
       </p>
       <div className="flex flex-wrap gap-x-8 gap-y-3 rounded-2xl bg-surface p-5 text-[13px] ring-1 ring-line">
         <span>
-          <b className="font-mono">{formatTokens(mission.tokensUsed)}</b> tokens used across all attempts of current
-          tasks
+          <b className="font-mono">{formatTokens(mission.tokensUsed)}</b> tokens charged across all attempts dispatched
+          for this mission
         </span>
         <span>
           <b className="font-mono">{formatTokens(mission.taskCaps)}</b> combined caps for queued and running tasks
@@ -242,6 +259,46 @@ export function MissionPage({ missionId }: { missionId: string }) {
           Caps are limits, not forecasts or extra reservations. The crew's daily budget still governs dispatch.
         </p>
       </div>
+      <section
+        aria-label="Mission criterion coverage"
+        className="grid gap-3 rounded-2xl bg-surface p-5 ring-1 ring-line"
+      >
+        <h2 className="t-h3">Planned criterion coverage</h2>
+        <p className="text-[12px] text-muted">
+          See which tasks are intended to support each outcome. Links are planning metadata; acceptance still needs your
+          evidence and passing combined checks.
+        </p>
+        {!mission.criteria.length && (
+          <p className="text-[13px] text-dawn">Add acceptance criteria before reviewing coverage.</p>
+        )}
+        {mission.criteria.map((criterion) => {
+          const linked = tasks.filter(({ task }) => task.missionCriteria?.includes(criterion));
+          return (
+            <div key={criterion} className="grid gap-2 rounded-xl bg-raised/40 p-3">
+              <h3 className="text-[13px] font-medium break-words">{criterion}</h3>
+              {!linked.length ? (
+                <p className="text-[12px] text-dawn">No task linked yet</p>
+              ) : (
+                linked.map(({ task }) => (
+                  <Link
+                    key={task.id}
+                    to="/task/$taskId"
+                    params={{ taskId: task.id }}
+                    className="text-[12px] text-dawn break-words"
+                  >
+                    {task.title} · {task.status}
+                  </Link>
+                ))
+              )}
+            </div>
+          );
+        })}
+        {tasks.some(({ task }) => task.missionCriteria?.some((c) => !mission.criteria.includes(c))) && (
+          <p className="text-[12px] text-dawn">
+            Some task links refer to changed or removed criteria. Open those tasks to review their links.
+          </p>
+        )}
+      </section>
       <section aria-label="Mission tasks" className="grid gap-3">
         <h2 className="t-h3">Tasks · {mission.counts.total}</h2>
         {tasks.map(({ task, run, departure }) => (
@@ -351,22 +408,13 @@ export function MissionPage({ missionId }: { missionId: string }) {
 function MissionEditor({ mission, onSaved }: { mission: Mission; onSaved: () => void }) {
   const [title, setTitle] = useState(mission.title);
   const [objective, setObjective] = useState(mission.objective);
-  const [criteria, setCriteria] = useState(mission.criteria.join("\n"));
-  const [budget, setBudget] = useState(mission.tokenBudget?.toString() ?? "");
-  const [priority, setPriority] = useState(mission.priority);
-  const [deadline, setDeadline] = useState(mission.deadline ?? "");
+  const [controls, setControls] = useState(() => missionControlValues(mission));
   const save = useMutation({
     mutationFn: () =>
       api.patch(`/api/missions/${mission.id}`, {
         title,
         objective,
-        criteria: criteria
-          .split("\n")
-          .map((c) => c.trim())
-          .filter(Boolean),
-        tokenBudget: budget ? Number(budget) : null,
-        priority,
-        deadline: deadline || null,
+        ...missionControlPatch(controls),
       }),
     onSuccess: onSaved,
   });
@@ -397,45 +445,7 @@ function MissionEditor({ mission, onSaved }: { mission: Mission; onSaved: () => 
           rows={4}
         />
       </Field>
-      <Field label="Mission acceptance criteria (one per line)" htmlFor="mission-criteria">
-        <TextArea id="mission-criteria" rows={4} value={criteria} onChange={(e) => setCriteria(e.target.value)} />
-      </Field>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field
-          label="Mission token limit"
-          htmlFor="mission-budget"
-          hint="Blank means no separate limit. Includes all attempts charged to this mission."
-        >
-          <TextInput
-            id="mission-budget"
-            type="number"
-            min={50000}
-            step={1000}
-            value={budget}
-            onChange={(e) => setBudget(e.target.value)}
-          />
-        </Field>
-        <Field label="Dispatch priority" htmlFor="mission-priority">
-          <Select id="mission-priority" value={priority} onChange={(e) => setPriority(Number(e.target.value))}>
-            <option value={0}>Normal</option>
-            <option value={1}>Raised</option>
-            <option value={2}>High</option>
-            <option value={3}>Urgent</option>
-          </Select>
-        </Field>
-      </div>
-      <Field
-        label="Start deadline (ISO date, optional)"
-        htmlFor="mission-deadline"
-        hint="New starts stop at this time. Active work may finish."
-      >
-        <TextInput
-          id="mission-deadline"
-          value={deadline}
-          placeholder="2027-01-20T18:00:00Z"
-          onChange={(e) => setDeadline(e.target.value)}
-        />
-      </Field>
+      <MissionControls values={controls} onChange={setControls} />
       <p className="text-[12px] text-muted">
         Changes apply to future attempts. Agents already running keep the objective they started with.
       </p>

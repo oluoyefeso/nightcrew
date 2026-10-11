@@ -21,6 +21,7 @@ import { AddRepo } from "../components/add-repo";
 import { AgentBoard, CrewSummary } from "../components/agent-board";
 import { DepartureChecks } from "../components/departure-checks";
 import { ChipsEditor, inlineEdit, ListEditor, Select, TextInput } from "../components/form";
+import { MissionCriteriaLinks } from "../components/mission-criteria-links";
 import { TaskRoute } from "../components/task-route";
 import { Button } from "../components/ui";
 import { isTypingTarget } from "../lib";
@@ -108,7 +109,10 @@ export function AgentsPage({ initialMissionId }: { initialMissionId?: string }) 
               value={missionId}
               onChange={(e) => {
                 setMissionId(e.target.value);
-                setDrafts((current) => current?.map((d) => ({ ...d, missionId: e.target.value || null })) ?? null);
+                setDrafts(
+                  (current) =>
+                    current?.map((d) => ({ ...d, missionId: e.target.value || null, missionCriteria: [] })) ?? null,
+                );
               }}
             >
               <option value="">No mission</option>
@@ -350,6 +354,7 @@ function Drafts({
   onChange: (d: DraftTask[]) => void;
   onDone: () => void;
 }) {
+  const missions = useQuery(missionsQuery);
   const invalidate = useInvalidateTasks();
   const settings = useQuery(settingsQuery);
   const save = useMutation({
@@ -380,6 +385,26 @@ function Drafts({
       <h2 className="font-medium text-[13px]">
         The crew drafted {drafts.length} {drafts.length === 1 ? "task" : "tasks"}. Fix anything that's off, then queue.
       </h2>
+      {[...new Set(drafts.flatMap((draft) => (draft.missionId ? [draft.missionId] : [])))].map((id) => {
+        const mission = missions.data?.find((m) => m.id === id);
+        if (!mission) return null;
+        const missing = mission.criteria.filter(
+          (criterion) => !drafts.some((draft) => draft.missionId === id && draft.missionCriteria?.includes(criterion)),
+        );
+        return (
+          <div key={id} className="grid gap-2 rounded-xl bg-surface p-4 text-[12px] ring-1 ring-line">
+            <p className="font-medium">{mission.title} · draft criterion coverage</p>
+            <p className="text-muted">
+              {mission.criteria.length - missing.length} of {mission.criteria.length} criteria linked in this batch.
+              Existing mission tasks may cover other outcomes.
+            </p>
+            {missing.length > 0 && <p className="text-dawn">Not linked in this batch: {missing.join("; ")}</p>}
+            {mission.paused && (
+              <p className="text-dawn">This mission is paused. Queued work waits until you resume it.</p>
+            )}
+          </div>
+        );
+      })}
       <div className="grid gap-3 sm:grid-cols-2">
         {drafts.map((d, i) => (
           <article
@@ -442,6 +467,13 @@ function Drafts({
               onChange={(criteria) => update(i, { criteria })}
               placeholder="Add an acceptance criterion"
             />
+            {d.missionId && (
+              <MissionCriteriaLinks
+                criteria={missions.data?.find((m) => m.id === d.missionId)?.criteria}
+                selected={d.missionCriteria ?? []}
+                onChange={(missionCriteria) => update(i, { missionCriteria })}
+              />
+            )}
             {d.question && (
               <div className="grid gap-2 rounded-xl bg-raised p-3">
                 <p className="text-[13px]">{d.question}</p>

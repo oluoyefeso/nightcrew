@@ -22,6 +22,7 @@ import {
   countRunsForTask,
   createTrain,
   type Db,
+  getMission,
   getOpenTrain,
   getRepo,
   getTask,
@@ -128,6 +129,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
   const { db } = deps;
   const task = getTask(db, taskId);
   if (!task) throw new Error(`Task ${taskId} not found.`);
+  const mission = task.missionId ? getMission(db, task.missionId) : null;
   const repo = getRepo(db, task.repoId);
   if (!repo) throw new Error(`Repo for task ${taskId} not found.`);
   const startingPolicy = resolvePolicy(repo, task.type);
@@ -394,6 +396,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     // The crew's own `git diff <default>...HEAD` then shows what the gate will check.
     await pointDefaultBranch(ws, repo.defaultBranch, forkSha, { signal: stop, warn });
     const ctx: PromptContext = {
+      mission,
       task,
       repo,
       policy,

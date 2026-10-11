@@ -93,6 +93,7 @@ export interface Routine {
 
 export interface Task {
   id: string;
+  missionId?: string | null;
   repoId: string;
   repoName: string;
   title: string;

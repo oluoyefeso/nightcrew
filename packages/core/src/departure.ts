@@ -3,14 +3,25 @@ import type { Repo, Task } from "./tasks";
 
 export type DepartureTask = Pick<
   Task,
-  "id" | "repoId" | "title" | "type" | "scope" | "dependsOn" | "tokenBudget" | "testCommand" | "question" | "runAt"
+  | "id"
+  | "repoId"
+  | "title"
+  | "type"
+  | "scope"
+  | "dependsOn"
+  | "tokenBudget"
+  | "testCommand"
+  | "question"
+  | "runAt"
+  | "missionId"
 >;
 export interface DepartureSignal {
   code: string;
   kind: "hold" | "wait" | "notice";
   message: string;
-  target: "settings" | "task";
+  target: "settings" | "task" | "mission";
   taskId?: string;
+  missionId?: string;
 }
 export interface TaskDeparture {
   taskId: string;

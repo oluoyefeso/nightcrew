@@ -78,6 +78,14 @@ Each repo earns autonomy from its track record:
 
 **Decision briefs** explain a run's stop reason, missing evidence and next steps, with links to the relevant artifacts and settings. Retry uses saved work where available and reruns verification under current rules.
 
+## Missions
+
+Group related tasks around an objective, even across repositories. Create a mission from the Station or **Missions**, then draft work for it or attach existing tasks. Agents receive the objective alongside their task; their scope and repository rules still apply. Edit prerequisites on individual tasks to control ordering.
+
+Each mission shows queued and active work, setup holds, questions, decisions and token usage across all attempts of its current tasks. Inspect a task's latest run directly from the mission. Resolved work includes merged, shipped and dismissed tasks; NightCrew does not automatically certify that the objective is achieved.
+
+**Pause mission** holds new starts while active agents finish, including landing allowed by their repository rules. Resume allows queued tasks to start when the crew's other limits permit. Objective edits apply to future attempts. Mission task caps are not an additional budget or reservation; the daily crew budget still governs dispatch.
+
 ## Tokens
 
 A small task uses about **100k tokens** end to end (build, check, review, commit). That's measured, not estimated. Each agent session runs isolated: no filesystem settings, MCP servers, skills or plugins from your machine, only the repo's own `CLAUDE.md` / `AGENTS.md`. The same tasks took 2.3M–4.4M tokens in a session that loaded everything on the machine, so that's 20–40× fewer, with the agent's tools kept to what the task needs. Every task has a token budget the agent stops at, and the daily token budget holds new agents back rather than letting them pass it.

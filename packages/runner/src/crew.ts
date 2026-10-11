@@ -29,6 +29,7 @@ import {
 } from "@nightcrew/core";
 import {
   type Db,
+  getMission,
   getRepo,
   getRun,
   getSettings,
@@ -169,6 +170,9 @@ export class Crew {
         const entry = { taskId: task.id, title: task.title, repoName: task.repoName, runAt: task.runAt };
         const holds = departureChecks(task, getRepo(db, task.repoId)).signals.filter((s) => s.kind === "hold");
         if (holds.length) return { ...entry, kind: "setup", reason: holds.map((s) => s.message).join(" ") };
+        const mission = task.missionId ? getMission(db, task.missionId) : null;
+        if (mission?.paused)
+          return { ...entry, kind: "paused", reason: `Mission paused: ${mission.title}. Resume it from Missions.` };
         const waiting = task.dependsOn.filter((id) => !byId.has(id) || !this.satisfied(byId.get(id) as Task));
         if (waiting.length)
           return {
@@ -232,6 +236,22 @@ export class Crew {
       },
       tasks: candidates.map((task) => {
         const check = departureChecks(task, repos.get(task.repoId) ?? null);
+        const mission = task.missionId ? getMission(db, task.missionId) : null;
+        if (task.missionId && !mission)
+          check.signals.push({
+            code: "mission-missing",
+            kind: "hold",
+            message: "This mission no longer exists. Choose another mission or leave the task unassigned.",
+            target: "task",
+          });
+        if (mission?.paused)
+          check.signals.push({
+            code: "mission-paused",
+            kind: "wait",
+            message: `Mission paused: ${mission.title}. Resume it to allow new starts.`,
+            target: "mission",
+            missionId: mission.id,
+          });
         const add = (
           code: string,
           kind: "hold" | "wait" | "notice",
@@ -375,6 +395,7 @@ export class Crew {
     for (const id of planQueue(all).order) {
       const t = byId.get(id);
       if (!t || this.running.has(id) || skip.has(id)) continue;
+      if (t.missionId && getMission(db, t.missionId)?.paused) continue;
       if (departureChecks(t, getRepo(db, t.repoId)).signals.some((s) => s.kind === "hold")) continue;
       if (t.runAt && new Date(t.runAt).getTime() > now) continue;
       // Dependencies must have finished and succeeded, not just started or stopped.

@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   addRepo,
+  createMission,
   createTask,
   type Db,
   getTask,
   openDb,
+  updateMission,
   updateRepo,
   updateSettings,
   updateTask,
@@ -57,6 +59,73 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 const crewWith = (engine: ScriptedEngine) => new Crew({ db, engine, dataDir: join(dir, "data"), publish: false });
 
 describe("dispatcher", () => {
+  test("pausing a mission lets active work finish, holds its next task and leaves other work runnable", async () => {
+    const r = await repo("mission");
+    const mission = createMission(db, { title: "Team invitations", objective: "Original mission objective" });
+    const first = createTask(db, {
+      repoId: r.id,
+      title: "First task",
+      missionId: mission.id,
+      status: "queued",
+      scope: ["src/**"],
+    });
+    const second = createTask(db, {
+      repoId: r.id,
+      title: "Second task",
+      missionId: mission.id,
+      status: "queued",
+      scope: ["src/**"],
+    });
+    const unrelated = createTask(db, { repoId: r.id, title: "Independent task", status: "queued", scope: ["src/**"] });
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let began = () => {};
+    const started = new Promise<void>((resolve) => {
+      began = resolve;
+    });
+    const order: string[] = [];
+    const engine = new ScriptedEngine({
+      implement: async (req) => {
+        const title = req.prompt.match(/## Task\n(.+)/)?.[1] ?? "";
+        order.push(title);
+        if (title === first.title) {
+          began();
+          await gate;
+        }
+        writeFileSync(join(req.cwd, "src/feature.ts"), `export const n = ${order.length};\n`);
+        return { text: "Done" };
+      },
+      review: () => ({ structured: READY }),
+    });
+    const crew = crewWith(engine);
+    try {
+      await crew.pump();
+      await started;
+      updateMission(db, mission.id, { paused: true, objective: "Revised mission objective" });
+      expect(crew.getQueue().find((entry) => entry.taskId === second.id)?.reason).toContain("Mission paused");
+      release();
+      await crew.drain();
+      expect(order).toEqual([first.title, unrelated.title]);
+      expect(getTask(db, first.id)?.status).toBe("done");
+      expect(getTask(db, second.id)?.status).toBe("queued");
+      const review = engine.calls.find((call) => call.phase === "review" && call.prompt.includes(first.title));
+      expect(review?.prompt).toContain("Original mission objective");
+      expect(review?.prompt).not.toContain("Revised mission objective");
+      expect(review?.prompt).toContain("Implement only this task's scope");
+      updateMission(db, mission.id, { paused: false });
+      await crew.drain();
+      expect(order).toEqual([first.title, unrelated.title, second.title]);
+      expect(
+        engine.calls.find((call) => call.phase === "implement" && call.prompt.includes(second.title))?.prompt,
+      ).toContain("Revised mission objective");
+    } finally {
+      release();
+      await crew.drain();
+    }
+  });
+
   test("required setup holds spend no tokens and resume after configuration is fixed", async () => {
     const r = await repo("preflight");
     updateRepo(db, r.id, {

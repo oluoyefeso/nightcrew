@@ -97,10 +97,20 @@ export const repos = sqliteTable("repos", {
   policies: text("policies", { mode: "json" }).$type<TaskPolicies>().notNull().default({}),
 });
 
+export const missions = sqliteTable("missions", {
+  id: text("id").primaryKey(),
+  title: text("title").notNull(),
+  objective: text("objective").notNull(),
+  paused: integer("paused", { mode: "boolean" }).notNull().default(false),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export const tasks = sqliteTable(
   "tasks",
   {
     id: text("id").primaryKey(),
+    missionId: text("mission_id").references(() => missions.id, { onDelete: "set null" }),
     repoId: text("repo_id")
       .notNull()
       .references(() => repos.id, { onDelete: "cascade" }),
@@ -131,7 +141,7 @@ export const tasks = sqliteTable(
     updatedAt: text("updated_at").notNull(),
     lastRunId: text("last_run_id"),
   },
-  (t) => [index("tasks_status_idx").on(t.status, t.position)],
+  (t) => [index("tasks_status_idx").on(t.status, t.position), index("tasks_mission_idx").on(t.missionId)],
 );
 
 export const taskNotes = sqliteTable(

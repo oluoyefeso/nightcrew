@@ -95,7 +95,15 @@ export function DepartureChecks({ tasks }: { tasks: DepartureInput[] }) {
                       className="text-[12.5px] leading-relaxed"
                     >
                       <span className={signal.kind === "hold" ? "text-bad" : "text-muted"}>{signal.message}</span>{" "}
-                      {signal.target === "settings" ? (
+                      {signal.target === "mission" && signal.missionId ? (
+                        <Link
+                          to="/missions/$missionId"
+                          params={{ missionId: signal.missionId }}
+                          className="text-dawn underline underline-offset-2"
+                        >
+                          Open mission
+                        </Link>
+                      ) : signal.target === "settings" ? (
                         <Link to="/settings" className="text-dawn underline underline-offset-2">
                           Open settings
                         </Link>

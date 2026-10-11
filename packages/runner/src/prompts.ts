@@ -2,6 +2,7 @@
 // artifacts go to NightCrew's own folder, never into the user's repo.
 
 import {
+  type Mission,
   policyEvidence,
   policySummary,
   type Repo,
@@ -12,6 +13,7 @@ import {
 } from "@nightcrew/core";
 
 export interface PromptContext {
+  mission?: Pick<Mission, "title" | "objective"> | null;
   task: Task;
   repo: Repo;
   artifactsDir: string;
@@ -29,11 +31,12 @@ const scopeLine = (t: Task) => (t.scope.length ? t.scope.join(", ") : "anything 
 const criteria = (t: Task) =>
   t.criteria.length ? t.criteria.map((c) => `- ${c}`).join("\n") : "- Do what the brief asks, with tests.";
 
-function taskBlock({ task, repo, policy }: PromptContext) {
+function taskBlock({ task, repo, policy, mission }: PromptContext) {
   return `## Task
 ${task.title}
 
 ${task.brief || "(No further detail. Infer the intent from the title and the code.)"}
+${mission ? `\n## Mission\n${mission.title}\n${mission.objective}\n\nThis is shared context. Implement only this task's scope and acceptance criteria; repository rules still apply.\n` : ""}
 
 ## Acceptance criteria
 ${criteria(task)}

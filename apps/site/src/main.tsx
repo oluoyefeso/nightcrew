@@ -5,6 +5,7 @@ import { clsx } from "clsx";
 import { Check, Copy, Moon, Sun } from "lucide-react";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { StationExample } from "./station-example";
 
 const REPO = "https://github.com/oluoyefeso/nightcrew";
 const INSTALL = "curl -fsSL https://raw.githubusercontent.com/oluoyefeso/nightcrew/main/install.sh | sh";
@@ -246,6 +247,7 @@ function currentTheme(): "light" | "dark" {
 
 const NAV = [
   ["#how", "How it works"],
+  ["#station", "Station"],
   ["#evidence", "Evidence"],
   ["#trust", "Trust"],
   ["#tokens", "Tokens"],
@@ -369,8 +371,8 @@ function Site() {
               </h1>
               <p className="t-lede max-w-[560px]">
                 NightCrew is your conductor's station for coding agents. Dispatch work, set the crew's authority, and
-                inspect the evidence. Agents work across your repos and bring back the decisions that need you, day or
-                night.
+                inspect the evidence. Group related tasks into missions across your repos and see the decisions that
+                need you, day or night.
               </p>
               <div className="flex flex-wrap items-center justify-center gap-3" id="start">
                 <InstallButton />
@@ -406,7 +408,7 @@ function Site() {
                 [
                   "Any time · Dispatch",
                   "Tell the crew",
-                  "Describe the work in plain English, or pull in GitHub issues. NightCrew drafts task cards with scope, acceptance criteria and a budget, and asks if something's unclear. Run now, or schedule it for off-peak.",
+                  "Give the crew an objective. Group tasks into a mission, describe the work in plain English, or pull in GitHub issues. Departure checks surface missing setup, prerequisites, possible scope overlap and available budget before an agent starts.",
                 ],
                 [
                   "In parallel · Agents work",
@@ -416,7 +418,7 @@ function Site() {
                 [
                   "As they finish · Report back",
                   "Judge the evidence",
-                  "The Station keeps unresolved decisions visible across days, shows what the crew is working on, and explains why queued work is waiting. Your repo settings decide whether the crew opens a PR, joins a train, or merges to dev.",
+                  "The Station keeps unresolved decisions visible across days. Decision briefs explain stop reasons, missing evidence and next steps. Your repo settings decide whether the crew stops at a plan, opens a PR, joins a train, or merges to dev.",
                 ],
               ].map(([time, title, body]) => (
                 <div key={title} className="grid content-start gap-3 bg-surface p-7">
@@ -427,6 +429,25 @@ function Site() {
               ))}
             </div>
           </Reveal>
+        </section>
+
+        <section id="station" className="mx-auto grid max-w-[1120px] gap-10 px-5 py-24 [&>*]:min-w-0">
+          <Reveal className="grid gap-4">
+            <Eyebrow>Your conductor's station</Eyebrow>
+            <H2
+              claim="Keep the objective in view."
+              rest="See what is moving, what is held and what needs your judgement."
+            />
+            <p className="max-w-[700px] text-[15px] text-muted leading-relaxed">
+              Missions connect work across repos. Pause new starts for a whole mission while active agents finish.
+              Departure checks and decision briefs keep the next action visible, from setup to review.
+            </p>
+          </Reveal>
+          <StationExample />
+          <p className="text-[13px] text-muted">
+            Available in the local open-source runner. Mission context does not expand a task's scope or its
+            repository's merge authority.
+          </p>
         </section>
 
         <section id="evidence" className="mx-auto grid max-w-[1120px] gap-10 px-5 py-24 [&>*]:min-w-0">

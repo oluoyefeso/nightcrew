@@ -3,6 +3,7 @@ import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as realSdk from "@anthropic-ai/claude-agent-sdk";
+import { browserProfileDirs } from "@nightcrew/core/guard";
 import { type PhaseRequest, STOPPED } from "./engine";
 import { cacheDirs } from "./env";
 import { git, run } from "./git";
@@ -206,5 +207,19 @@ describe("SdkEngine", () => {
     expect(deny).toContain(join(repo, ".git", "refs"));
     expect(deny).toContain(join(repo, ".git", "HEAD"));
     expect(deny).toContain(join(repo, ".git", "packed-refs"));
+  });
+
+  // Value: protects=the dashboard token in browser localStorage from the agent's Bash; fails_when=denyRead goes, or a deniedDomains entry (which a probe showed doesn't block loopback) leaks the API port to the agent; why_new=Y2/Y3; seam=none
+  test("the sandbox denies reading browser profiles and doesn't name the API port", () => {
+    const old = process.env.NIGHTCREW_API_PORT;
+    process.env.NIGHTCREW_API_PORT = "48123";
+    try {
+      const s = sandboxFor(request(), "/home/me");
+      expect(s.filesystem?.denyRead).toEqual(browserProfileDirs("/home/me"));
+      expect(JSON.stringify(s)).not.toContain("48123");
+    } finally {
+      if (old === undefined) delete process.env.NIGHTCREW_API_PORT;
+      else process.env.NIGHTCREW_API_PORT = old;
+    }
   });
 });

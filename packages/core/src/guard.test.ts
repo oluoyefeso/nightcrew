@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { type GuardContext, globToRegExp, guardToolCall, isAlwaysProtected } from "./guard";
+import { browserProfileDirs, type GuardContext, globToRegExp, guardToolCall, isAlwaysProtected } from "./guard";
 
 const ctx: GuardContext = {
   worktree: "/repo/.worktrees/t",
@@ -390,4 +390,83 @@ describe("cycle 2 guard rows", () => {
     expect(allowed("Bash", { command: "rm -rf /workspace/cache" }, extra)).toBe(false);
     expect(allowed("Bash", { command: "rm -rf /workspace/cache/build" })).toBe(false);
   });
+});
+
+describe("writes through symlinks", () => {
+  // A clone-like worktree and a folder outside it, both real.
+  const root = mkdtempSync(join(tmpdir(), "nc-guard-link-"));
+  const wt = join(root, "wt");
+  const outside = join(root, "outside");
+  mkdirSync(join(wt, "src", "real"), { recursive: true });
+  mkdirSync(join(wt, ".github", "workflows"), { recursive: true });
+  mkdirSync(outside);
+  writeFileSync(join(outside, "target.txt"), "x");
+  writeFileSync(join(wt, "src", "real", "a.ts"), "x");
+  symlinkSync(join(wt, "src", "real"), join(wt, "src", "inner"));
+  symlinkSync(outside, join(wt, "src", "out"));
+  symlinkSync(join(outside, "target.txt"), join(wt, "src", "file.ts"));
+  symlinkSync(join(root, "nowhere"), join(wt, "src", "dangling.ts"));
+  symlinkSync(join(root, "nowhere"), join(wt, "src", "gone"));
+  symlinkSync(join(wt, ".github", "workflows"), join(wt, "ci"));
+  const c = { ...ctx, worktree: wt, scope: [] };
+  const writes = (file_path: string) =>
+    ["Write", "Edit", "MultiEdit", "NotebookEdit"].map((tool) =>
+      guardToolCall(tool, tool === "NotebookEdit" ? { notebook_path: file_path } : { file_path }, c),
+    );
+
+  test("a symlinked folder that stays inside is allowed", () => {
+    // Value: protects=normal repos with in-repo symlinked folders keep working; fails_when=landing() stops resolving to the real path or rejects every symlinked parent; why_new=Y1 symlink fix; seam=none
+    for (const d of writes(join(wt, "src", "inner", "new.ts"))) expect(d.allow).toBe(true);
+    for (const d of writes("src/inner/a.ts")) expect(d.allow).toBe(true);
+  });
+  test("a new file in a symlinked folder that points outside is refused", () => {
+    // Value: protects=Write/Edit (which run outside the OS sandbox) can't land outside the clone through a folder symlink; fails_when=guardWrite judges only the spelled path; why_new=Y1 probe wrote ~/nc-probe-dir through dirlink/; seam=none
+    for (const d of writes("src/out/new.txt")) {
+      expect(d.allow).toBe(false);
+      if (!d.allow) expect(d.reason).toContain("through a symlink");
+    }
+  });
+  test("a symlink to a file outside is refused", () => {
+    // Value: protects=an edit can't follow a file symlink out of the clone; fails_when=the lstat check on the target goes; why_new=Y1 symlink fix; seam=none
+    for (const d of writes("src/file.ts")) expect(d.allow).toBe(false);
+  });
+  test("dangling links are refused, as the file or a folder on the way", () => {
+    // Value: protects=a write can't create its target through a link that points nowhere yet; fails_when=landing() treats an unresolvable link as a missing path; why_new=Y1 symlink fix; seam=none
+    for (const d of writes("src/dangling.ts")) expect(d.allow).toBe(false);
+    for (const d of writes("src/gone/new.ts")) expect(d.allow).toBe(false);
+  });
+  test("protected paths are checked where the write lands", () => {
+    // Value: protects=a symlink can't launder a workflow edit past ALWAYS_PROTECTED; fails_when=only the spelled relative path is checked; why_new=Y1 symlink fix; seam=none
+    for (const d of writes("ci/deploy.yml")) expect(d.allow).toBe(false);
+  });
+  test("the artifacts folder is checked where the write lands too", () => {
+    // Value: protects=a symlink in the writable artifact folder can't redirect a write; fails_when=writableDirs allow on the spelled path alone; why_new=Y1 symlink fix; seam=none
+    const art = join(root, "art");
+    mkdirSync(art);
+    symlinkSync(outside, join(art, "out"));
+    const a = { ...c, writableDirs: [art] };
+    expect(guardToolCall("Write", { file_path: join(art, "report.md") }, a).allow).toBe(true);
+    expect(guardToolCall("Write", { file_path: join(art, "out", "x.md") }, a).allow).toBe(false);
+  });
+});
+
+test(".github/actions is protected in any case", () => {
+  // Value: protects=composite actions, which run in CI with secrets; fails_when=".github/actions/**" leaves ALWAYS_PROTECTED; why_new=Y4; seam=none
+  const open = { ...ctx, scope: [] };
+  expect(allowed("Write", { file_path: ".github/actions/setup/action.yml" }, open)).toBe(false);
+  expect(allowed("Edit", { file_path: ".GitHub/Actions/setup/action.yml" }, open)).toBe(false);
+  expect(isAlwaysProtected(".github/actions/x/index.js")).toBe(true);
+  expect(allowed("Write", { file_path: "docs/github-actions.md" }, open)).toBe(true);
+});
+
+test("browser profiles can't be read with Read, Grep or Glob", () => {
+  // Value: protects=the dashboard token in the browser's localStorage from the in-process read tools, which the OS sandbox doesn't cover; fails_when=inBrowserProfile goes or stops lowercasing; why_new=Y3; seam=none
+  const chrome = browserProfileDirs()[0] as string;
+  expect(allowed("Read", { file_path: join(chrome, "Default", "Local Storage", "leveldb", "000003.log") })).toBe(false);
+  expect(allowed("Read", { file_path: join(chrome.toUpperCase(), "Local State") })).toBe(false);
+  expect(allowed("Grep", { pattern: "token", path: join(homedir(), ".mozilla") })).toBe(false);
+  expect(allowed("Glob", { pattern: "**/*.log", path: join(homedir(), "Library", "Safari") })).toBe(false);
+  expect(allowed("Read", { file_path: join(homedir(), "Library", "Application Support", "Code", "x.json") })).toBe(
+    true,
+  );
 });

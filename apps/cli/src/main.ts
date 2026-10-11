@@ -210,6 +210,8 @@ async function serve() {
   const token = values.dev || process.env.NIGHTCREW_DEV === "1" ? undefined : randomBytes(32).toString("hex");
   const app = createApp({ db, cwd, classicRoot, webDir, crew, engine, dataDir: values.data, publish, token });
   const server = Bun.serve({ port, hostname: "127.0.0.1", fetch: app.fetch, idleTimeout: 0 });
+  // Agent sandboxes read this to deny loopback access to the dashboard's own port.
+  process.env.NIGHTCREW_API_PORT = String(server.port);
   const url = `http://localhost:${server.port}/${token ? `?t=${token}` : ""}`;
   crew.startSchedule();
   const s = getSettings(db);

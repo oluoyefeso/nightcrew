@@ -132,3 +132,9 @@ const CACHE_DIRS = [
 export function cacheDirs(home = homedir()): string[] {
   return CACHE_DIRS.map((d) => join(home, d));
 }
+
+/** The dashboard API's port, from NIGHTCREW_API_PORT. Sandboxes block it on loopback. */
+export function dashboardPort(env: NodeJS.ProcessEnv = process.env): number | undefined {
+  const port = Number(env.NIGHTCREW_API_PORT);
+  return Number.isInteger(port) && port > 0 && port < 65536 ? port : undefined;
+}

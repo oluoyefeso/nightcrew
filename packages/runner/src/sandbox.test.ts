@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { browserProfileDirs } from "@nightcrew/core/guard";
 import { git } from "./git";
 import { bwrapArgs, runCheck, seatbeltProfile } from "./sandbox";
 
@@ -124,6 +125,38 @@ describe("seatbelt profile", () => {
   });
 });
 
+/** Run `fn` with env vars set, then put them back. */
+async function withEnv<T>(vars: Record<string, string>, fn: () => T | Promise<T>): Promise<T> {
+  const old = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, vars);
+  try {
+    return await fn();
+  } finally {
+    for (const [k, v] of Object.entries(old)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
+
+describe("browser profiles and the dashboard port", () => {
+  // Value: protects=the dashboard token (browser localStorage) and API from checks; fails_when=the read deny or the port deny leaves the profile, or the port line appears without a port; why_new=Y2/Y3; seam=none
+  test("seatbelt denies reading every browser profile and the API port on loopback", async () => {
+    const p = await withEnv({ NIGHTCREW_API_PORT: "48123" }, () => seatbeltProfile(clone, { clone: true }));
+    for (const d of browserProfileDirs()) expect(p).toContain(`(subpath "${d}")`);
+    expect(p).toContain('(deny network-outbound (remote ip "localhost:48123"))');
+    const none = await withEnv({ NIGHTCREW_API_PORT: "nope" }, () => seatbeltProfile(clone, { clone: true }));
+    expect(none).not.toContain("network-outbound");
+  });
+  test("bubblewrap hides the browser profiles that exist under an empty tmpfs", () => {
+    const home = join(dir, "home");
+    mkdirSync(join(home, ".mozilla"), { recursive: true });
+    const a = bwrapArgs(clone, { clone: true }, home).join(" ");
+    expect(a).toContain(`--tmpfs ${join(home, ".mozilla")}`);
+    expect(a).not.toContain(join(home, ".config", "google-chrome"));
+  });
+});
+
 describe.skipIf(process.platform !== "darwin")("real sandbox on macOS", () => {
   // Value: protects=a check really can't write outside its worktree, temp dirs and caches, can't touch the repo's git data from a worktree NightCrew owns, and still runs bun; fails_when=the profile stops applying, the deny order flips (Seatbelt is last-match-wins), the gitdir is writable again, or the allows are too narrow for bun; why_new=G6 sandbox is new, F2 dropped the gitdir allow; seam=none
   test("writes inside the worktree and temp work, writes elsewhere fail", async () => {
@@ -202,5 +235,36 @@ describe.skipIf(process.platform !== "darwin")("real sandbox on macOS", () => {
       { clone: true },
     );
     expect(r.stdout.split("\n").filter(Boolean)).toEqual(["126", "126", "126", "ok-bun"]);
+  });
+
+  // Value: protects=the dashboard API and the browser's stored token from a check; fails_when=Seatbelt stops matching "localhost:<port>" for 127.0.0.1 or ::1, or the browser profile read deny stops applying; why_new=Y2/Y3; seam=none
+  test("a check can't reach the API port or read a browser profile, other ports still work", async () => {
+    const api = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("api") });
+    const other = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("other") });
+    const home = join(dir, "home");
+    const profile = join(home, "Library", "Application Support", "Google", "Chrome");
+    mkdirSync(profile, { recursive: true });
+    writeFileSync(join(profile, "Local State"), "token");
+    try {
+      const cmd = [
+        `curl -s -m 5 http://localhost:${api.port} && echo LEAK-localhost`,
+        `curl -s -m 5 http://127.0.0.1:${api.port} && echo LEAK-127`,
+        `curl -s -m 5 http://[::1]:${api.port} && echo LEAK-v6`,
+        `cat '${join(profile, "Local State")}' 2>/dev/null && echo LEAK-profile`,
+        `curl -s -m 5 http://127.0.0.1:${other.port} >/dev/null && echo ok-other`,
+        "true",
+      ].join("; ");
+      // The profile as runCheck builds it, with a home whose browser profile this test owns.
+      const p = await withEnv({ NIGHTCREW_API_PORT: String(api.port) }, () =>
+        seatbeltProfile(clone, { clone: true }, home),
+      );
+      // Async: the servers run on this event loop.
+      const proc = Bun.spawn(["/usr/bin/sandbox-exec", "-p", p, "--", "sh", "-c", cmd], { cwd: clone });
+      const r = { stdout: await new Response(proc.stdout).text() };
+      expect(r.stdout.split("\n").filter(Boolean)).toEqual(["ok-other"]);
+    } finally {
+      api.stop(true);
+      other.stop(true);
+    }
   });
 });

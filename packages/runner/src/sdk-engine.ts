@@ -11,6 +11,7 @@ import {
   type SandboxSettings,
   type SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { browserProfileDirs } from "@nightcrew/core/guard";
 import {
   type AgentEngine,
   backstopUsd,
@@ -265,7 +266,12 @@ export function sandboxFor(req: PhaseRequest, home = homedir()): SandboxSettings
     filesystem: {
       allowWrite: [...new Set(allowWrite)],
       ...(req.isolated ? {} : { denyWrite: mainCheckoutDenies(req.cwd) }),
+      // The dashboard token lives in the browser's localStorage, on disk here.
+      denyRead: browserProfileDirs(home),
     },
+    // No deniedDomains for the dashboard port: they're enforced at the SDK's
+    // proxy, and allowLocalBinding lets commands reach localhost directly, so
+    // a probe still got through. The entry would only tell the agent the port.
     network: { allowedDomains: ["*"], allowLocalBinding: true },
   };
 }

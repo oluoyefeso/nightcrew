@@ -1,9 +1,9 @@
 // The guardrail every tool call passes through while the crew works unattended.
 // Pure: given a tool call and the task's limits, allow it or say why not.
 
-import { realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { isAbsolute, normalize, relative, resolve } from "node:path";
+import { lstatSync, realpathSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 
 export interface GuardContext {
   /** The task's worktree. Writes outside it are refused. */
@@ -26,6 +26,8 @@ const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 /** Paths no task may touch, whatever its scope says. */
 export const ALWAYS_PROTECTED = [
   ".github/workflows/**",
+  // Composite actions run inside CI jobs, with their secrets.
+  ".github/actions/**",
   ".env",
   ".env.*",
   "**/.env",
@@ -50,6 +52,36 @@ export const ALWAYS_PROTECTED = [
  */
 export function isAlwaysProtected(path: string): boolean {
   return matchesAny(path.replace(/^(\.\/)+/, ""), ALWAYS_PROTECTED, true);
+}
+
+/**
+ * Browser profile folders, relative to home. The dashboard's API token lives
+ * in the browser's localStorage, on disk in these. No agent or check reads them.
+ */
+const BROWSER_PROFILES = [
+  "Library/Application Support/Google/Chrome",
+  "Library/Application Support/Chromium",
+  "Library/Application Support/BraveSoftware",
+  "Library/Application Support/Microsoft Edge",
+  "Library/Application Support/Arc",
+  "Library/Application Support/Firefox",
+  "Library/Safari",
+  "Library/Containers/com.apple.Safari",
+  ".config/google-chrome",
+  ".config/chromium",
+  ".config/BraveSoftware",
+  ".config/microsoft-edge",
+  ".mozilla",
+];
+
+export function browserProfileDirs(home = homedir()): string[] {
+  return BROWSER_PROFILES.map((d) => join(home, d));
+}
+
+/** Inside a browser profile, as written or where it leads. Case-insensitive, like macOS. */
+function inBrowserProfile(abs: string): boolean {
+  const dirs = browserProfileDirs().map((d) => d.toLowerCase());
+  return [abs, realPath(abs)].some((p) => dirs.some((d) => isInside(p.toLowerCase(), d)));
 }
 
 /** Secret file names: .env, .env.local, key.pem, id_rsa. Not .envrc, environment or a template like .env.example. */
@@ -130,15 +162,21 @@ export function guardToolCall(tool: string, input: Record<string, unknown>, ctx:
     const path = String(input.file_path ?? "");
     const abs = isAbsolute(path) ? path : resolve(ctx.worktree, path);
     if (isSecret(path) || isSecret(realPath(abs))) return deny("Reading secrets files is blocked.");
+    if (inBrowserProfile(abs)) return deny(BROWSER_DENIED);
   }
 
   if (tool === "Grep" || tool === "Glob") {
     const targets = [input.path, input.glob, tool === "Glob" ? input.pattern : undefined];
     if (targets.some((t) => typeof t === "string" && isSecret(t))) return deny("Reading secrets files is blocked.");
+    const dir = typeof input.path === "string" && input.path ? input.path : ctx.worktree;
+    const abs = isAbsolute(dir) ? normalize(dir) : resolve(ctx.worktree, dir);
+    if (inBrowserProfile(abs)) return deny(BROWSER_DENIED);
   }
 
   return { allow: true };
 }
+
+const BROWSER_DENIED = "Reading browser profiles is blocked.";
 
 /** A path or glob whose last part names a secret file (.env*, *.pem, id_rsa*). */
 function isSecret(target: string): boolean {
@@ -245,19 +283,55 @@ function deletesOutside(words: string[], ctx: GuardContext): boolean {
 function guardWrite(path: string, ctx: GuardContext): GuardDecision {
   if (!path) return deny("A write needs a file path.");
   const abs = isAbsolute(path) ? normalize(path) : resolve(ctx.worktree, path);
+  // The file tools follow symlinks in the path and don't run in the OS
+  // sandbox, so judge where the write really lands, not just how it's spelled.
+  const lands = landing(abs, false);
+  if (!lands) return deny("Writes can't go through a symlink.");
 
   for (const dir of ctx.writableDirs) {
-    if (isInside(abs, dir)) return { allow: true };
+    if (isInside(abs, dir)) return isInside(lands, landing(dir, true) ?? dir) ? { allow: true } : deny(ESCAPES);
   }
   if (!isInside(abs, ctx.worktree)) return deny("Writes must stay inside the task's worktree.");
+  const root = landing(ctx.worktree, true) ?? ctx.worktree;
+  if (!isInside(lands, root)) return deny(ESCAPES);
   if (ctx.readOnly) return deny("Research tasks don't change the code. Write the report to the artifacts folder.");
 
-  const rel = relative(ctx.worktree, abs);
-  if (isAlwaysProtected(rel)) return deny(`${rel} is protected (workflows, secrets and git config).`);
-  if (ctx.scope.length && !matchesAny(rel, ctx.scope)) {
-    return deny(`${rel} is outside this task's scope (${ctx.scope.join(", ")}).`);
+  // Both names: wt/ci -> .github/workflows makes ci/x.yml a workflow.
+  for (const rel of new Set([relative(ctx.worktree, abs), relative(root, lands)])) {
+    if (isAlwaysProtected(rel)) return deny(`${rel} is protected (workflows, secrets and git config).`);
+    if (ctx.scope.length && !matchesAny(rel, ctx.scope)) {
+      return deny(`${rel} is outside this task's scope (${ctx.scope.join(", ")}).`);
+    }
   }
   return { allow: true };
+}
+
+const ESCAPES = "Writes must stay inside the task's worktree; this path leads outside it through a symlink.";
+
+/**
+ * Where a write to `abs` lands: the deepest part that exists, resolved, plus
+ * the rest. Undefined when `abs` is itself a symlink (unless `followLast`) or
+ * a part on the way exists but doesn't resolve (a dangling or looping link).
+ */
+function landing(abs: string, followLast: boolean): string | undefined {
+  const exists = (p: string) => {
+    try {
+      return lstatSync(p);
+    } catch {
+      return undefined;
+    }
+  };
+  if (!followLast && exists(abs)?.isSymbolicLink()) return undefined;
+  const rest: string[] = [];
+  for (let dir = abs; ; dir = dirname(dir)) {
+    try {
+      return join(realpathSync(dir), ...rest);
+    } catch {
+      if (exists(dir)) return undefined;
+    }
+    if (dirname(dir) === dir) return abs;
+    rest.unshift(basename(dir));
+  }
 }
 
 function deny(reason: string): GuardDecision {

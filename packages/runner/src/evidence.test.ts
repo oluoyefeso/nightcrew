@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addRepo, createTask, type Db, getRepo, openDb, updateRepo } from "@nightcrew/db";
-import { gatherEvidence, summarizeEvidence } from "./evidence";
+import { gatherEvidence, startPreview, summarizeEvidence } from "./evidence";
 import { git } from "./git";
 import { ensureWorkspace } from "./workspace";
 
@@ -113,6 +113,43 @@ describe("fail-then-pass", () => {
     expect(ev.testProof?.failsOnBase).toBe(true);
   });
 
+  // Value: protects=a base checkout whose setup failed is never counted as fail-then-pass proof; fails_when=gatherEvidence ignores the base setup result again and a broken install reads as a failing test; why_new=G5 infra failures counted as proof; seam=none
+  test("a failed base setup makes the proof unavailable, not proof", async () => {
+    const repo = addRepo(db, {
+      name: "app",
+      path: repoPath,
+      defaultBranch: "main",
+      testCommand: "sh -c 'for t in tests/*.test.sh; do sh $t || exit 1; done'",
+    });
+    const wt = await clone(repo.id, "fix/setup");
+    updateRepo(db, repo.id, { setupCommand: "echo broken-install >&2; exit 3" });
+    writeFileSync(join(wt, "math.sh"), "add() { echo $(( $1 + $2 )); }\n");
+    writeFileSync(join(wt, "tests", "add.test.sh"), '. ./math.sh; [ "$(add 2 3)" = "5" ]\n');
+    mkdirSync(join(dir, "artifacts"), { recursive: true });
+    const ev = await gatherEvidence(opts("bug: setup broken", wt, repo.id));
+    expect(ev.testProof?.failsOnBase).toBeNull();
+    expect(ev.testProof?.unavailable).toContain("broken-install");
+    expect(ev.missing[0]).toContain("setup failed");
+    expect(summarizeEvidence(ev)).toContain("couldn't be run on the base branch");
+  });
+
+  // Value: protects=a test runner that can't start on the base branch (exit 127) isn't read as the test failing; fails_when=any nonzero base exit counts as failsOnBase again; why_new=G5 infra failures counted as proof; seam=none
+  test("a test command that can't start on the base branch is not proof", async () => {
+    const repo = addRepo(db, {
+      name: "app",
+      path: repoPath,
+      defaultBranch: "main",
+      testCommand: "nightcrew-no-such-runner tests",
+    });
+    const wt = await clone(repo.id, "fix/runner");
+    writeFileSync(join(wt, "tests", "add.test.sh"), "false\n");
+    mkdirSync(join(dir, "artifacts"), { recursive: true });
+    const ev = await gatherEvidence(opts("bug: no runner", wt, repo.id));
+    expect(ev.testProof?.failsOnBase).toBeNull();
+    expect(ev.testProof?.unavailable).toContain("exit 127");
+    expect(ev.missing[0]).toContain("couldn't start");
+  });
+
   test("no test at all is flagged", async () => {
     const repo = addRepo(db, { name: "app", path: repoPath, defaultBranch: "main", testCommand: "true" });
     const wt = await clone(repo.id, "fix/none");
@@ -168,4 +205,33 @@ describe("screenshots", () => {
     const ev = await gatherEvidence(opts("ui: no preview", wt, repo.id));
     expect(ev.missing[0]).toContain("No preview command");
   });
+});
+
+describe("preview processes", () => {
+  // Value: protects=stopping a preview kills the servers it started in the background, not just its shell; fails_when=the preview isn't its own process group or stop signals only the leader pid; why_new=G6 preview servers outlived cleanup; seam=none
+  test("stopping a preview leaves nothing behind", async () => {
+    const appDir = join(dir, "site");
+    mkdirSync(appDir, { recursive: true });
+    const repo = {
+      previewCommand: "sleep 60 & echo $! > child.pid; exec python3 -m http.server $PORT --bind 127.0.0.1",
+      previewUrl: "http://127.0.0.1:{port}",
+    } as Parameters<typeof startPreview>[0];
+    const preview = await startPreview(repo, appDir, new AbortController().signal, () => {}, false);
+    expect((await fetch(preview.url)).status).toBeLessThan(500);
+    const child = Number(readFileSync(join(appDir, "child.pid"), "utf8").trim());
+    const running = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    expect(running(child)).toBe(true);
+    await preview.stop();
+    const deadline = Date.now() + 2000;
+    while (running(child) && Date.now() < deadline) await Bun.sleep(100);
+    expect(running(child)).toBe(false);
+    await expect(fetch(preview.url, { signal: AbortSignal.timeout(1000) })).rejects.toThrow();
+  }, 30_000);
 });

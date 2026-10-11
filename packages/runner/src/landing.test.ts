@@ -27,9 +27,10 @@ import {
   shipTask,
   undoShip,
 } from "./landing";
-import { runTask } from "./pipeline";
+import { gateBase, runTask } from "./pipeline";
 import type { ReviewOutput } from "./prompts";
 import { JevReflexes, ruleConfidence, ruleWorkflow } from "./reflexes";
+import { startFreshHint, taskRef, wipRef, workspaceDir } from "./workspace";
 
 let dir: string;
 let repoPath: string;
@@ -599,6 +600,55 @@ describe("landing against a real origin", () => {
     expect(files).toContain("src/a.ts");
   });
 
+  test("what one landing's tests leave in the ship checkout is gone before the next one's tests run", async () => {
+    // Value: protects=untracked files a landing's test run leaves in the long-lived integration checkout (build output, stray files) can't change the next task's test result, while installed dependencies stay; fails_when=branchWorktree only resets tracked files between landings; why_new=Z4; seam=none
+    const r = addRepo(db, {
+      name: "acme",
+      path: repoPath,
+      defaultBranch: "main",
+      testCommand: "test ! -e stray.txt && touch stray.txt",
+    });
+    updateRepo(db, r.id, { level: "ship", shipBranch: "dev", allowShip: ["src/**"] });
+    const repo = getRepo(db, r.id);
+    if (!repo) throw new Error("setup");
+    const a = await taskBranch("crew/a", "src/a.ts");
+    expect(await shipTask(repo, a, "A", false, ap(a))).toMatchObject({ ok: true });
+    const checkout = join(repoPath, ".worktrees", "_dev");
+    expect(existsSync(join(checkout, "stray.txt"))).toBe(true);
+    mkdirSync(join(checkout, "node_modules", "dep"), { recursive: true });
+    const b = await taskBranch("crew/b", "src/b.ts");
+    expect(await shipTask(repo, b, "B", false, ap(b))).toMatchObject({ ok: true });
+    expect(existsSync(join(checkout, "node_modules", "dep"))).toBe(true);
+  });
+
+  test("a second Undo or Pull that waited on the lock says it's already done", async () => {
+    // Value: protects=two Undo (or Pull) clicks for one landing: the second, re-checked inside the repo lock, says it's already undone instead of failing with a confusing revert error; fails_when=undoShip/pullCar revert again without looking for their own revert on the branch; why_new=Z6; seam=none
+    const repo = shipRepo();
+    const a = await taskBranch("crew/a", "src/a.ts");
+    const shipped = await shipTask(repo, a, "A", false, ap(a));
+    if (!shipped.ok) throw new Error(shipped.error);
+    const undos = await Promise.all([
+      undoShip(repo, "dev", shipped.sha, false),
+      undoShip(repo, "dev", shipped.sha, false),
+    ]);
+    expect(undos[0].ok).toBe(true);
+    expect(undos[1]).toEqual({ ok: false, error: "That ship is already undone." });
+    const dev = await sha("dev");
+
+    const train = { id: "t", repoId: repo.id, nightId: "n", branch: "crew/train-n", cars: [] } as never;
+    const b = await taskBranch("crew/b", "src/b.ts");
+    const boarded = await boardTrain(repo, train, b, "B", false, ap(b));
+    if (!boarded.ok) throw new Error(boarded.error);
+    const pulls = await Promise.all([
+      pullCar(repo, train, boarded.sha, false),
+      pullCar(repo, train, boarded.sha, false),
+    ]);
+    expect(pulls[0].ok).toBe(true);
+    expect(pulls[1]).toEqual({ ok: false, error: "It's already off the train." });
+    expect(await tree("crew/train-n")).not.toContain("src/b.ts");
+    expect(await sha("dev")).toBe(dev);
+  });
+
   test("a setup that fails on the ship branch says so, with its output", async () => {
     // Value: protects=a failing dependency install on the integration branch is reported as a setup failure with a tail of its output, not as the task breaking the tests; fails_when=testsPass ignores the setup result and blames the task; why_new=cycle-3 review: setup failures read as test failures; seam=none
     const repo = shipRepo({ setupCommand: "echo 'registry unreachable' >&2; exit 3" });
@@ -671,12 +721,14 @@ describe("running a task again after it landed", () => {
     expect((await undoShip(fresh(repo.id), "dev", shipSha, false)).ok).toBe(true);
     markUndone(db, first.runId);
     const dev = await sha("dev");
-    const second = await run(writes("src/b.ts"), t.id);
+    const engine = writes("src/b.ts");
+    const second = await run(engine, t.id);
     expect(getRun(db, second.runId)?.run.shipSha).toBeNull();
-    const why = texts(second.runId).find((x) => x.startsWith("Didn't ship"));
-    expect(why).toContain(
-      "This task's earlier work was taken off dev (pulled or undone), so merging again would land only part of it. Start the task fresh: delete the task's workspace at",
+    expect(second.status).toBe("failed");
+    expect(second.reason).toContain(
+      "This task's earlier work was taken off dev (pulled or undone), and this run would build on it. Start the task fresh: delete the task's workspace at",
     );
+    expect(engine.calls).toEqual([]);
     expect(await sha("dev")).toBe(dev);
   });
 
@@ -692,13 +744,149 @@ describe("running a task again after it landed", () => {
     setCarState(db, train.id, first.runId, "pulled");
     const lane = await sha(train.branch);
     const second = await run(writes("src/b.ts"), t.id);
-    const why = texts(second.runId).find((x) => x.startsWith("Couldn't board the train"));
-    expect(why).toContain(`This task's earlier work was taken off ${train.branch} (pulled or undone)`);
+    expect(second.status).toBe("failed");
+    expect(second.reason).toContain(`This task's earlier work was taken off ${train.branch} (pulled or undone)`);
     expect(await sha(train.branch)).toBe(lane);
   });
 
+  /** Two runs of one task on today's train, then the first car pulled. Returns what the probes need. */
+  async function olderCarPulled() {
+    const repo = trainRepo();
+    const t = createTask(db, { repoId: repo.id, title: "Two cars", scope: ["src/**"], status: "queued" });
+    const first = await run(writes("src/a.ts"), t.id);
+    const second = await run(writes("src/b.ts"), t.id);
+    const [train] = listTrains(db);
+    const car1 = train?.cars.find((c) => c.runId === first.runId);
+    const car2 = train?.cars.find((c) => c.runId === second.runId);
+    if (!train || car1?.state !== "on" || car2?.state !== "on") throw new Error("not boarded");
+    expect((await pullCar(fresh(repo.id), train, car1.mergeSha, false)).ok).toBe(true);
+    setCarState(db, train.id, first.runId, "pulled");
+    const t1 = await sha(`${car1.mergeSha}^2`);
+    const t2 = await sha(`${car2.mergeSha}^2`);
+    return { repo, t, train, car1, t1, t2 };
+  }
+  /** A commit on top of `parent` that adds `file`, as a task's next run would. */
+  async function next(parent: string, file: string) {
+    const wt = join(dir, `wt-next-${file.replace(/\W/g, "-")}`);
+    await git(repoPath, "worktree", "add", "-q", "--detach", wt, parent);
+    mkdirSync(join(wt, file, ".."), { recursive: true });
+    writeFileSync(join(wt, file), "next\n");
+    await git(wt, "add", "-A");
+    await git(wt, ...ID, "commit", "-qm", "next");
+    const out = (await git(wt, "rev-parse", "HEAD")).stdout.trim();
+    await git(repoPath, "worktree", "remove", "--force", wt);
+    return out;
+  }
+
+  test("pulling an older car while a later car of the task is on: a re-run is refused before any agent runs", async () => {
+    // Value: protects=a re-run on top of a later car that's still on never lands with the pulled car's work silently left reverted; fails_when=the start of a run doesn't check pulled landings, or the merge base being a landed tip is trusted before takenOff; why_new=Z1 probe (a); seam=none
+    const { t, train } = await olderCarPulled();
+    const lane = await sha(train.branch);
+    const engine = writes("src/c.ts");
+    const third = await run(engine, t.id);
+    expect(third.status).toBe("failed");
+    expect(third.reason).toContain(
+      `This task's earlier work was taken off ${train.branch} (pulled or undone), and this run would build on it. Start the task fresh: delete the task's workspace at`,
+    );
+    expect(engine.calls).toEqual([]);
+    expect(await sha(train.branch)).toBe(lane);
+    expect(await tree(train.branch)).not.toContain("src/c.ts");
+  });
+
+  test("the train refuses a merge on top of a later car when an older car of the task was pulled", async () => {
+    // Value: protects=even past the start check, landing checks taken-off tips before trusting a landed tip as the merge base, with the records read inside the repo lock; fails_when=mergeInto skips a merge base found in landed before looking at takenOff; why_new=Z1 probe (a) at the landing; seam=none
+    const { repo, train, car1, t1, t2 } = await olderCarPulled();
+    const lane = await sha(train.branch);
+    const tip = await next(t2, "src/c.ts");
+    const base = await gateBase(repoPath, "main", tip);
+    const boarded = await boardTrain(fresh(repo.id), train, tip, "Again", false, {
+      base,
+      files: ["src/a.ts", "src/b.ts", "src/c.ts"],
+      earlier: () => ({ landed: [t2], takenOff: [{ tip: t1, merge: car1.mergeSha, branch: train.branch }] }),
+    });
+    expect(boarded.ok).toBe(false);
+    if (!boarded.ok) expect(boarded.error).toContain(`taken off ${train.branch} (pulled or undone)`);
+    expect(await sha(train.branch)).toBe(lane);
+  });
+
+  test("after the train with a pulled car is merged into main, a re-run is refused, and a fresh start lands", async () => {
+    // Value: protects=once the revert reaches main, the gate base moves onto the pulled tip and the ancestor check passes, so taken-off tips are checked first; and a task started fresh from a main that holds the revert isn't refused forever; fails_when=takenOff is only looked at after the ancestor check, or the revert on main doesn't exempt a fresh start; why_new=Z1 probe (b); seam=none
+    const repo = trainRepo();
+    const t = createTask(db, { repoId: repo.id, title: "Merged train", scope: ["src/**"], status: "queued" });
+    const first = await run(writes("src/a.ts"), t.id);
+    const [train] = listTrains(db);
+    const car = train?.cars[0];
+    if (!train || car?.state !== "on") throw new Error("not boarded");
+    expect((await pullCar(fresh(repo.id), train, car.mergeSha, false)).ok).toBe(true);
+    setCarState(db, train.id, first.runId, "pulled");
+    await git(repoPath, ...ID, "merge", "-q", "--no-ff", "-m", "Merge the train", train.branch);
+    const t1 = await sha(`${car.mergeSha}^2`);
+    const lane = await sha(train.branch);
+
+    // At the landing: the gate base is the pulled tip itself.
+    const tip = await next(t1, "src/b.ts");
+    const base = await gateBase(repoPath, "main", tip);
+    expect(base).toBe(t1);
+    const boarded = await boardTrain(fresh(repo.id), train, tip, "Again", false, {
+      base,
+      files: ["src/b.ts"],
+      earlier: () => ({ landed: [], takenOff: [{ tip: t1, merge: car.mergeSha, branch: train.branch }] }),
+    });
+    expect(boarded.ok).toBe(false);
+    if (!boarded.ok) expect(boarded.error).toContain("taken off");
+    expect(await sha(train.branch)).toBe(lane);
+
+    // At the start of a run.
+    const second = await run(writes("src/b.ts"), t.id);
+    expect(second.status).toBe("failed");
+    const branch = getRun(db, first.runId)?.run.branch as string;
+    const clone = workspaceDir(join(dir, "data"), repo.id, t.id);
+    expect(second.reason).toContain(
+      `Start the task fresh: ${startFreshHint(t.id, { clone, branch })}, then run it again.`,
+    );
+    expect(await sha(train.branch)).toBe(lane);
+
+    // Started fresh as the refusal says: it builds on main, which holds the revert, and lands.
+    rmSync(clone, { recursive: true, force: true });
+    await git(repoPath, "update-ref", "-d", wipRef(t.id));
+    await git(repoPath, "update-ref", "-d", taskRef(t.id));
+    await git(repoPath, "branch", "-D", branch);
+    const third = await run(writes("src/b.ts"), t.id);
+    expect(third.status).toBe("complete");
+    expect(texts(third.runId).some((x) => x.startsWith("On today's train"))).toBe(true);
+  });
+
+  test("a car pulled from an earlier day's train stops the next day's re-run", async () => {
+    // Value: protects=taken-off landings are read from every train of the repo, not just today's, so a re-run the next day doesn't quietly land the work you pulled; fails_when=earlierLandings reads only the current train's cars; why_new=Z1 next-day train; seam=none
+    const repo = trainRepo();
+    const t = createTask(db, { repoId: repo.id, title: "Yesterday", scope: ["src/**"], status: "queued" });
+    const first = await run(writes("src/a.ts"), t.id);
+    const [train] = listTrains(db);
+    const car = train?.cars[0];
+    if (!train || car?.state !== "on") throw new Error("not boarded");
+    expect((await pullCar(fresh(repo.id), train, car.mergeSha, false)).ok).toBe(true);
+    setCarState(db, train.id, first.runId, "pulled");
+    // That train was yesterday's.
+    const old = "crew/train-2020-01-01";
+    await git(
+      repoPath,
+      "worktree",
+      "remove",
+      "--force",
+      join(repoPath, ".worktrees", `_${train.branch.replace(/[^\w.-]+/g, "-")}`),
+    );
+    await git(repoPath, "branch", "-m", train.branch, old);
+    db.$client.run("UPDATE trains SET night_id = ?, branch = ? WHERE id = ?", ["2020-01-01", old, train.id]);
+
+    const second = await run(writes("src/b.ts"), t.id);
+    expect(second.status).toBe("failed");
+    expect(second.reason).toContain(`taken off ${old} (pulled or undone)`);
+    const today = listTrains(db).find((x) => x.id !== train.id);
+    expect(today?.cars.some((c) => c.state === "on") ?? false).toBe(false);
+  });
+
   test("a train task promoted to ship waits for you when its earlier run touched an always-ask file", async () => {
-    // Value: protects=after a repo moves from train to ship, a re-run is judged on the task's whole change, so a migration from the boarded (even pulled) first run still needs you; fails_when=the gate base is re-pinned to the earlier tip and canShip sees only the new delta, shipping the migration to dev; why_new=D16 bug (a), probe-confirmed; seam=none
+    // Value: protects=after a repo moves from train to ship, a re-run is judged on the task's whole change, so a migration from the boarded first run still needs you; fails_when=the gate base is re-pinned to the earlier tip and canShip sees only the new delta, shipping the migration to dev; why_new=D16 bug (a), probe-confirmed; seam=none
     const repo = trainRepo();
     const t = createTask(db, {
       repoId: repo.id,
@@ -706,12 +894,9 @@ describe("running a task again after it landed", () => {
       scope: ["src/**", "migrations/**"],
       status: "queued",
     });
-    const first = await run(writes("migrations/1.sql", "src/a.ts"), t.id);
+    await run(writes("migrations/1.sql", "src/a.ts"), t.id);
     const [train] = listTrains(db);
-    const car = train?.cars[0];
-    if (!train || car?.state !== "on") throw new Error("not boarded");
-    expect((await pullCar(fresh(repo.id), train, car.mergeSha, false)).ok).toBe(true);
-    setCarState(db, train.id, first.runId, "pulled");
+    if (train?.cars[0]?.state !== "on") throw new Error("not boarded");
     updateRepo(db, repo.id, {
       level: "ship",
       shipBranch: "dev",

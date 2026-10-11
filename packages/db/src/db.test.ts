@@ -1,6 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import journal from "../migrations/meta/_journal.json";
-import { getReport, getRun, listNights, openDb, type RunRow, recordTriage, upsertRuns } from "./index";
+import {
+  addCar,
+  addRepo,
+  createTrain,
+  getReport,
+  getRun,
+  listNights,
+  openDb,
+  type RunRow,
+  recordTriage,
+  setCarState,
+  setRunTrain,
+  upsertRuns,
+} from "./index";
 
 function row(over: Partial<RunRow>): RunRow {
   return {
@@ -42,6 +55,26 @@ describe("db", () => {
     expect(a?.bucket).toBe("ready");
     expect(a?.artifactKinds).toEqual(["plan"]);
     expect(report?.runs.find((r) => r.taskId === "task-b")?.bucket).toBe("shipped");
+  });
+
+  // Value: protects=a run pulled off its train stops showing as ready to merge with the train; fails_when=hydrate classifies onTrain from trainId alone, ignoring the car state; why_new=X6, pulled cars still read as ready; seam=none
+  test("a run counts as on the train only while its car is on", () => {
+    const db = openDb(":memory:");
+    const repo = addRepo(db, { name: "acme", path: "/code/acme", defaultBranch: "main" });
+    const train = createTrain(db, { repoId: repo.id, nightId: "2026-04-16", branch: "crew/train" });
+    upsertRuns(db, [{ run: row({ source: "local", prUrl: null, prNumber: null, prState: null }), artifacts: [] }]);
+    setRunTrain(db, "s1:task-a", train.id);
+    addCar(db, train.id, {
+      runId: "s1:task-a",
+      taskId: "task-a",
+      title: "Task A",
+      mergeSha: "a".repeat(40),
+      state: "on",
+    });
+    expect(getRun(db, "s1:task-a")?.run.bucket).toBe("ready");
+    setCarState(db, train.id, "s1:task-a", "pulled");
+    expect(getRun(db, "s1:task-a")?.run.bucket).toBe("eyes");
+    expect(getReport(db)?.runs[0]?.bucket).toBe("eyes");
   });
 
   test("triage moves a run between buckets and undo reverts it", () => {

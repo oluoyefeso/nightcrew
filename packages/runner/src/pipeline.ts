@@ -5,7 +5,16 @@
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { formatTokens, nightIdFor, type Repo, type Task } from "@nightcrew/core";
+import {
+  formatTokens,
+  nightIdFor,
+  policyEvidence,
+  policySummary,
+  type Repo,
+  resolvePolicy,
+  type Task,
+  tightenPolicy,
+} from "@nightcrew/core";
 import { isAlwaysProtected, matchesAny } from "@nightcrew/core/guard";
 import {
   addCar,
@@ -26,7 +35,7 @@ import {
   upsertRuns,
 } from "@nightcrew/db";
 import type { AgentEngine, EngineEvent, PhaseRequest, PhaseResult } from "./engine";
-import { type Evidence, gatherEvidence, summarizeEvidence } from "./evidence";
+import { type Evidence, gatherEvidence, missingPolicyEvidence, summarizeEvidence } from "./evidence";
 import {
   commitsAhead,
   diffStat,
@@ -121,6 +130,8 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
   if (!task) throw new Error(`Task ${taskId} not found.`);
   const repo = getRepo(db, task.repoId);
   if (!repo) throw new Error(`Repo for task ${taskId} not found.`);
+  const startingPolicy = resolvePolicy(repo, task.type);
+  let policy = startingPolicy;
 
   setLandingHome(deps.dataDir);
   const startedAt = new Date().toISOString();
@@ -221,10 +232,24 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
   const artifact = (kind: string, name: string, content: string) => {
     if (content.trim()) artifacts.set(kind, { kind, name, content });
   };
+  const recordPolicy = (reasons: string[] = []) =>
+    artifact(
+      "policy",
+      "ROUTE.md",
+      `# Route\n\nAt dispatch: ${policySummary(startingPolicy)}\n\nCurrent route: ${policySummary(policy)}\n\n## Required evidence\n${policyEvidence(
+        policy,
+      )
+        .map((e) => `- ${e}`)
+        .join(
+          "\n",
+        )}\n\n${reasons.length ? `## Why it stopped here\n${reasons.map((r) => `- ${r}`).join("\n")}` : "Repository path rules and protected branches also apply. The route is rechecked before landing."}`,
+    );
+  recordPolicy();
 
   updateTask(db, task.id, { status: "running", lastRunId: runId });
   save();
   emit("info", `Started ${task.title} in ${repo.name}`);
+  emit("info", `Route: ${policySummary(policy)}`);
 
   // The task's own time limit, on top of a stop from you or the crew.
   const timeout = new AbortController();
@@ -300,9 +325,10 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     const r = getRepo(db, repo.id);
     const t = getTask(db, task.id);
     if (!r || !t || t.status === "archived") return null;
-    const { level, shipBranch, allowShip, alwaysAsk, protectedBranches } = r;
+    const { shipBranch, allowShip, alwaysAsk, protectedBranches, policies } = r;
+    policy = tightenPolicy(policy, resolvePolicy(r, task.type));
     return {
-      repo: { ...repo, level, shipBranch, allowShip, alwaysAsk, protectedBranches },
+      repo: { ...repo, level: policy.authority, shipBranch, allowShip, alwaysAsk, protectedBranches, policies },
       task: { ...task, scope: t.scope, status: t.status },
     };
   };
@@ -370,6 +396,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     const ctx: PromptContext = {
       task,
       repo,
+      policy,
       artifactsDir,
       feedback: listNotes(db, task.id),
       resumeCommits: await commitsAhead(repo.path, forkSha, startSha),
@@ -416,7 +443,9 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
 
     // Plan, unless the task is small enough to build directly
     const reflexes = deps.reflexes ?? new NoReflexes();
-    const workflow = repo.level === "propose" ? "planned" : await chooseWorkflow(reflexes, task);
+    if (!live()) return await finish("failed", gone);
+    ctx.policy = policy;
+    const workflow = policy.authority === "propose" ? "planned" : await chooseWorkflow(reflexes, task);
     let session: string | undefined;
     let planError: string | null = null;
     if (workflow === "planned") {
@@ -456,13 +485,19 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       emit("info", "Small, well-specified task: building directly, without a separate planning step.");
     }
 
-    if (repo.level === "propose") {
+    if (!live()) return await finish("failed", gone);
+    if (policy.authority === "propose") {
       state.summary = ctx.plan ? firstSentence(ctx.plan) : null;
       state.verdict = "needs_eyes";
-      return await finish(ctx.plan ? "complete" : "failed", ctx.plan ? null : planError);
+      recordPolicy(["This route stops before implementation for your review."]);
+      return await finish(
+        ctx.plan ? "complete" : "failed",
+        ctx.plan ? null : (planError ?? "The route now requires a plan. Dispatch again to prepare it."),
+      );
     }
 
     // Implement
+    ctx.policy = policy;
     if (stop.aborted) return await halt("before building");
     phase("implement", "Implementing");
     const ip = implementPrompt(ctx);
@@ -521,11 +556,17 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     }
 
     // Evidence NightCrew gathers itself
+    if (!live()) return await finish("failed", gone);
+    ctx.policy = policy;
+    recordPolicy();
     let evidence: Evidence | null = null;
-    if (task.type === "ui" || task.type === "bugfix") {
+    let evidenceFiles: Map<string, string> | null = null;
+    if (policy.visual || policy.regression || policy.requireTests) {
       phase("evidence", "Gathering evidence");
+      if (policy.visual || policy.regression) evidenceFiles = await fingerprints(worktree, check.files);
       evidence = await gatherEvidence({
         task,
+        policy,
         repo,
         worktree,
         base: forkSha,
@@ -579,6 +620,20 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       state.log = recheck.log;
       return await finish("failed", `Checks failed after review: ${recheck.reason}`);
     }
+    if (evidenceFiles && evidence) {
+      const afterReview = await fingerprints(worktree, recheck.files);
+      if (
+        afterReview.size !== evidenceFiles.size ||
+        [...afterReview].some(([file, hash]) => evidenceFiles.get(file) !== hash)
+      ) {
+        evidence.missing.push(
+          "Files changed after evidence collection. Fresh evidence is required before automatic landing.",
+        );
+        state.verdict = "needs_eyes";
+        artifact("evidence", "Evidence", JSON.stringify(evidence));
+        ctx.evidence = summarizeEvidence(evidence);
+      }
+    }
     state.confidence = await scoreConfidence(reflexes, {
       task,
       review: verdict,
@@ -627,15 +682,42 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     // Land at the level the repo is at now, with the task's scope as it is now.
     const now = live();
     if (!now) return await finish("failed", gone);
-    const { repo: landRepo, task: landTask } = now;
+    const { repo: landRepo } = now;
+    let landingNote: string | null = null;
+    const routeHold = (whole: string[]) => {
+      const current = live();
+      if (!current) return gone;
+      const reasons = missingPolicyEvidence(policy, evidence, Boolean((task.testCommand ?? repo.testCommand)?.trim()));
+      if (policy.authority === "propose")
+        reasons.push("The route now stops at a plan; this run's work is held locally for your review.");
+      const asks = whole.filter((file) => matchesAny(file, current.repo.alwaysAsk));
+      if (asks.length) reasons.push(`It touches files that always wait for you: ${asks.slice(0, 4).join(", ")}.`);
+      recordPolicy(reasons);
+      return reasons.length ? reasons.join(" ") : null;
+    };
+    const hold = routeHold(files);
+    if (hold) {
+      landingNote = hold;
+      state.verdict = "needs_eyes";
+      emit("info", `Waiting for you: ${hold}`);
+    }
+    if (landRepo.level === "propose") return await finish("complete", landingNote);
     /** The scope check again, on the task's whole change and its scope at that moment. */
     const scopeAgain = (whole: string[]) => {
-      const scope = scopeCheck(whole, live()?.task ?? landTask, { allowEmpty: true });
-      return scope.ok ? null : scope.reason;
+      const current = live();
+      if (!current) return gone;
+      const scope = scopeCheck(whole, current.task, { allowEmpty: true });
+      if (!scope.ok) return scope.reason;
+      const hold = routeHold(whole);
+      if (hold) return hold;
+      if (current.repo.level !== landRepo.level) return "The route's authority changed before landing.";
+      if (landRepo.level === "ship" && current.repo.shipBranch !== landRepo.shipBranch)
+        return "The ship branch changed before landing.";
+      return null;
     };
 
     // Ship to dev: the crew merges it itself, when everything lines up.
-    if (landRepo.level === "ship") {
+    if (landRepo.level === "ship" && !hold) {
       const gate = canShip({
         repo: landRepo,
         files,
@@ -669,18 +751,21 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
             });
         if (shipped.ok) {
           markShipped(db, runId, shipped.sha, shipBranch);
-          emit("info", `Shipped to ${shipBranch} (${shipped.sha.slice(0, 7)}). Undo is one key in the Morning Report.`);
+          emit("info", `Shipped to ${shipBranch} (${shipped.sha.slice(0, 7)}). Undo is one key in the Station.`);
           return await finish("complete", null);
         }
-        emit("info", `Didn't ship: ${shipped.error.split("\n")[0]} Opening a draft PR instead.`);
+        landingNote = `Didn't ship: ${shipped.error.split("\n")[0]} The change needs your review.`;
+        emit("info", landingNote);
         state.verdict = "needs_eyes";
       } else {
-        emit("info", `Waiting for you instead of shipping: ${gate.reasons.join(" ")}`);
+        landingNote = `Waiting for you instead of shipping: ${gate.reasons.join(" ")}`;
+        recordPolicy(gate.reasons);
+        emit("info", landingNote);
       }
     }
 
     // Daily train: board today's integration branch; you merge one PR for the lot.
-    if (landRepo.level === "train" && state.verdict === "ready") {
+    if (landRepo.level === "train" && !hold && state.verdict === "ready") {
       phase("publish", "Boarding today's train");
       const nightId = nightIdFor(startedAt);
       const train =
@@ -705,10 +790,20 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         return await finish("complete", null);
       }
       addCar(db, train.id, { runId, taskId: task.id, title: task.title, mergeSha: "", state: "broke" });
-      emit("info", `Couldn't board the train: ${boarded.error.split("\n")[0]} Opening its own draft PR instead.`);
+      landingNote = `Couldn't board the train: ${boarded.error.split("\n")[0]} The change needs its own review.`;
+      emit("info", landingNote);
       state.verdict = "needs_eyes";
     }
 
+    // Integration checks may have observed a stricter route. Recheck before the draft fallback, too.
+    const beforeDraft = live();
+    if (!beforeDraft) return await finish("failed", gone);
+    const finalHold = routeHold(files);
+    if (finalHold) {
+      landingNote = finalHold;
+      state.verdict = "needs_eyes";
+    }
+    if (beforeDraft.repo.level === "propose") return await finish("complete", landingNote);
     if (deps.publish) {
       if (!hasRemote) {
         emit(
@@ -747,7 +842,8 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         if (pr.warning) emit("info", pr.warning);
       }
     }
-    return await finish("complete", null);
+    recordPolicy(landingNote ? [landingNote] : []);
+    return await finish("complete", landingNote);
   } catch (e) {
     return await finish(stop.aborted ? "timeout" : "failed", e instanceof Error ? e.message : String(e));
   }

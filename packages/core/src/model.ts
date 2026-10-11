@@ -9,7 +9,7 @@ export type RunSource = "classic" | "local" | "managed";
 
 export type PrState = "open" | "draft" | "merged" | "closed";
 
-export type ArtifactKind = "evidence" | "plan" | "decisions" | "review" | "tests" | "report" | "log";
+export type ArtifactKind = "evidence" | "policy" | "plan" | "decisions" | "review" | "tests" | "report" | "log";
 
 export type TriageAction = "merge" | "send_back" | "close" | "again" | "undo";
 

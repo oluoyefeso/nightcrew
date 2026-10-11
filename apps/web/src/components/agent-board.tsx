@@ -1,5 +1,5 @@
 import { formatTokens } from "@nightcrew/core";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { clsx } from "clsx";
 import { ArrowUpRight, Square } from "lucide-react";
@@ -132,10 +132,23 @@ function AgentCard({ agent, compact }: { agent: ActiveAgent; compact?: boolean }
 
 /** "2 working · 3 queued · 1.2M of 20M tokens today", plus Pause/Resume. */
 export function CrewSummary() {
+  const qc = useQueryClient();
   const crew = useQuery(crewQuery);
   const s = crew.data;
-  const pause = useMutation({ mutationFn: () => api.post("/api/crew/pause") });
-  const resume = useMutation({ mutationFn: () => api.post("/api/crew/resume") });
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["crew"] });
+    qc.invalidateQueries({ queryKey: ["station"] });
+  };
+  const pause = useMutation({
+    mutationFn: () => api.post("/api/crew/pause"),
+    onSuccess: refresh,
+    onError: (e) => toast(e.message),
+  });
+  const resume = useMutation({
+    mutationFn: () => api.post("/api/crew/resume"),
+    onSuccess: refresh,
+    onError: (e) => toast(e.message),
+  });
   if (!s) return null;
   const pct = Math.min(100, (s.tokensToday / s.dailyTokenBudget) * 100);
   return (
@@ -174,6 +187,7 @@ export function CrewSummary() {
           <button
             type="button"
             onClick={() => resume.mutate()}
+            disabled={resume.isPending}
             className="inline-flex h-8 items-center gap-2 rounded-full bg-dawn px-3.5 font-medium text-[13px] text-on-dawn"
           >
             Resume dispatch
@@ -182,6 +196,7 @@ export function CrewSummary() {
           <button
             type="button"
             onClick={() => pause.mutate()}
+            disabled={pause.isPending}
             className="inline-flex h-8 items-center gap-2 rounded-full px-3.5 text-[13px] text-muted ring-1 ring-line hover:text-fg"
             title="Running agents finish; nothing new starts"
           >

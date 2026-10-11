@@ -436,6 +436,11 @@ async function shipTaskUnlocked(
           : `Tests failed on ${repo.shipBranch} after merging, so it wasn't shipped.\n${tests.log}`,
       };
     }
+    const policyChanged = approved.recheck?.(approved.files);
+    if (policyChanged) {
+      await git(lane.dir, "reset", "--hard", merged.before);
+      return { ok: false, error: `${policyChanged} The merge was taken back off.` };
+    }
     const failed = await publishBranch(lane, publish);
     if (failed) {
       await git(lane.dir, "reset", "--hard", merged.before);
@@ -507,6 +512,11 @@ async function boardTrainUnlocked(
           : `It broke the train's tests together with today's other work.\n${tests.log}`,
       };
     }
+    const policyChanged = approved.recheck?.(approved.files);
+    if (policyChanged) {
+      await git(lane.dir, "reset", "--hard", merged.before);
+      return { ok: false, error: `${policyChanged} The merge was taken back off.` };
+    }
     return { ok: true, sha: merged.sha };
   } finally {
     await endLanding(lane, false);
@@ -533,7 +543,7 @@ async function publishTrainUnlocked(
 
 ${on.map((c) => `- [x] ${c.title}`).join("\n")}
 ${pulled.length ? `\nTaken off the train:\n${pulled.map((c) => `- ${c.title} (${c.state === "broke" ? "broke the tests" : "pulled by you"})`).join("\n")}\n` : ""}
-Review each task's plan, evidence and Skeptic report in the NightCrew Morning Report.
+Review each task's plan, evidence and Skeptic report in the NightCrew Station.
 
 ---
 Made by [NightCrew](https://github.com/oluoyefeso/nightcrew)`;

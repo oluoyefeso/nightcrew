@@ -38,7 +38,8 @@ Everything is set in the dashboard. This page explains what each setting does.
 | Preview URL | Default `http://localhost:{port}`. |
 | Pages to screenshot | Up to six paths. Default `/`. |
 | Also protect | Branches the crew never touches. The default branch, `main` and `master` always are. |
-| Autonomy | See [the trust ladder](trust-ladder.md). |
+| Autonomy ceiling | The most authority any task in this repo may have. See [the trust ladder](trust-ladder.md). |
+| Routes by task type | Cap each code task type at an earlier stop; require tests, visual evidence or regression proof. Save explicitly to apply. Existing repos inherit their current autonomy and built-in evidence rules. |
 
 ### Where tasks run
 
@@ -73,7 +74,7 @@ nightcrew import              Import 0.x (classic) history
 
 --repo <path>      Repo for `add` (default: the current folder if the crew knows it, or the only repo)
 --demo             Pretend crew that spends nothing
---engine managed   Run tasks on Claude Managed Agents (see managed.md)
+--engine local     Run agents on this machine (default; managed mode is coming soon)
 --no-publish   Keep branches local: don't push or open PRs
 --port, --no-open, --data, --classic, --offline
 ```

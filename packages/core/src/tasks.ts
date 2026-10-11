@@ -1,4 +1,5 @@
 // Tasks, repos, agent settings and scheduling.
+import type { TaskPolicies } from "./policy";
 
 export type TaskType = "implementation" | "bugfix" | "test" | "refactor" | "ui" | "research";
 
@@ -48,6 +49,8 @@ export interface Repo {
   shipBranch: string | null;
   allowShip: string[];
   alwaysAsk: string[];
+  /** Per-type limits and extra verification. Missing on older integrations means inherit. */
+  policies?: TaskPolicies;
 }
 
 export type Workflow = "auto" | "quick" | "planned";

@@ -12,7 +12,7 @@ function NavLink({
   children,
   className,
 }: {
-  to: "/" | "/agents" | "/later";
+  to: "/" | "/agents" | "/later" | "/history";
   children: ReactNode;
   className?: string;
 }) {
@@ -114,7 +114,7 @@ export function Shell() {
             <span className="hidden sm:inline">NightCrew</span>
           </Link>
           <nav className="flex items-center gap-0.5 overflow-x-auto text-[13px]">
-            <NavLink to="/">Inbox</NavLink>
+            <NavLink to="/">Station</NavLink>
             <NavLink to="/agents">
               Agents
               {queued > 0 && (
@@ -125,6 +125,9 @@ export function Shell() {
             </NavLink>
             <NavLink to="/later" className="max-sm:hidden">
               Later
+            </NavLink>
+            <NavLink to="/history" className="max-sm:hidden">
+              History
             </NavLink>
           </nav>
           <div className="ml-auto flex items-center gap-1.5">

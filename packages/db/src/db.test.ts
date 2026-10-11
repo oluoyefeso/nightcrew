@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import journal from "../migrations/meta/_journal.json";
 import {
   addCar,
   addRepo,
   createTrain,
+  getRepo,
   getReport,
   getRun,
   listNights,
@@ -12,6 +16,7 @@ import {
   recordTriage,
   setCarState,
   setRunTrain,
+  updateRepo,
   upsertRuns,
 } from "./index";
 
@@ -36,6 +41,29 @@ function row(over: Partial<RunRow>): RunRow {
 }
 
 describe("db", () => {
+  test("existing repos migrate with inherited routes and saved rules survive reopening", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nc-policy-db-"));
+    let db = openDb(join(dir, "crew.db"));
+    try {
+      const repo = addRepo(db, { name: "acme", path: "/code/acme", defaultBranch: "main" });
+      db.$client.exec("ALTER TABLE repos DROP COLUMN policies");
+      db.$client.exec("DELETE FROM __migrations WHERE name = '0006_task_policies'");
+      db.$client.close();
+      db = openDb(join(dir, "crew.db"));
+      expect(getRepo(db, repo.id)).toMatchObject({ name: "acme", policies: {}, level: "draft_pr" });
+      const policies = {
+        refactor: { autonomy: "propose" as const, requireTests: true, visual: false, regression: false },
+      };
+      updateRepo(db, repo.id, { policies });
+      db.$client.close();
+      db = openDb(join(dir, "crew.db"));
+      expect(getRepo(db, repo.id)?.policies).toEqual(policies);
+    } finally {
+      db.$client.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("migrates, upserts and reports the latest attempt per task", () => {
     const db = openDb(":memory:");
     upsertRuns(db, [

@@ -1,0 +1,1 @@
+ALTER TABLE `repos` ADD `policies` text DEFAULT '{}' NOT NULL;

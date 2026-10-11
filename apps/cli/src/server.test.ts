@@ -111,6 +111,14 @@ describe("local API guard", () => {
 });
 
 describe("GET /api/info", () => {
+  test("the Station requires the launch key and returns an empty usable snapshot", async () => {
+    expect((await locked.request("/api/station")).status).toBe(401);
+    const result = await locked.request("/api/station", { headers: { "x-nightcrew-token": KEY } });
+    expect(result.status).toBe(200);
+    expect(result.headers.get("cache-control")).toBe("no-store");
+    expect(await result.json()).toEqual({ decisions: [], recent: [], latestNightId: null, queue: [] });
+  });
+
   // Value: protects=Settings shows where task clones really live; fails_when=/api/info drops dataDir/workDir or workDir stops ending in /work; why_new=H6, the clone path was hard-coded copy; seam=none
   test("returns the data dir and the clone folder", async () => {
     const res = await app.request("/api/info", { headers: { host: "localhost:3721" } });

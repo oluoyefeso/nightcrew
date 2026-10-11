@@ -9,6 +9,7 @@ import {
   getRepo,
   getReport,
   getRun,
+  getStation,
   getTask,
   getTrain,
   listNights,
@@ -86,6 +87,11 @@ export function createApp(opts: ServerOptions) {
   );
 
   app.get("/api/nights", (c) => c.json(listNights(db)));
+
+  app.get("/api/station", (c) => {
+    c.header("cache-control", "no-store");
+    return c.json({ ...getStation(db), queue: opts.crew.getQueue() });
+  });
 
   app.get("/api/report", (c) => {
     const report = getReport(db, c.req.query("night") || undefined);
@@ -220,7 +226,7 @@ function isLocalHost(host: string): boolean {
   return name !== undefined && LOCAL_HOSTS.has(name.toLowerCase());
 }
 
-export const VERSION = "1.0.0-alpha.2";
+export const VERSION = "1.0.0-alpha.3";
 
 // ── Static dashboard ────────────────────────────────────────────────────────
 // The compiled binary carries the built dashboard (see scripts/embed-web.ts).

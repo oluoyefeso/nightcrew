@@ -12,6 +12,7 @@ import { LaterPage } from "./routes/later";
 import { ReportPage } from "./routes/report";
 import { RunPage } from "./routes/run";
 import { SettingsPage } from "./routes/settings";
+import { StationPage } from "./routes/station";
 import { TaskPage } from "./routes/task";
 
 type ReportSearch = { run?: string };
@@ -25,6 +26,16 @@ const indexRoute = createRoute({
   validateSearch,
   component: function Latest() {
     const { run } = indexRoute.useSearch();
+    return <StationPage runId={run} />;
+  },
+});
+
+const historyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/history",
+  validateSearch,
+  component: function History() {
+    const { run } = historyRoute.useSearch();
     return <ReportPage runId={run} />;
   },
 });
@@ -77,6 +88,7 @@ void checkKey();
 const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
+    historyRoute,
     nightRoute,
     agentsRoute,
     tonightRoute,

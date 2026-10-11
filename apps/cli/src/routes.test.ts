@@ -70,6 +70,37 @@ const send = (method: string, path: string, body?: unknown) =>
   });
 
 describe("running tasks and protected branches", () => {
+  test("task routes persist and malformed policies are rejected without changing them", async () => {
+    const repo = addRepo(db, { name: "acme", path: "/code/acme", defaultBranch: "main" });
+    const policies = {
+      refactor: { autonomy: "draft_pr" as const, requireTests: true, visual: false, regression: false },
+    };
+    expect((await send("PATCH", `/api/repos/${repo.id}`, { policies })).status).toBe(200);
+    expect(getRepo(db, repo.id)?.policies).toEqual(policies);
+    for (const bad of [
+      null,
+      [],
+      { unknown: policies.refactor },
+      { refactor: { ...policies.refactor, requireTests: "yes" } },
+    ]) {
+      expect((await send("PATCH", `/api/repos/${repo.id}`, { policies: bad })).status).toBe(400);
+      expect(getRepo(db, repo.id)?.policies).toEqual(policies);
+    }
+    expect((await send("PATCH", `/api/repos/${repo.id}`, { policies: {} })).status).toBe(200);
+    expect(getRepo(db, repo.id)?.policies).toEqual({});
+  });
+
+  test("a running task cannot change the type or repo that determines its route", async () => {
+    const repo = addRepo(db, { name: "acme", path: "/code/acme", defaultBranch: "main" });
+    const other = addRepo(db, { name: "other", path: "/code/other", defaultBranch: "main" });
+    const task = createTask(db, { repoId: repo.id, title: "Busy", status: "running" });
+    for (const change of [{ type: "research" }, { repoId: other.id }]) {
+      expect((await send("PATCH", `/api/tasks/${task.id}`, change)).status).toBe(409);
+      expect(getTask(db, task.id)).toEqual(task);
+    }
+    expect((await send("PATCH", `/api/tasks/${task.id}`, { scope: ["src/**"] })).status).toBe(200);
+  });
+
   // Value: protects=a running task can't be re-statused or deleted under its agent, and a repo can't ship to a protected branch; fails_when=the 409 guards or protected shipBranch check are dropped; why_new=no route test covered them; seam=none
   test("changing the status of or deleting a running task is refused with 409", async () => {
     const repo = addRepo(db, { name: "acme", path: "/code/acme", defaultBranch: "main" });

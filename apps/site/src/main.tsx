@@ -10,7 +10,7 @@ const REPO = "https://github.com/oluoyefeso/nightcrew";
 const INSTALL = "curl -fsSL https://raw.githubusercontent.com/oluoyefeso/nightcrew/main/install.sh | sh";
 
 // ── The replay ──────────────────────────────────────────────────────────────
-// An example day in the real Inbox design. The first three tasks
+// An example day in the daily report design. The first three tasks
 // and their token counts are real runs from building NightCrew (October 2026); the
 // last two are illustrative, priced inside the range those runs measured.
 
@@ -115,7 +115,7 @@ function Replay() {
     <div className="overflow-hidden rounded-[18px] bg-surface text-left shadow-[var(--shadow)] ring-1 ring-line">
       <div className="flex items-center justify-between gap-3 border-line border-b px-4 py-2.5">
         <div className="flex gap-1 text-[12px]">
-          <span className="whitespace-nowrap rounded-md bg-raised px-2 py-1">Inbox</span>
+          <span className="whitespace-nowrap rounded-md bg-raised px-2 py-1">History</span>
           <span className="hidden px-2 py-1 text-muted sm:inline">Agents</span>
           <span className="hidden px-2 py-1 text-muted sm:inline">Later</span>
         </div>
@@ -368,9 +368,9 @@ function Site() {
                 Dispatch the work. <span className="text-faint">Judge the evidence.</span>
               </h1>
               <p className="t-lede max-w-[560px]">
-                NightCrew is a control room for coding agents. Describe the work and agents start right away, in
-                parallel, inside guardrails you set. Each one comes back with evidence and a status report you can judge
-                in seconds, day or night.
+                NightCrew is your conductor's station for coding agents. Dispatch work, set the crew's authority, and
+                inspect the evidence. Agents work across your repos and bring back the decisions that need you, day or
+                night.
               </p>
               <div className="flex flex-wrap items-center justify-center gap-3" id="start">
                 <InstallButton />
@@ -387,7 +387,7 @@ function Site() {
             </div>
             <div className="grid w-full max-w-[920px] gap-2.5">
               <Replay />
-              <p className="text-center font-mono text-[11px] text-faint">An example day, replayed in the real Inbox</p>
+              <p className="text-center font-mono text-[11px] text-faint">An example day in the daily report</p>
             </div>
           </div>
         </section>
@@ -416,7 +416,7 @@ function Site() {
                 [
                   "As they finish · Report back",
                   "Judge the evidence",
-                  "Reports land in your Inbox as agents finish: shipped, ready to merge, needs your eyes. One key per decision. Send something back with a note and an agent picks it up on the same branch.",
+                  "The Station keeps unresolved decisions visible across days, shows what the crew is working on, and explains why queued work is waiting. Your repo settings decide whether the crew opens a PR, joins a train, or merges to dev.",
                 ],
               ].map(([time, title, body]) => (
                 <div key={title} className="grid content-start gap-3 bg-surface p-7">
@@ -573,17 +573,17 @@ function Site() {
           <Reveal>
             <div className="grid gap-4 md:grid-cols-2">
               <div className="grid gap-2 rounded-2xl bg-surface p-6 ring-1 ring-line">
-                <b className="font-medium text-[15px]">Self-managed, free</b>
+                <b className="font-medium text-[15px]">Open source, on your machine</b>
                 <p className="text-[14px] text-muted leading-relaxed">
                   One binary on your machine. The dashboard runs at localhost, the crew uses the Claude Agent SDK with
-                  your own key or Claude Code login. Your code never leaves your machine except to Claude.
+                  your own key or Claude Code login. You control the repos, evidence requirements, budgets, and merge
+                  authority.
                 </p>
               </div>
               <div className="grid gap-2 rounded-2xl bg-surface p-6 ring-1 ring-line">
-                <b className="font-medium text-[15px]">Managed, experimental</b>
+                <b className="font-medium text-[15px]">Managed · Coming soon</b>
                 <p className="text-[14px] text-muted leading-relaxed">
-                  Close the laptop. The same crew runs on Claude Managed Agents in Anthropic's sandboxes, with
-                  locked-down networking and a budget per session.
+                  The local open-source runner is the core NightCrew experience. Managed mode is coming soon.
                 </p>
               </div>
             </div>

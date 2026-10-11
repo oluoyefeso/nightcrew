@@ -4,6 +4,7 @@ import type {
   Repo,
   RunDetail,
   Settings,
+  StationReport,
   Task,
   TaskNote,
   TaskStatus,
@@ -151,6 +152,12 @@ export const nightsQuery = queryOptions({
   queryFn: () => request<Night[]>("/api/nights"),
 });
 
+export const stationQuery = queryOptions({
+  queryKey: ["station"],
+  queryFn: () => request<StationReport>("/api/station"),
+  refetchInterval: 15_000,
+});
+
 export const reportQuery = (nightId?: string) =>
   queryOptions({
     queryKey: ["report", nightId ?? "latest"],
@@ -175,6 +182,8 @@ export function useTriage() {
     onSuccess: (detail) => {
       qc.setQueryData(runQuery(detail.run.id).queryKey, detail);
       qc.invalidateQueries({ queryKey: ["report"] });
+      qc.invalidateQueries({ queryKey: ["station"] });
+      qc.invalidateQueries({ queryKey: ["tasks"] });
       // Send back can take a task off its train.
       qc.invalidateQueries({ queryKey: ["trains"] });
     },
@@ -293,6 +302,7 @@ export function useInvalidateTasks() {
   return () => {
     qc.invalidateQueries({ queryKey: ["tasks"] });
     qc.invalidateQueries({ queryKey: ["task"] });
+    qc.invalidateQueries({ queryKey: ["station"] });
   };
 }
 
@@ -307,6 +317,7 @@ export function useCrewStream() {
         qc.setQueryData(crewQuery.queryKey, s);
         const active = s.active.map((a) => a.taskId).join(",");
         if (active !== lastActive) {
+          qc.invalidateQueries({ queryKey: ["station"] });
           qc.invalidateQueries({ queryKey: ["tasks"] });
           qc.invalidateQueries({ queryKey: ["report"] });
           qc.invalidateQueries({ queryKey: ["nights"] });
@@ -315,6 +326,7 @@ export function useCrewStream() {
       },
       report: (data) => {
         const r = JSON.parse(data) as AgentReport;
+        qc.invalidateQueries({ queryKey: ["station"] });
         qc.invalidateQueries({ queryKey: ["report"] });
         qc.invalidateQueries({ queryKey: ["tasks"] });
         qc.invalidateQueries({ queryKey: ["trains"] });

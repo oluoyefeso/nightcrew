@@ -1,8 +1,10 @@
 import {
   type ArtifactKind,
   BUCKET_LABEL,
+  decisionFor,
   formatDuration,
   formatTokens,
+  needsDecision,
   type Run,
   type TriageAction,
 } from "@nightcrew/core";
@@ -18,6 +20,7 @@ import { Button, Chip, Kbd, Pill } from "./ui";
 
 const TAB_LABEL: Record<ArtifactKind, string> = {
   evidence: "Evidence",
+  policy: "Route",
   plan: "Plan",
   decisions: "Decisions",
   review: "Review",
@@ -99,7 +102,7 @@ export function RunPane({
 
         <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-line ring-1 ring-line sm:grid-cols-4">
           <Stat label="Tokens" value={formatTokens(run.tokensIn + run.tokensOut)} />
-          <Stat label="Confidence" value={run.confidence === null ? "—" : `${Math.round(run.confidence * 100)}%`} />
+          <Stat label="Review score" value={run.confidence === null ? "—" : `${Math.round(run.confidence * 100)}%`} />
           <Stat label="Model" value={fmtModel(run.model)} />
           <Stat label="In / out" value={`${formatTokens(run.tokensIn)} · ${formatTokens(run.tokensOut)}`} />
         </dl>
@@ -114,13 +117,18 @@ export function RunPane({
               : `The crew merged this into ${run.shipBranch} itself (${run.shipSha.slice(0, 7)}) because the evidence, the Skeptic and the ship rules all agreed. Press U to undo.`}
           </Callout>
         )}
-        {run.trainId && !run.shipSha && (
-          <Callout label="On today's train">
-            This task is merged into today's train with the other finished work in this repo and tested together. You
-            merge the train's one PR, or press 3 to take this task off it.
+        {run.trainId && !run.shipSha && run.bucket === "ready" && (
+          <Callout label={`Integration train · ${run.nightId}`}>
+            This task is merged into its train with the other finished work in this repo and tested together. You merge
+            the train's one PR, or press 3 to take this task off it.
           </Callout>
         )}
 
+        {needsDecision(run) && run.status === "complete" && (
+          <Callout tone="dawn" label={decisionFor(run).label}>
+            {decisionFor(run).reason} {decisionFor(run).action}
+          </Callout>
+        )}
         {run.status !== "complete" && run.reason && (
           <Callout tone="bad" label="Why it stopped">
             {run.reason}
@@ -268,6 +276,7 @@ function TriageBar({ run, onToast }: { run: Run; onToast: (msg: string) => void 
   const onTrain = Boolean(run.trainId && !run.shipSha && run.triage !== "close" && run.triage !== "send_back");
   // A merged PR can't be taken back from here; a ship can (it's reverted on the ship branch).
   const canUndo = shipped || (run.triage !== null && run.triage !== "merge");
+  const canDismiss = !shipped && run.bucket !== "shipped" && run.triage !== "close" && run.prState !== "closed";
   const qc = useQueryClient();
   const unship = useMutation({
     mutationFn: () => api.post<{ demoted: boolean }>(`/api/runs/${encodeURIComponent(run.id)}/unship`),
@@ -275,6 +284,7 @@ function TriageBar({ run, onToast }: { run: Run; onToast: (msg: string) => void 
       onToast(r.demoted ? "Undone. The repo goes back to the daily train for now." : "Undone.");
       qc.invalidateQueries({ queryKey: ["run", run.id] });
       qc.invalidateQueries({ queryKey: ["report"] });
+      qc.invalidateQueries({ queryKey: ["station"] });
     },
     onError: (e) => onToast(e.message),
   });
@@ -338,7 +348,7 @@ function TriageBar({ run, onToast }: { run: Run; onToast: (msg: string) => void 
       const k = e.key.toLowerCase();
       if (k === "1") merge();
       else if (k === "2") setComposing(true);
-      else if (k === "3" && run.bucket !== "failed" && !shipped) dismiss();
+      else if (k === "3" && canDismiss) dismiss();
       else if (k === "h") act("again", "Queued again. An agent picks it up as soon as a slot is free.");
       else if (k === "u" && canUndo) undo();
       else return;
@@ -391,7 +401,7 @@ function TriageBar({ run, onToast }: { run: Run; onToast: (msg: string) => void 
           Send back
         </Button>
       )}
-      {run.bucket !== "failed" && run.bucket !== "shipped" && (
+      {canDismiss && (
         <Button variant="ghost" onClick={dismiss} kbd="3">
           {onTrain ? "Take off the train" : "Dismiss"}
         </Button>

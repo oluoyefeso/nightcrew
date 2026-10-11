@@ -65,6 +65,7 @@ export function addRepo(
     shipBranch: null,
     allowShip: [],
     alwaysAsk: [],
+    policies: {},
   };
   db.insert(schema.repos).values(row).run();
   return toRepo(row);
@@ -88,6 +89,7 @@ export function updateRepo(
       | "shipBranch"
       | "allowShip"
       | "alwaysAsk"
+      | "policies"
     >
   >,
 ): Repo | null {

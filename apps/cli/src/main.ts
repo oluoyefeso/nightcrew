@@ -17,7 +17,6 @@ import {
   detectTestCommand,
   draftTasks,
   inspectRepo,
-  ManagedEngine,
   reflexesFromEnv,
   repoSupport,
   SdkEngine,
@@ -43,7 +42,7 @@ Options
   --later             With \`add\`: park the tasks in Later
   --schedule          With \`add\`: hold the tasks until the schedule time (Settings, default 22:00)
   --demo              Use a pretend crew that spends nothing (for trying things out)
-  --engine managed    Run tasks on Claude Managed Agents (needs ANTHROPIC_API_KEY; experimental)
+  --engine local      Run agents on your machine (default; managed mode is coming soon)
   --no-publish        Keep branches local: don't push or open PRs
   --classic <dir>     Classic NightCrew directory (default: auto-detect)
   --data <dir>        Where NightCrew keeps its data (default ~/.nightcrew)
@@ -84,7 +83,15 @@ const command = positionals[0] ?? "up";
 const cwd = process.cwd();
 const usesAgents = ["up", "serve", "run"].includes(command);
 const compiled = import.meta.path.startsWith("/$bunfs") || import.meta.path.includes("~BUN");
-if (compiled && usesAgents && !values.demo && values.engine !== "managed" && !Bun.which("claude")) {
+if (values.engine !== "local") {
+  console.error(
+    values.engine === "managed"
+      ? "Managed mode is coming soon. Run nightcrew --engine local to use the open-source crew on your machine."
+      : "Unknown engine. Use --engine local, or --demo to try NightCrew without running agents.",
+  );
+  process.exit(1);
+}
+if (compiled && usesAgents && !values.demo && !Bun.which("claude")) {
   console.error(`NightCrew runs its agents with Claude Code, and \`claude\` isn't on your PATH.
 
   Install it:  npm i -g @anthropic-ai/claude-code
@@ -99,26 +106,7 @@ const db = openDb(join(values.data, "nightcrew.db"));
 const classicRoot = values.classic ? resolve(values.classic) : undefined;
 const engine: AgentEngine = values.demo
   ? new DemoEngine(Number(process.env.NIGHTCREW_DEMO_STEP_MS) || 900)
-  : values.engine === "managed"
-    ? managedEngine()
-    : new SdkEngine({ claudePath: claudeOnPath() });
-
-/** Claude Managed Agents: tasks run in Anthropic's cloud sandboxes. Needs an API key and a GitHub remote. */
-function managedEngine(): AgentEngine {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.error("The managed engine needs ANTHROPIC_API_KEY (with Managed Agents enabled on your Anthropic org).");
-    process.exit(1);
-  }
-  return new ManagedEngine({
-    apiKey: process.env.ANTHROPIC_API_KEY,
-    githubToken: async () => {
-      const proc = Bun.spawn(["gh", "auth", "token"], { stdout: "pipe", stderr: "ignore" });
-      const token = (await new Response(proc.stdout).text()).trim();
-      if (!token) throw new Error("No GitHub token: run gh auth login.");
-      return token;
-    },
-  });
-}
+  : new SdkEngine({ claudePath: claudeOnPath() });
 const publish = !values["no-publish"] && !values.demo;
 const reflexes = reflexesFromEnv();
 const crew = new Crew({ db, engine, dataDir: values.data, publish, reflexes });

@@ -5,6 +5,7 @@ import { useState } from "react";
 import { api, crewQuery, infoQuery, reposQuery, settingsQuery } from "../api";
 import { AddRepo } from "../components/add-repo";
 import { ChipsEditor, Field, Select, TextInput } from "../components/form";
+import { PolicyEditor } from "../components/policy-editor";
 
 const LEVEL_HINT: Record<AutonomyLevel, string> = {
   propose: "Plans only. No code changes.",
@@ -37,6 +38,15 @@ export function SettingsPage() {
           {crew.data?.engine === "demo" && " (pretend runs, nothing is spent or pushed)"}
         </p>
       </header>
+
+      <div className="grid gap-2 rounded-2xl bg-surface p-5 ring-1 ring-line">
+        <h2 className="font-medium text-[15px]">Open source, on your machine</h2>
+        <p className="text-[13.5px] text-muted">
+          Choose where the crew works, how it verifies changes, and who makes the merge decision. The local runner is
+          the core NightCrew experience.
+        </p>
+        <p className="text-[12px] text-faint">Managed mode · Coming soon</p>
+      </div>
 
       {s && (
         <section className="grid gap-5">
@@ -231,7 +241,7 @@ function RepoCard({ repo }: { repo: Repo }) {
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field
-          label="Autonomy"
+          label="Autonomy ceiling"
           htmlFor={`level-${repo.id}`}
           hintId={`level-hint-${repo.id}`}
           hint={
@@ -269,6 +279,7 @@ function RepoCard({ repo }: { repo: Repo }) {
         </Field>
       </div>
       {update.error && <p className="text-[12.5px] text-bad">{update.error.message}</p>}
+      <PolicyEditor key={`${repo.id}:${JSON.stringify(repo.policies ?? {})}`} repo={repo} />
       {(level === "ship" || level === "train") && (
         <div className="grid gap-4 rounded-xl bg-raised/50 p-4">
           <div className="grid gap-4 sm:grid-cols-2">

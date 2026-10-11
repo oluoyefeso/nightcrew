@@ -1,3 +1,4 @@
+import type { TaskPolicies } from "@nightcrew/core";
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const runs = sqliteTable(
@@ -93,6 +94,7 @@ export const repos = sqliteTable("repos", {
   allowShip: text("allow_ship", { mode: "json" }).$type<string[]>().notNull().default([]),
   /** Changes touching these always wait for you, whatever the level. */
   alwaysAsk: text("always_ask", { mode: "json" }).$type<string[]>().notNull().default([]),
+  policies: text("policies", { mode: "json" }).$type<TaskPolicies>().notNull().default({}),
 });
 
 export const tasks = sqliteTable(

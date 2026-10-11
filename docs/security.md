@@ -125,13 +125,7 @@ Don't expose the port to a network. To reach NightCrew from another device, use 
 
 ## Managed mode
 
-In [managed mode](managed.md) the agent works in Anthropic's cloud sandbox, not on your machine. Every shell, write and edit call is held for confirmation and decided by the same guard; read-only tools run on the server's `auto` policy. Paths under the sandbox's `/workspace/<repo>` mount, in file paths and in shell commands, are mapped to the local clone for the guard's decision, so `rm -rf /workspace/<repo>/dist` is judged as a delete inside the clone. The agent's call runs as it sent it.
-
-NightCrew pushes the task's starting point from your repo by SHA, fetches the result back into your repo as `refs/nightcrew/wip/<task>`, and checks it there exactly as for the local engine. It becomes `refs/nightcrew/tasks/<task>` only after the gate passes. It runs no git of its own inside the clone outside the check sandbox.
-
-The sandbox mounts your repo with the GitHub token from `gh auth token`. That token can do whatever your account can, so for unattended runs:
-- use a **fine-grained token** limited to the repos NightCrew works on, with contents and pull requests access only,
-- turn on **branch protection** for your default branch and your ship branch, so nothing lands there without the checks you require.
+Managed mode is coming soon and cannot be selected in this release. The supported workflow is the local open-source runner.
 
 ## Known gaps
 
@@ -145,4 +139,3 @@ The sandbox mounts your repo with the GitHub token from `gh auth token`. That to
 - **Local services.** The network is open, including to services on this machine. Anything listening locally that runs commands (a Docker socket, an SSH server with your keys) is reachable.
 - **Landings changed by hand.** Whether an earlier landing still counts as a merge point comes from NightCrew's records. If you revert or rewrite a train or ship branch outside NightCrew, take the task off the train or undo it in NightCrew too, or start the task fresh.
 - **Re-runs after a Pull or Undo.** A task taken off the train or undone can't be run again in place. You start it fresh as a new task.
-- **Managed mode** relies on Anthropic's cloud sandbox and the guard's confirmations. NightCrew's own sandboxes don't apply there; the result is still checked in your repo by SHA before it lands.

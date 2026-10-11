@@ -1,10 +1,10 @@
 # NightCrew
 
-Dispatch the work. Judge the evidence.
+Your station for an agent crew.
 
-NightCrew is a control room for coding agents. Describe the work and agents start right away, in parallel, across your repos, inside guardrails you set. Each one comes back with evidence that it works, a review by a separate agent whose job is to prove it doesn't, and a status report you can judge in seconds. Day or night: you manage the crew, the agents do the work.
+NightCrew is an open-source conductor's station for coding agents. Set the direction, dispatch work across your repos, and choose how far the crew may go. Agents build, gather evidence, and pass their work to an independent Skeptic. Your repo settings determine whether they stop at a plan, open a PR, join an integration train, or merge to dev. Work starts whenever you need it; overnight is one scheduling option.
 
-![The Inbox](docs/screenshots/inbox.png)
+![Daily report](docs/screenshots/inbox.png)
 
 > **1.0 alpha.** The bash runner from 0.x still works and lives in [`classic/`](classic/README.md).
 
@@ -40,7 +40,7 @@ Agents start as soon as a slot is free: up to 3 at once and 1 per repo by defaul
    - Small tasks build directly; bigger ones plan first.
    - Every tool call passes a guard that refuses writes outside scope, pushes, publishing, secrets and protected branches.
    - NightCrew runs your tests itself and gives a failing task one repair attempt, then gathers evidence and hands it to the Skeptic.
-3. **They report back.** Reports land in the **Inbox** as agents finish, grouped into Shipped, Ready to merge, Needs your eyes, Sent back and Failed, and laid out on the Horizon (the day as a time axis). Desktop and Slack notifications are optional.
+3. **Conduct from the Station.** Unresolved decisions stay visible across days. Inspect the evidence, answer a question, send work back, or make a merge decision. Next departures explains why queued work is waiting, and Routes & authority shows each repo's autonomy level. Resolved work becomes a recent outcome; daily reports and the Horizon timeline remain in **History**. Desktop and Slack notifications are optional.
    - `1` merges.
    - `2` sends a task back with a note; an agent picks it up on the same branch.
    - `3` dismisses.
@@ -72,6 +72,8 @@ Each repo earns autonomy from its track record:
 
 `main`, the default branch and anything you protect are never touched. NightCrew suggests a promotion when the record earns it ("8 of the last 10 tasks merged without changes"). See [docs/trust-ladder.md](docs/trust-ladder.md).
 
+**Routes by task type** make that authority precise. Keep refactors at draft PRs while tests join the train, or require visual evidence for features. The repo level stays the ceiling. Preview each route before dispatch and inspect its recorded requirements in the run's **Route** tab. Tightening a rule holds running work when it no longer qualifies; raising authority applies to the next run.
+
 ## Tokens
 
 A small task uses about **100k tokens** end to end (build, check, review, commit). That's measured, not estimated. Each agent session runs isolated: no filesystem settings, MCP servers, skills or plugins from your machine, only the repo's own `CLAUDE.md` / `AGENTS.md`. The same tasks took 2.3M–4.4M tokens in a session that loaded everything on the machine, so that's 20–40× fewer, with the agent's tools kept to what the task needs. Every task has a token budget the agent stops at, and the daily token budget holds new agents back rather than letting them pass it.
@@ -83,7 +85,7 @@ A small task uses about **100k tokens** end to end (build, check, review, commit
 - [Evidence](docs/evidence.md)
 - [Trust ladder](docs/trust-ladder.md)
 - [Security](docs/security.md): the guard, the OS sandbox, the push block and the local API
-- [Managed mode](docs/managed.md) (experimental): run the crew on Claude Managed Agents
+- [Managed mode](docs/managed.md): coming soon. The local open-source runner is the supported experience.
 - [Design system](DESIGN.md)
 
 ## Development

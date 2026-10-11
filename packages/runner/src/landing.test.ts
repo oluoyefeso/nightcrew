@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   addRepo,
   createTask,
+  createTrain,
   type Db,
   getRepo,
   getRun,
@@ -699,6 +700,34 @@ esac
     expect(await sha("dev")).toBe(before);
   });
 
+  test.each(["ship", "train"] as const)(
+    "a %s policy tightened during combined tests rolls back the merge",
+    async (mode) => {
+      const repo = shipRepo();
+      repo.testCommand = "test -f src/a.ts";
+      const a = await taskBranch("crew/a", "src/a.ts");
+      let checks = 0;
+      const approved = { ...ap(a), recheck: () => (++checks === 1 ? null : "The route now requires human review.") };
+      const branch = mode === "ship" ? "dev" : "crew/train-policy";
+      const before = await sha(mode === "ship" ? branch : "main");
+      const result =
+        mode === "ship"
+          ? await shipTask(repo, a, "A", false, approved)
+          : await boardTrain(
+              repo,
+              createTrain(db, { repoId: repo.id, nightId: "2026-04-16", branch }),
+              a,
+              "A",
+              false,
+              approved,
+            );
+      expect(checks).toBe(2);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain("requires human review");
+      expect(await sha(branch)).toBe(before);
+    },
+  );
+
   test("a ship branch behind the default branch still ships, with the default branch's changes", async () => {
     // Value: protects=the post-merge file check allows changes the default branch made between the ship branch and the task's base, so a lagging dev doesn't block every ship; fails_when=checkLanded requires every landed file to be in the gate's list; why_new=G1 post-merge check could refuse legitimate ships; seam=none
     const repo = shipRepo();
@@ -1018,7 +1047,7 @@ describe("running a task again after it landed", () => {
     });
     const second = await run(writes("src/b.ts"), t.id);
     expect(getRun(db, second.runId)?.run.shipSha).toBeNull();
-    expect(texts(second.runId).find((x) => x.startsWith("Waiting for you instead of shipping"))).toContain(
+    expect(texts(second.runId).find((x) => x.startsWith("Waiting for you:"))).toContain(
       "always wait for you: migrations/1.sql",
     );
     expect(await tree("dev")).not.toContain("migrations/1.sql");

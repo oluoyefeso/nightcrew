@@ -18,6 +18,7 @@ import {
 import { AddRepo } from "../components/add-repo";
 import { AgentBoard, CrewSummary } from "../components/agent-board";
 import { ChipsEditor, inlineEdit, ListEditor, Select, TextInput } from "../components/form";
+import { TaskRoute } from "../components/task-route";
 import { Button } from "../components/ui";
 import { isTypingTarget } from "../lib";
 import { dropStash, unstash, useStashOnReload } from "../pending";
@@ -380,6 +381,9 @@ function Drafts({
               </Select>
             </div>
             {d.brief && <p className="line-clamp-3 text-[13px] text-muted">{d.brief}</p>}
+            {repos.find((r) => r.id === d.repoId) && (
+              <TaskRoute repo={repos.find((r) => r.id === d.repoId)!} type={d.type} compact />
+            )}
             <ChipsEditor
               value={d.scope}
               onChange={(scope) => update(i, { scope })}

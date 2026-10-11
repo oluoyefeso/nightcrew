@@ -6,7 +6,7 @@
 
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, extname, isAbsolute, join, normalize } from "node:path";
-import { EVIDENCE_FOR, type Repo, slugify, type Task } from "@nightcrew/core";
+import { policyEvidence, type Repo, type ResolvedPolicy, resolvePolicy, slugify, type Task } from "@nightcrew/core";
 import { matchesAny } from "@nightcrew/core/guard";
 import axeSource from "axe-core/axe.min.js" with { type: "text" };
 import { baseWorktree, type Exec, lastLine, terminateTree, trackTree } from "./git";
@@ -77,11 +77,13 @@ export interface EvidenceOptions {
   branchTestsPassed: boolean;
   log: (text: string) => void;
   signal: AbortSignal;
+  policy?: ResolvedPolicy;
 }
 
 export async function gatherEvidence(o: EvidenceOptions): Promise<Evidence> {
+  const policy = o.policy ?? resolvePolicy(o.repo, o.task.type);
   const ev: Evidence = {
-    required: EVIDENCE_FOR[o.task.type],
+    required: policyEvidence(policy),
     screenshots: [],
     a11y: null,
     consoleErrors: [],
@@ -89,8 +91,10 @@ export async function gatherEvidence(o: EvidenceOptions): Promise<Evidence> {
     missing: [],
     notes: [],
   };
-  const needsShots = o.task.type === "ui";
-  const needsProof = o.task.type === "bugfix";
+  const needsShots = policy.visual;
+  const needsProof = policy.regression;
+  if (policy.requireTests && !(o.task.testCommand ?? o.repo.testCommand)?.trim())
+    ev.missing.push("The route requires a configured test command.");
   if (!needsShots && !needsProof) return ev;
 
   let base: Awaited<ReturnType<typeof baseWorktree>> | null = null;
@@ -131,8 +135,29 @@ export async function gatherEvidence(o: EvidenceOptions): Promise<Evidence> {
         : "No preview command is set for this repo, so there are no screenshots.",
     );
   }
+  ev.missing = missingPolicyEvidence(policy, ev, Boolean((o.task.testCommand ?? o.repo.testCommand)?.trim()));
   writeFileSync(join(o.artifactsDir, "evidence.json"), JSON.stringify(ev, null, 2));
   return ev;
+}
+
+/** Evaluate the current route against evidence actually gathered, including rules tightened mid-run. */
+export function missingPolicyEvidence(
+  policy: ResolvedPolicy,
+  evidence: Evidence | null,
+  testsConfigured: boolean,
+): string[] {
+  const missing = [...(evidence?.missing ?? [])];
+  if (policy.requireTests && !testsConfigured) missing.push("The route requires a configured test command.");
+  if (policy.visual && !evidence?.screenshots.length)
+    missing.push("The route requires visual evidence that was not collected.");
+  if (policy.visual && evidence?.screenshots.length) {
+    if (evidence.screenshots.some((shot) => !shot.before))
+      missing.push("The visual route requires before and after screenshots.");
+    if (!evidence.a11y) missing.push("The visual route requires an accessibility scan.");
+  }
+  if (policy.regression && (!evidence?.testProof?.failsOnBase || !evidence.testProof.passesOnBranch))
+    missing.push("The route requires a test that fails on the base branch and passes on the change.");
+  return [...new Set(missing)];
 }
 
 // ── Fail-then-pass ──────────────────────────────────────────────────────────

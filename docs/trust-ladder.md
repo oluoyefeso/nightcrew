@@ -26,12 +26,22 @@ Otherwise the task falls back to a draft PR, and the run log says exactly which 
 
 ## Earning it
 
-NightCrew keeps a record per repo over the last ten finished tasks: how many merged unchanged, were sent back, or were undone. It suggests a promotion in the Inbox:
+NightCrew keeps a record per repo over the last ten finished tasks: how many merged unchanged, were sent back, or were undone. It suggests a promotion in the Station:
 
 - **Draft PR → Daily train** after 5 merged unchanged, with nothing sent back or undone.
 - **Daily train → Ship to dev** after 8 merged unchanged, with nothing sent back or undone. You need a ship branch and an allow list first.
 
 You can also change the level in **Settings → Repos** at any time.
+
+## Routes by task type
+
+The repo's autonomy level is a ceiling. In **Settings → Repos → Routes by task type**, each code task type can stop earlier and require more evidence. For example, a repo on the daily train can keep refactors at draft PRs, let tests board the train, and require visual evidence for features.
+
+Each route can require a configured test command, before/after screenshots with an accessibility scan, or regression proof that fails on the base and passes on the task branch. UI tasks always require visual evidence; bug fixes always require regression proof. Research stays read-only. A plan-only route stops before implementation, even when the task's workflow is set to quick.
+
+The task editor and dispatch drafts preview the route. Each run records its starting and effective route in its **Route** tab. Missing evidence holds automatic landing and explains what needs review. **Always wait for me** paths apply to trains as well as shipping.
+
+Running tasks retain the strictest route observed during the run. Raising authority applies to the next run. Tightening a route takes effect at subsequent checks, including after combined integration tests; if evidence was already gathered, a new requirement holds the run for review. A change to plan-only keeps completed code local. These changes do not undo work that already landed.
 
 ## Confidence
 

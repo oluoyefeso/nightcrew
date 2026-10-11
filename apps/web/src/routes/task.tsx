@@ -4,7 +4,16 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { clsx } from "clsx";
 import { ArrowLeft, Check, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { ApiError, api, reposQuery, settingsQuery, taskQuery, tasksQuery, useInvalidateTasks } from "../api";
+import {
+  ApiError,
+  api,
+  missionsQuery,
+  reposQuery,
+  settingsQuery,
+  taskQuery,
+  tasksQuery,
+  useInvalidateTasks,
+} from "../api";
 import { DepartureChecks } from "../components/departure-checks";
 import { ChipsEditor, Field, inlineEdit, ListEditor, Select, TextArea, TextInput } from "../components/form";
 import { TaskRoute } from "../components/task-route";
@@ -34,6 +43,7 @@ const CONTENT_FIELDS = [
   "testCommand",
   "repoId",
   "dependsOn",
+  "missionId",
 ] as const satisfies readonly (keyof Task)[];
 
 type Edits = Partial<Task>;
@@ -121,6 +131,7 @@ function TaskEditor({
   const repos = useQuery(reposQuery);
   const settings = useQuery(settingsQuery);
   const allTasks = useQuery(tasksQuery([]));
+  const missions = useQuery(missionsQuery);
   // The API refuses a task budget above the daily budget, so the field stops there too.
   const maxTokens = settings.data?.dailyTokenBudget ?? Number.POSITIVE_INFINITY;
   const invalidate = useInvalidateTasks();
@@ -448,6 +459,26 @@ function TaskEditor({
 
       {!locked && (
         <section className="grid gap-2">
+          <Field label="Mission">
+            <Select
+              aria-label="Mission"
+              value={t.missionId ?? ""}
+              onChange={(e) => edit({ missionId: e.target.value || null })}
+            >
+              <option value="">No mission</option>
+              {missions.data?.map((mission) => (
+                <option key={mission.id} value={mission.id}>
+                  {mission.title}
+                  {mission.paused ? " · paused" : ""}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          {t.missionId && (
+            <Link to="/missions/$missionId" params={{ missionId: t.missionId }} className="text-[13px] text-dawn">
+              Open mission →
+            </Link>
+          )}
           <h2 className="text-[13px] font-medium">Wait for tasks</h2>
           {t.dependsOn.map((id) => (
             <div

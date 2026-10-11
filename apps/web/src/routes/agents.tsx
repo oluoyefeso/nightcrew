@@ -9,6 +9,7 @@ import {
   api,
   crewQuery,
   type DraftTask,
+  missionsQuery,
   queueQuery,
   reposQuery,
   settingsQuery,
@@ -25,22 +26,30 @@ import { Button } from "../components/ui";
 import { isTypingTarget } from "../lib";
 import { dropStash, unstash, useStashOnReload } from "../pending";
 
-export function AgentsPage() {
+export function AgentsPage({ initialMissionId }: { initialMissionId?: string }) {
   const repos = useQuery(reposQuery);
   const crew = useQuery(crewQuery);
   const queued = useQuery(tasksQuery(["queued"]));
   const waiting = useQuery(tasksQuery(["draft"]));
   const departures = useQuery(queueQuery);
+  const missions = useQuery(missionsQuery);
   // Composer text and unsaved drafts a restart's reload stashed (pending.ts).
   const [restored] = useState(() => {
     const text = unstash<string>("composer");
     const drafts = unstash<DraftTask[]>("drafts");
+    const mission = unstash<unknown>("composer-mission");
     return {
       text: typeof text === "string" ? text : "",
       drafts: Array.isArray(drafts) && drafts.length ? drafts : null,
+      mission: typeof mission === "string" ? mission : "",
     };
   });
   const [drafts, setDrafts] = useState<DraftTask[] | null>(restored.drafts);
+  const [missionId, setMissionId] = useState(initialMissionId ?? restored.drafts?.[0]?.missionId ?? restored.mission);
+  useStashOnReload("composer-mission", () => missionId);
+  useEffect(() => {
+    if (initialMissionId !== undefined) setMissionId(initialMissionId);
+  }, [initialMissionId]);
   // Shown until you dismiss it, send the text, or save or discard the drafts.
   const [note, setNote] = useState(() =>
     restored.text && restored.drafts
@@ -55,6 +64,7 @@ export function AgentsPage() {
   useEffect(() => {
     dropStash("composer");
     dropStash("drafts");
+    dropStash("composer-mission");
   }, []);
 
   const now = Date.now();
@@ -90,16 +100,45 @@ export function AgentsPage() {
           <AddRepo />
         </section>
       ) : (
-        <Composer
-          repos={repos.data ?? []}
-          onDrafts={(d) => {
-            setDrafts(d);
-            setNote(null);
-          }}
-          initialText={restored.text}
-          note={note}
-          onDismissNote={() => setNote(null)}
-        />
+        <div className="grid gap-3">
+          <label htmlFor="composer-mission" className="grid gap-1.5 text-[13px] text-muted">
+            Mission for this work
+            <Select
+              id="composer-mission"
+              value={missionId}
+              onChange={(e) => {
+                setMissionId(e.target.value);
+                setDrafts((current) => current?.map((d) => ({ ...d, missionId: e.target.value || null })) ?? null);
+              }}
+            >
+              <option value="">No mission</option>
+              {missionId && !missions.data?.some((m) => m.id === missionId) && (
+                <option value={missionId}>Loading mission…</option>
+              )}
+              {missions.data?.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.title}
+                  {m.paused ? " · paused" : ""}
+                </option>
+              ))}
+            </Select>
+          </label>
+          <Link to="/missions" className="text-[12.5px] text-dawn">
+            Create or manage missions →
+          </Link>
+          <Composer
+            missionId={missionId || null}
+            repos={repos.data ?? []}
+            onDrafts={(d) => {
+              setDrafts(d);
+              setMissionId(d[0]?.missionId ?? "");
+              setNote(null);
+            }}
+            initialText={restored.text}
+            note={note}
+            onDismissNote={() => setNote(null)}
+          />
+        </div>
       )}
 
       {drafts && (
@@ -193,12 +232,14 @@ function ScheduledRow({ task }: { task: Task }) {
 // ── Composer ────────────────────────────────────────────────────────────────
 
 function Composer({
+  missionId,
   repos,
   onDrafts,
   initialText,
   note,
   onDismissNote,
 }: {
+  missionId: string | null;
   repos: Repo[];
   onDrafts: (d: DraftTask[]) => void;
   initialText: string;
@@ -212,7 +253,11 @@ function Composer({
   const ref = useRef<HTMLTextAreaElement>(null);
   const compose = useMutation({
     mutationFn: () =>
-      api.post<{ drafts: DraftTask[]; fallback: boolean }>("/api/compose", { text, repoId: repoId ?? repos[0]?.id }),
+      api.post<{ drafts: DraftTask[]; fallback: boolean }>("/api/compose", {
+        text,
+        repoId: repoId ?? repos[0]?.id,
+        missionId,
+      }),
     onSuccess: (r) => {
       onDrafts(r.drafts);
       setText("");

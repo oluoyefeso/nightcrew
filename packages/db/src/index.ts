@@ -24,9 +24,11 @@ import trustMigration from "../migrations/0003_trust.sql" with { type: "text" };
 import scheduleMigration from "../migrations/0004_schedule.sql" with { type: "text" };
 import tokensMigration from "../migrations/0005_tokens.sql" with { type: "text" };
 import policiesMigration from "../migrations/0006_task_policies.sql" with { type: "text" };
+import missionsMigration from "../migrations/0007_missions.sql" with { type: "text" };
 import * as schema from "./schema";
 import { listTasks } from "./tasks";
 
+export * from "./missions";
 export * from "./tasks";
 export * from "./trust";
 export { schema };
@@ -41,6 +43,7 @@ const MIGRATIONS: [name: string, sql: string][] = [
   ["0004_schedule", scheduleMigration],
   ["0005_tokens", tokensMigration],
   ["0006_task_policies", policiesMigration],
+  ["0007_missions", missionsMigration],
 ];
 
 export type Db = BunSQLiteDatabase<typeof schema> & { $client: Database };
@@ -177,6 +180,21 @@ export function getRun(db: Db, id: string): RunDetail | null {
     .all()
     .map((a) => ({ ...a, status: a.status as RunStatus }));
   return { run: { ...run, attempt: attempts.length }, artifacts, attempts };
+}
+
+/** Read display metadata in batches without loading artifact bodies or logs. */
+export function getRunSummaries(db: Db, ids: string[]): Map<string, Run> {
+  const unique = [...new Set(ids)];
+  const out = new Map<string, Run>();
+  for (let i = 0; i < unique.length; i += 400) {
+    const rows = db
+      .select()
+      .from(schema.runs)
+      .where(inArray(schema.runs.id, unique.slice(i, i + 400)))
+      .all();
+    for (const run of hydrate(db, rows)) out.set(run.id, run);
+  }
+  return out;
 }
 
 const ARTIFACT_ORDER: ArtifactKind[] = ["evidence", "policy", "report", "plan", "decisions", "review", "tests", "log"];

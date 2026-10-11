@@ -111,6 +111,7 @@ function toRepo(r: typeof schema.repos.$inferSelect): Repo {
 // ── Tasks ───────────────────────────────────────────────────────────────────
 
 export interface NewTask {
+  missionId?: string | null;
   repoId: string;
   title: string;
   brief?: string;
@@ -135,6 +136,7 @@ export function createTask(db: Db, input: NewTask): Task {
   const status = input.status ?? "draft";
   const row = {
     id: newId("task"),
+    missionId: input.missionId ?? null,
     repoId: input.repoId,
     title: input.title.trim(),
     brief: input.brief?.trim() ?? "",
@@ -167,6 +169,7 @@ export type TaskPatch = Partial<
   Pick<
     Task,
     | "title"
+    | "missionId"
     | "brief"
     | "type"
     | "scope"

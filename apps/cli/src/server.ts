@@ -22,6 +22,7 @@ import { type AgentEngine, type Crew, pullCar, taskRef } from "@nightcrew/runner
 import { eq } from "drizzle-orm";
 import { type Context, Hono } from "hono";
 import { mergePr } from "./github";
+import { mountMissionRoutes } from "./mission-routes";
 import { mountTaskRoutes } from "./routes";
 import { syncClassic } from "./sync";
 import { mountTrustRoutes } from "./trust-routes";
@@ -157,6 +158,7 @@ export function createApp(opts: ServerOptions) {
   });
 
   mountTaskRoutes(app, { db, crew: opts.crew, engine: opts.engine, dataDir: opts.dataDir });
+  mountMissionRoutes(app, { db, crew: opts.crew });
   mountTrustRoutes(app, { db, publish: opts.publish });
 
   app.post("/api/sync", async (c) => {
@@ -226,7 +228,7 @@ function isLocalHost(host: string): boolean {
   return name !== undefined && LOCAL_HOSTS.has(name.toLowerCase());
 }
 
-export const VERSION = "1.0.0-alpha.4";
+export const VERSION = "1.0.0-alpha.5";
 
 // ── Static dashboard ────────────────────────────────────────────────────────
 // The compiled binary carries the built dashboard (see scripts/embed-web.ts).

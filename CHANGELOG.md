@@ -2,6 +2,23 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.5] - 2026-10-11
+
+Give related tasks a shared objective with Missions, and follow their progress across repositories.
+
+### Added
+- **Missions.** Create an objective, draft work for it, attach existing tasks, and inspect queued work, setup holds, questions and latest run decisions in one view.
+- **Mission dispatch controls.** Pause new starts for one mission while active agents finish and unrelated work continues. Resume keeps task dependencies, schedules, repository routes and the daily budget in force.
+- **Shared context.** Agents receive the mission objective alongside their task. Objective edits apply to future attempts; running tasks retain their starting context and cannot move between missions.
+- **Mission totals.** See token usage across all attempts of current tasks, plus combined queued and running task caps. Failed attempts remain unresolved until reviewed or dismissed.
+- **Landing-page walkthrough.** An interactive, explicitly synthetic example shows Missions, departure checks and decision briefs in the local runner.
+
+### Upgrade and limits
+- Existing tasks migrate without a mission. No task status or repository authority changes during migration.
+- Mission pause allows active runs to finish, including landing permitted by their repository rules. Use the existing agent stop controls when an active run must stop.
+- Missions do not add a separate budget, merge authority or automatic objective acceptance. Resolved counts include dismissed work, and totals follow current membership.
+- Managed mode remains Coming soon. The local open-source version is the supported experience.
+
 ## [1.0.0-alpha.4] - 2026-10-11
 
 See what will hold work before dispatch, then resolve completed runs with a clearer decision brief.

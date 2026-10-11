@@ -22,6 +22,7 @@ import {
   createTask,
   type Db,
   deleteTask,
+  getMission,
   getRepo,
   getRun,
   getSettings,
@@ -85,7 +86,7 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
       )
         return c.json({ error: "Scope and dependencies must be lists of strings." }, 400);
       if (
-        [task.testCommand, task.question, task.runAt, task.id].some(
+        [task.testCommand, task.question, task.runAt, task.id, task.missionId].some(
           (value) => value != null && typeof value !== "string",
         )
       )
@@ -103,6 +104,7 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
       if (inputs.some((t) => t.id === id)) return c.json({ error: "Task IDs must be unique in a preview." }, 400);
       inputs.push({
         id,
+        missionId: task.missionId ?? null,
         repoId: task.repoId,
         title: task.title,
         type: task.type ?? "implementation",
@@ -255,6 +257,7 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
     if (answer && current.question) patch.question = null;
     const clean = pick(patch, [
       "title",
+      "missionId",
       "brief",
       "type",
       "scope",
@@ -274,10 +277,14 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
     if (
       current.status === "running" &&
       ((clean.type !== undefined && clean.type !== current.type) ||
-        (clean.repoId !== undefined && clean.repoId !== current.repoId))
+        (clean.repoId !== undefined && clean.repoId !== current.repoId) ||
+        (clean.missionId !== undefined && clean.missionId !== current.missionId))
     )
       return c.json(
-        { error: "Stop the running task before changing its type or repo; its route is already in use." },
+        {
+          error:
+            "Stop the running task before changing its type, repo or mission; its context and route are already in use.",
+        },
         409,
       );
     if (clean.status && !STATUSES.includes(clean.status)) return c.json({ error: "Unknown status." }, 400);
@@ -291,7 +298,7 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
       return c.json({ error: "Dependencies must be a list of task IDs." }, 400);
     if (clean.repoId !== undefined && !getRepo(db, clean.repoId))
       return c.json({ error: "Pick a repo for the task." }, 400);
-    const err = validateLimits(db, clean);
+    const err = missionError(db, clean.missionId) ?? validateLimits(db, clean);
     if (err) return c.json({ error: err }, 400);
     // Queueing (or Run now) a task that can never fit the daily budget would only stall it.
     if (clean.status === "queued" || (clean.runAt !== undefined && (clean.status ?? current.status) === "queued")) {
@@ -335,16 +342,20 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
 
   // ── Composer ──
   app.post("/api/compose", async (c) => {
-    const { text, repoId } = await body<{ text: string; repoId?: string }>(c);
+    const { text, repoId, missionId } = await body<{ text: string; repoId?: string; missionId?: string | null }>(c);
+    const missionIssue = missionError(db, missionId);
+    if (missionIssue) return c.json({ error: missionIssue }, 400);
+    const mission = missionId ? getMission(db, missionId) : null;
     if (!text?.trim()) return c.json({ error: "Describe what the crew should do." }, 400);
     try {
       const out = await draftTasks(deps.engine, {
         text,
+        mission,
         repos: listRepos(db),
         defaultRepoId: repoId,
         model: getSettings(db).buildModel,
       });
-      return c.json(out);
+      return c.json({ ...out, drafts: out.drafts.map((draft) => ({ ...draft, missionId: mission?.id ?? null })) });
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
     }
@@ -521,11 +532,19 @@ export function runFile(dir: string, rel: string): string | null {
 }
 
 function validateTask(db: Db, t: Partial<NewTask>): string | null {
+  const mission = missionError(db, t.missionId);
+  if (mission) return mission;
   if (!t.title?.trim()) return "Every task needs a title.";
   if (!t.repoId || !getRepo(db, t.repoId)) return "Pick a repo for the task.";
   if (t.type && !TASK_TYPES.includes(t.type)) return "Unknown task type.";
   if (t.status !== undefined && !NEW_STATUSES.includes(t.status)) return "New tasks start as draft, queued or later.";
   return null;
+}
+
+function missionError(db: Db, id: unknown): string | null {
+  return id == null || (typeof id === "string" && getMission(db, id))
+    ? null
+    : "Choose an existing mission, or leave the task unassigned.";
 }
 
 function batchDependencyError(value: unknown, index: number): string | null {

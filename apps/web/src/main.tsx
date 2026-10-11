@@ -9,6 +9,7 @@ import { Shell } from "./components/shell";
 import { resumeReturnPath } from "./pending";
 import { AgentsPage } from "./routes/agents";
 import { LaterPage } from "./routes/later";
+import { MissionPage, MissionsPage } from "./routes/missions";
 import { ReportPage } from "./routes/report";
 import { RunPage } from "./routes/run";
 import { SettingsPage } from "./routes/settings";
@@ -51,7 +52,23 @@ const nightRoute = createRoute({
   },
 });
 
-const agentsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/agents", component: AgentsPage });
+const agentsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/agents",
+  validateSearch: (s: Record<string, unknown>): { mission?: string } =>
+    typeof s.mission === "string" ? { mission: s.mission } : {},
+  component: function Agents() {
+    return <AgentsPage initialMissionId={agentsRoute.useSearch().mission} />;
+  },
+});
+const missionsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/missions", component: MissionsPage });
+const missionRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/missions/$missionId",
+  component: function Mission() {
+    return <MissionPage missionId={missionRoute.useParams().missionId} />;
+  },
+});
 // The night-only "Tonight" page became Agents.
 const tonightRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -91,6 +108,8 @@ const router = createRouter({
     historyRoute,
     nightRoute,
     agentsRoute,
+    missionsRoute,
+    missionRoute,
     tonightRoute,
     laterRoute,
     settingsRoute,

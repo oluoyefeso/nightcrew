@@ -4,19 +4,21 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { clsx } from "clsx";
 import { ArrowRight, CheckCheck, CircleHelp, History, Plus, Route, Signal, TrainFront } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
-import { crewQuery, reposQuery, stationQuery, tasksQuery, toast } from "../api";
+import { crewQuery, missionsQuery, reposQuery, stationQuery, tasksQuery, toast } from "../api";
 import { AgentBoard, CrewSummary } from "../components/agent-board";
 import { RunPane } from "../components/run-pane";
 import { RunRow } from "../components/run-row";
 import { PromotionBanners, TrainCards } from "../components/trust";
 import { Kbd } from "../components/ui";
 import { isTypingTarget } from "../lib";
+import { MissionCard } from "./missions";
 
 export function StationPage({ runId }: { runId?: string }) {
   const station = useQuery(stationQuery);
   const crew = useQuery(crewQuery);
   const repos = useQuery(reposQuery);
   const drafts = useQuery(tasksQuery(["draft"]));
+  const missions = useQuery(missionsQuery);
   const navigate = useNavigate();
   const rows = useRef(new Map<string, HTMLButtonElement>());
   const select = useCallback(
@@ -112,6 +114,30 @@ export function StationPage({ runId }: { runId?: string }) {
               </Link>
             </div>
           )}
+
+          <section className="grid gap-3" aria-label="Missions">
+            <div className="flex items-baseline justify-between gap-3">
+              <h2 className="t-h3">Missions</h2>
+              <Link to="/missions" className="text-[13px] text-dawn">
+                {missions.data?.length ? "All missions" : "Create a mission"} →
+              </Link>
+            </div>
+            {missions.error && (
+              <p role="alert" className="text-[13px] text-bad">
+                Couldn't load missions. {missions.error.message}
+              </p>
+            )}
+            {missions.data?.length === 0 && (
+              <p className="text-[13px] text-muted">
+                Group related tasks around an objective and control their departures together.
+              </p>
+            )}
+            <div className="grid gap-3 xl:grid-cols-2">
+              {missions.data?.slice(0, 4).map((mission) => (
+                <MissionCard key={mission.id} mission={mission} />
+              ))}
+            </div>
+          </section>
 
           <section className="grid gap-3" aria-labelledby="station-decisions">
             <div className="flex flex-wrap items-baseline justify-between gap-2">

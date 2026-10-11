@@ -1,4 +1,6 @@
 import type {
+  MissionDetail,
+  MissionSummary,
   Night,
   NightReport,
   QueueEntry,
@@ -246,6 +248,7 @@ export interface AgentReport {
 }
 
 export interface DraftTask {
+  missionId?: string | null;
   repoId: string;
   title: string;
   type: Task["type"];
@@ -291,6 +294,17 @@ export const infoQuery = queryOptions({
   staleTime: Number.POSITIVE_INFINITY,
 });
 export const crewQuery = queryOptions({ queryKey: ["crew"], queryFn: () => api.get<CrewStatus>("/api/crew") });
+export const missionsQuery = queryOptions({
+  queryKey: ["missions", "list"],
+  queryFn: () => api.get<MissionSummary[]>("/api/missions"),
+  refetchInterval: 5000,
+});
+export const missionQuery = (id: string) =>
+  queryOptions({
+    queryKey: ["missions", id],
+    queryFn: () => api.get<MissionDetail>(`/api/missions/${encodeURIComponent(id)}`),
+    refetchInterval: 5000,
+  });
 export const queueQuery = queryOptions({
   queryKey: ["queue"],
   queryFn: () => api.get<QueueEntry[]>("/api/crew/queue"),
@@ -307,6 +321,7 @@ export function useInvalidateTasks() {
   const qc = useQueryClient();
   return () => {
     qc.invalidateQueries({ queryKey: ["tasks"] });
+    qc.invalidateQueries({ queryKey: ["missions"] });
     qc.invalidateQueries({ queryKey: ["task"] });
     qc.invalidateQueries({ queryKey: ["queue"] });
     qc.invalidateQueries({ queryKey: ["preflight"] });

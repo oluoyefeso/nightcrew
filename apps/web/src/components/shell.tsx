@@ -12,7 +12,7 @@ function NavLink({
   children,
   className,
 }: {
-  to: "/" | "/agents" | "/later" | "/history";
+  to: "/" | "/agents" | "/later" | "/history" | "/missions";
   children: ReactNode;
   className?: string;
 }) {
@@ -122,6 +122,9 @@ export function Shell() {
                   {queued}
                 </span>
               )}
+            </NavLink>
+            <NavLink to="/missions" className="max-sm:hidden">
+              Missions
             </NavLink>
             <NavLink to="/later" className="max-sm:hidden">
               Later

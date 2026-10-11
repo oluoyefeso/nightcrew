@@ -3,7 +3,7 @@
 
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { type Repo, TASK_TYPES, type TaskType } from "@nightcrew/core";
+import { type Mission, type Repo, TASK_TYPES, type TaskType } from "@nightcrew/core";
 import type { AgentEngine } from "./engine";
 
 export interface DraftTask {
@@ -57,7 +57,13 @@ const SCHEMA = {
 
 export async function draftTasks(
   engine: AgentEngine,
-  input: { text: string; repos: Repo[]; defaultRepoId?: string; model: string },
+  input: {
+    text: string;
+    repos: Repo[];
+    defaultRepoId?: string;
+    model: string;
+    mission?: Pick<Mission, "title" | "objective"> | null;
+  },
 ): Promise<{ drafts: DraftTask[]; costUsd: number; fallback: boolean }> {
   const { repos } = input;
   if (repos.length === 0) throw new Error("Add a repo first so the crew knows where to work.");
@@ -85,7 +91,7 @@ export async function draftTasks(
       model: input.model,
       systemPrompt:
         "You turn a developer's request into well-scoped tasks for a coding crew that works unattended. Split unrelated work into separate tasks; keep one coherent change as one task. Never invent requirements.",
-      prompt: `Repos and their files:\n\n${context}\n\n---\n\nThe request:\n\n${input.text}`,
+      prompt: `Repos and their files:\n\n${context}\n\n---\n\n${input.mission ? `Shared mission context (scope comes from the request):\n${input.mission.title}\n${input.mission.objective}\n\n` : ""}The request:\n\n${input.text}`,
       guard: { worktree: "/nonexistent", writableDirs: [], scope: [], protectedBranches: [], readOnly: true },
       maxTokens: 200_000,
       maxTurns: 3,

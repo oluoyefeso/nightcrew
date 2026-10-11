@@ -1,340 +1,113 @@
 # NightCrew
 
-Queue tasks across repos before bed. Wake up to draft PRs.
+Dispatch the work. Judge the evidence.
 
-NightCrew is an overnight autonomous task orchestrator for Claude Code. It runs each task in an isolated git worktree, routes it to the appropriate Claude model, enforces 7 layers of safety guardrails, and creates draft PRs with decision logs.
+NightCrew is a control room for coding agents. Describe the work and agents start right away, in parallel, across your repos, inside guardrails you set. Each one comes back with evidence that it works, a review by a separate agent whose job is to prove it doesn't, and a status report you can judge in seconds. Day or night: you manage the crew, the agents do the work.
 
-![NightCrew Dashboard](docs/screenshots/dashboard.png)
+![The Inbox](docs/screenshots/inbox.png)
 
-## How It Works
+> **1.0 alpha.** The bash runner from 0.x still works and lives in [`classic/`](classic/README.md).
 
-NightCrew doesn't just run your prompt and hope for the best. Each task goes through a 3-phase pipeline that separates thinking from doing:
-
-```
- YOU (before bed)
-  │  Write tasks.yaml
-  │  Run ./nightcrew.sh run
-  ▼
- ┌─────────────────────────────────────────┐
- │  For each task:                         │
- │                                         │
- │  1. PLAN (Opus)                         │
- │     Scope challenge, architecture       │
- │     review, test coverage plan,         │
- │     failure mode analysis               │
- │     → Saves PLAN-{task-id}.md           │
- │                                         │
- │  2. IMPLEMENT (Sonnet)                  │
- │     Follows the plan precisely.         │
- │     Writes code, runs tests.            │
- │     Logs decisions to DECISIONS.md      │
- │                                         │
- │  3. REVIEW (Sonnet)                     │
- │     Pre-landing code review.            │
- │     Auto-fixes mechanical issues.       │
- │     Logs concerns to REVIEW.md          │
- │                                         │
- │  Then: validate, commit, push, draft PR │
- └─────────────────────────────────────────┘
-  │
-  ▼
- YOU (next morning)
-  Run ./nightcrew.sh review
-  Open draft PRs with decision logs
-```
-
-Opus does the hard thinking (architecture, edge cases, test planning). Sonnet follows clear instructions. By the time you review in the morning, each PR has a plan, a decision log, and a review report.
-
-## Prerequisites
-
-Install these CLI tools before running NightCrew:
-
-| Tool | Install | Purpose |
-|------|---------|---------|
-| `claude` | [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) | AI task execution |
-| `gh` | `brew install gh` then `gh auth login` | GitHub PR creation |
-| `jq` | `brew install jq` | JSON processing |
-| `yq` | `brew install yq` | YAML processing |
-| `envsubst` | `brew install gettext` | Template rendering |
-| `node` | [nodejs.org](https://nodejs.org) | Web UI server (optional, for `nightcrew serve`) |
-
-## Quick Start
+## Install
 
 ```bash
-# 1. Clone and enter the repo
-git clone <repo-url> && cd nightcrew
-
-# 2. Make the script executable
-chmod +x nightcrew.sh
-
-# 3. Copy the example tasks file
-cp tasks.yaml.example tasks.yaml
-
-# 4. Edit tasks.yaml with your actual tasks
-vim tasks.yaml
-
-# 5. Review config.yaml (cost caps, models, protected branches)
-vim config.yaml
-
-# 6. Dry run to verify everything looks right
-./nightcrew.sh run --dry-run
-
-# 7. Run for real
-./nightcrew.sh run
-
-# 8. Next morning — review results
-./nightcrew.sh review
+curl -fsSL https://raw.githubusercontent.com/oluoyefeso/nightcrew/main/install.sh | sh
 ```
 
-## Defining Tasks
-
-Edit `tasks.yaml` to define your task queue. Each task needs at minimum:
-
-```yaml
-tasks:
-  - id: my-task-id              # Unique identifier
-    title: "Short description"   # Shown in PR title and logs
-    branch: fix/my-feature       # Branch name (auto-created)
-    type: implementation         # implementation | test | refactor | research
-    prompt: |
-      Detailed instructions for Claude about what to do.
-```
-
-Optional fields for more control:
-
-```yaml
-    complexity: medium           # low | medium | high (affects model routing)
-    enabled: true                # Set to false to skip this task without deleting it
-    project_path: /path/to/repo  # Target a different repo (absolute path, must be a git repo)
-    goal: |                      # Acceptance criteria
-      - Tests pass
-      - No regressions
-    files_in_scope:              # Glob patterns — Claude can ONLY modify these
-      - src/auth/**
-      - tests/auth/**
-    max_time_minutes: 30         # Task timeout (default: 45 from config)
-    test_command: "npm test"     # Runs after task completes for validation
-    depends_on:                  # Task IDs that must complete first
-      - my-other-task
-```
-
-Tasks with `depends_on` are skipped (marked `blocked`) if their dependencies haven't completed. List tasks in dependency order in your YAML.
-
-See `tasks.yaml.example` for full examples. Task files are validated against `schemas/task.schema.json` at startup.
-
-## Task Types
-
-| Type | Best For | Default Model |
-|------|----------|---------------|
-| `implementation` | Features, bug fixes | Sonnet (Opus if high complexity) |
-| `test` | Adding/improving tests | Sonnet (Opus if high complexity) |
-| `refactor` | Code restructuring | Sonnet (Opus if high complexity) |
-| `research` | Investigation, docs | Always Sonnet |
-
-## Configuration
-
-Edit `config.yaml` to control global behavior:
-
-```yaml
-repo_path: .                    # Target repository path
-max_cost_cents: 500             # $5 cost cap per session
-max_task_time_minutes: 45       # Default timeout per task
-
-models:
-  default: claude-sonnet-4-20250514   # Low/medium complexity
-  complex: claude-opus-4-20250514     # High complexity
-
-protected_branches:             # NightCrew will NEVER touch these
-  - main
-  - master
-  - develop
-  - production
-
-pr_defaults:
-  draft: true                   # Create as draft PRs
-  base: main                    # PR target branch
-```
-
-## CLI Reference
-
-```
-nightcrew.sh run [OPTIONS]        Run the task queue
-nightcrew.sh review [OPTIONS]     Morning review dashboard
-nightcrew.sh serve [OPTIONS]      Start the web UI (http://127.0.0.1:3721)
-nightcrew.sh preflight [OPTIONS]  Run preflight checks
-nightcrew.sh config [OPTIONS]     Show resolved configuration
-nightcrew.sh enable <task-id>     Enable a task
-nightcrew.sh disable <task-id>    Disable a task
-nightcrew.sh sessions [OPTIONS]   List archived sessions
-nightcrew.sh benchmark <A> <B>    Compare token usage between two sessions
-
-Options:
-  --tasks FILE      Path to tasks.yaml (default: ./tasks.yaml)
-  --config FILE     Path to config.yaml (default: ./config.yaml)
-  --dry-run         Preflight validation + show what would run
-  --open            Open HTML dashboard in browser (with review)
-  --json            Output as JSON (for preflight, config, sessions)
-  --port PORT       Server port (default: 3721, for serve)
-  --version         Show version
-  --help            Show help
-```
-
-## Multi-Project Support
-
-Queue tasks across multiple repositories in a single overnight run:
-
-```yaml
-tasks:
-  - id: api-pagination
-    title: "Add pagination to /api/users"
-    branch: feat/pagination
-    type: implementation
-    prompt: "Implement cursor-based pagination..."
-    project_path: /Users/me/acme-api
-
-  - id: frontend-dark-mode
-    title: "Add dark mode toggle"
-    branch: feat/dark-mode
-    type: implementation
-    prompt: "Implement dark mode..."
-    project_path: /Users/me/widget-frontend
-```
-
-Each task creates its worktree under the specified project's `.worktrees/` directory. Tasks without `project_path` use the default `repo_path` from config.yaml. The `protected_branches` list applies to all projects. Each task may also declare its own `protected_branches` array to add repo-specific protections (the per-task list is merged with the global list, never replacing it):
-
-```yaml
-    protected_branches: [production]
-```
-
-## Safety Guardrails
-
-NightCrew enforces 7 layers of protection so you can run it unattended:
-
-1. **Tool restrictions** — Each task type gets a whitelist of allowed tools (research tasks can't write files, etc.)
-2. **Blocked operations** — `rm`, `sudo`, `chmod`, `ssh`, `npm publish`, force-push, and destructive HTTP methods are always blocked
-3. **Branch protection** — Will never checkout or push to main/master/develop/production
-4. **File scope enforcement** — Tasks can only modify files matching their `files_in_scope` globs; out-of-scope changes are reverted
-5. **Timeout enforcement** — Each task is killed after its `max_time_minutes`
-6. **Cost cap** — Session stops when cumulative cost exceeds `max_cost_cents`
-7. **Secret scanning** — Post-task validation checks for accidentally committed secrets
-
-## Rate Limit Handling
-
-If Claude hits a rate limit, NightCrew automatically:
-- Commits work-in-progress
-- Sleeps with exponential backoff (5m, 10m, 20m, 40m, 60m)
-- Retries up to 5 times
-- Resumes where it left off
-
-## Token Economics
-
-NightCrew is a machine-to-machine pipeline. Claude doesn't need to narrate what it's doing, and the review phase doesn't need to see every section of the plan. v0.3.4 added three compression layers to cut token waste:
-
-1. **Terse output directives** in all 3 templates tell Claude to skip preambles and narration
-2. **Section-aware plan compression** strips review-only sections before injecting the plan into the implementation prompt
-3. **Per-phase token tracking** in `progress.json` + a `nightcrew benchmark` subcommand for measuring the savings
-
-Compare any two archived sessions with:
+NightCrew needs `git`, the GitHub CLI (`gh auth login`), and either Claude Code (logged in) or `ANTHROPIC_API_KEY`.
 
 ```bash
-./nightcrew.sh benchmark <session-a> <session-b>
+cd ~/code/my-app
+nightcrew repo add        # detects the test, install and preview commands
+nightcrew                 # prints a dashboard link and opens it
 ```
 
-Example output (3-task demo session, baseline vs compressed):
+The link (`http://localhost:3721/?t=…`) carries a key that changes every launch. With `--no-open`, or after a restart, open the link `nightcrew` just printed.
 
-```
-TOKEN BENCHMARK: demo-baseline vs demo-compressed
-═══════════════════════════════════════════════════════════
-Task                 | Phase    |   Baseline | Compressed |      Delta | Savings
-─────────────────────────────────────────────────────────────────
-add-user-auth        | plan     |       6300 |       5700 |       -600 |   -10%
-add-user-auth        | impl     |      21200 |      15500 |      -5700 |   -27%
-add-user-auth        | review   |       5100 |       4600 |       -500 |   -10%
-add-user-auth        | TOTAL    |      32600 |      25800 |      -6800 |   -21%
-─────────────────────────────────────────────────────────────────
-refactor-api-client  | plan     |       5700 |       5100 |       -600 |   -11%
-refactor-api-client  | impl     |      16000 |      11700 |      -4300 |   -27%
-refactor-api-client  | review   |       4000 |       3650 |       -350 |    -9%
-refactor-api-client  | TOTAL    |      25700 |      20450 |      -5250 |   -20%
-─────────────────────────────────────────────────────────────────
-add-rate-limiter     | plan     |       5000 |       4500 |       -500 |   -10%
-add-rate-limiter     | impl     |      13700 |      10000 |      -3700 |   -27%
-add-rate-limiter     | review   |       3400 |       3150 |       -250 |    -7%
-add-rate-limiter     | TOTAL    |      22100 |      17650 |      -4450 |   -20%
-─────────────────────────────────────────────────────────────────
-SESSION TOTAL        |          |      80400 |      63900 |     -16500 |   -21%
-ESTIMATED COST       |          |      $2.17 |      $1.73 |     $-0.44 |   -21%
-═══════════════════════════════════════════════════════════
-```
-
-Numbers above are from synthetic fixtures for illustration. Real savings vary by task complexity and codebase. The implementation phase sees the biggest reduction because that's where plan compression and terse output stack.
-
-Per-task `retry_strategy: none` in `tasks.yaml` disables smart retry for individual tasks if you want maximum predictability over compression.
-
-## Running on a Schedule
+Give the agents work in the dashboard, or from a terminal:
 
 ```bash
-# Run every night at midnight
-echo "0 0 * * * cd /path/to/nightcrew && ./nightcrew.sh run" | crontab -
+nightcrew add "Dark mode that follows the system, and fix the crash when a widget has no title"
 ```
 
-## Web UI
+Agents start as soon as a slot is free: up to 3 at once and 1 per repo by default, within a 20M-token daily budget (all adjustable). Add `--schedule` to hold work for off-peak, or `--later` to park it. Try everything without spending anything with `nightcrew --demo`.
 
-NightCrew includes a web-based operations console for managing tasks and viewing results.
+## How it works
+
+1. **Dispatch.** Describe the work. NightCrew drafts task cards with scope, acceptance criteria, the evidence it will need and a token budget, and asks one question if something is unclear. Run now, schedule it, or park it in Later.
+2. **Agents work, in parallel.** The **Agents** page shows every agent live: its phase, its last step, and a Stop button.
+   - Each task gets its own clone of the repo (under `~/.nightcrew/work`) and an isolated Claude session, and lands by commit. Repos that use git-lfs, git-crypt or sparse checkout aren't supported yet.
+   - Small tasks build directly; bigger ones plan first.
+   - Every tool call passes a guard that refuses writes outside scope, pushes, publishing, secrets and protected branches.
+   - NightCrew runs your tests itself and gives a failing task one repair attempt, then gathers evidence and hands it to the Skeptic.
+3. **They report back.** Reports land in the **Inbox** as agents finish, grouped into Shipped, Ready to merge, Needs your eyes, Sent back and Failed, and laid out on the Horizon (the day as a time axis). Desktop and Slack notifications are optional.
+   - `1` merges.
+   - `2` sends a task back with a note; an agent picks it up on the same branch.
+   - `3` dismisses.
+   - `H` runs it again.
+   - `U` undoes.
+
+![Agents at work](docs/screenshots/agents.png)
+
+## Evidence, not claims
+
+NightCrew collects evidence itself, independent of what the agent says:
+
+- **UI tasks.** Before and after screenshots at desktop and mobile, in light and dark, taken from a preview of the base branch and of the task branch. Also a pixel diff, an accessibility scan (only new issues count) and console errors.
+- **Bug fixes.** A new test that fails on the base branch and passes on the fix. A test that passes either way gets flagged.
+- **Every task.** NightCrew's own checks on scope, tests and protected paths.
+
+The **Skeptic** reviews with that evidence and records each challenge it made and whether it held. Missing evidence always sends the task to Needs your eyes. See [docs/evidence.md](docs/evidence.md).
+
+## The trust ladder
+
+Each repo earns autonomy from its track record:
+
+| Level | What the crew may do |
+|---|---|
+| Propose | Plans only, no code |
+| Draft PR | One draft PR per task (the default) |
+| Daily train | Ready tasks merge into `crew/train-<day>` and are tested together; you merge one PR |
+| Ship to dev | The crew merges into your ship branch itself when evidence, the Skeptic, an 80% confidence score and your path rules all agree. `U` reverts it and drops the repo back to the train |
+
+`main`, the default branch and anything you protect are never touched. NightCrew suggests a promotion when the record earns it ("8 of the last 10 tasks merged without changes"). See [docs/trust-ladder.md](docs/trust-ladder.md).
+
+## Tokens
+
+A small task uses about **100k tokens** end to end (build, check, review, commit). That's measured, not estimated. Each agent session runs isolated: no filesystem settings, MCP servers, skills or plugins from your machine, only the repo's own `CLAUDE.md` / `AGENTS.md`. The same tasks took 2.3M–4.4M tokens in a session that loaded everything on the machine, so that's 20–40× fewer, with the agent's tools kept to what the task needs. Every task has a token budget the agent stops at, and the daily token budget holds new agents back rather than letting them pass it.
+
+## More
+
+- [Getting started](docs/getting-started.md)
+- [Configuration](docs/configuration.md): repos, budgets, models, preview commands, Jev
+- [Evidence](docs/evidence.md)
+- [Trust ladder](docs/trust-ladder.md)
+- [Security](docs/security.md): the guard, the OS sandbox, the push block and the local API
+- [Managed mode](docs/managed.md) (experimental): run the crew on Claude Managed Agents
+- [Design system](DESIGN.md)
+
+## Development
 
 ```bash
-# Install Node dependency (one-time)
-npm install
-
-# Start the web UI
-./nightcrew.sh serve
-# Opens http://127.0.0.1:3721
+bun install
+bun run dev          # dashboard on :5173 (Vite) with the API on :3721
+bun test             # unit and integration tests (real git repos, headless Chrome)
+bun run typecheck
+bun run lint
+bun run build        # dashboard + single nightcrew binary in apps/cli/dist
+bun run classic:test # the 0.x bats suite
 ```
 
-The web UI has 4 pages:
-
-**Dashboard** -- Live task status, stats, cost tracking
-
-![Dashboard](docs/screenshots/dashboard.png)
-
-**Queue Manager** -- Add, edit, enable/disable tasks, configure multi-project paths
-
-![Queue Manager](docs/screenshots/queue-manager.png)
-
-**Log Archive** -- Browse past sessions and read full execution logs per task/phase
-
-![Log Archive](docs/screenshots/log-archive.png)
-
-**System Health** -- Preflight status, version, config viewer
-
-![System Health](docs/screenshots/system-health.png)
-
-The server is localhost-only (127.0.0.1) with no authentication. It reads and writes the same local files as the CLI.
-
-## Output
-
-After a run, you'll find:
-- **`state/progress.json`** — Task statuses, costs, PR URLs, timing
-- **`state/sessions/{timestamp}/`** — Archived session with progress snapshot and logs
-- **Draft PRs** on GitHub — One per completed task
-- **`DECISIONS-*.md`** — Decision logs when Claude made judgment calls
-- **macOS notification** — If enabled, a native notification on completion
-- **Webhook** — If configured, a JSON POST to your Slack/Discord
-
-Run `./nightcrew.sh review` for a formatted summary, or `./nightcrew.sh review --open` to open the HTML dashboard. Or start the full web UI with `./nightcrew.sh serve`.
-
-## Architecture
-
-See [nightcrew-architecture.md](nightcrew-architecture.md) for the full design document including the orchestrator loop, model routing matrix, prompt template system, and implementation roadmap.
-
-## Design System
-
-See [DESIGN.md](DESIGN.md) for the UI design system ("The Silent Sentinel") — color tokens, typography, surface hierarchy, and interaction patterns used across the web UI.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, project structure, and how to submit PRs.
+| Path | What lives there |
+|---|---|
+| `apps/web` | The dashboard: React 19, Vite 8, TanStack Router and Query, Tailwind 4 |
+| `apps/cli` | The `nightcrew` binary: Hono API, scheduler, classic importer, embedded dashboard |
+| `apps/site` | The landing page |
+| `packages/core` | Domain model, report logic, the tool-call guard |
+| `packages/db` | SQLite schema (Drizzle) and queries |
+| `packages/runner` | Agent engines (Agent SDK, Managed Agents, demo), pipeline, evidence, trust ladder, reflexes |
+| `classic/` | The 0.x bash runner |
 
 ## License
 
-[MIT](LICENSE)
+MIT

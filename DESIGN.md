@@ -1,100 +1,76 @@
-# Design System Specification: Operations Console
+# NightCrew Design System: "The hour before sunrise"
 
-## 1. Overview & Creative North Star: "The Silent Sentinel"
-The Creative North Star for this design system is **"The Silent Sentinel."** It is a high-density, low-fatigue environment designed for long-duration cognitive focus. Inspired by high-end precision instruments and editorial brutalism, it rejects the "bubbly" consumer web in favor of a lean, mission-critical aesthetic.
+NightCrew is a control room: you hand work to agents and judge what they bring back, at any hour. The interface should feel calm while agents are busy, and fast when it's time to decide. Blue-black ink with one warm dawn accent. Restraint does the work: one accent colour, one typeface, mono for every number.
 
-The system breaks the "template" look through **intentional density** and **tonal layering**. By removing icons and shadows, we force the designer to rely on extreme typographic hierarchy and subtle shifts in the dark color spectrum to communicate importance. The result is an interface that feels less like a website and more like a custom-engineered dashboard.
+Railway already owns the violet night sky. NightCrew sits at dawn instead. Never use violet or indigo.
 
----
+The tokens live in `apps/web/src/styles.css`. This file explains how to use them.
 
-## 2. Color & Surface Architecture
-The palette is rooted in a deep, warm charcoal (`#0d0e14`). This "ink" base prevents the harshness of pure black while providing enough contrast for vibrant status indicators.
+## Themes
 
-### The "No-Line" Rule
-Traditional 1px borders are strictly prohibited for layout sectioning. In this system, boundaries are defined exclusively by shifting between surface tokens. 
-*   **Background (`#0d0e14`):** The canvas.
-*   **Surface Container Low (`#11131b`):** For secondary navigation or sidebars.
-*   **Surface Container High (`#1c1f2d`):** For primary work modules or active focus areas.
+Both themes are first-class. The app follows the system setting by default, and the header toggle overrides it.
 
-### Surface Hierarchy & Nesting
-To create depth, we "stack" tiers. A `surface_container_highest` (`#222536`) module should sit within a `surface_container` (`#171924`) region. This creates a "milled" effect, as if the UI has been carved out of a single block of material.
+| Token | Night (dark) | Morning (light) | Use |
+|---|---|---|---|
+| `bg` | `#0A0E16` | `#F3F5F8` | Page |
+| `surface` | `#111723` | `#FFFFFF` | Cards, panes |
+| `raised` | `#18202F` | `#EAEEF3` | Hover, selected, chips |
+| `line` | ink at 9% | ink at 10% | Hairlines |
+| `fg` | `#ECE8E1` | `#141A26` | Text |
+| `muted` | `#8B92A3` | `#5E6676` | Secondary text |
+| `faint` | `#6B7386` | `#7D8494` | Labels, timestamps, the second half of two-tone headings, at 12px and up |
+| `dawn` | `#F2A65A` | `#B65A12` | The accent: primary buttons, focus, active tab |
+| `ok` / `bad` / `sky` | green / red / blue | darker variants | Semantic state only |
 
-### Status Palette (Semantic Signals)
-Status must be loud and clear, contrasting against the muted background:
-*   **Complete:** `green` (Success)
-*   **Failed:** `error` (`#ec7c8a`)
-*   **Timeout / Blocked:** `secondary` (`#d58f24`) / `orange`
-*   **Paused:** `primary` (`#c2c1ff`)
-*   **Pending:** `on_surface_variant` (`#a7aabf`)
+`faint` is too light to read at small sizes, so labels and timestamps under 12px use `muted` instead.
 
----
+Semantic colours mark state (shipped, failed, ready) and are never decoration. `dawn` also means "needs your eyes".
 
-## 3. Typography: The Editorial Engine
-Typography is the primary decorative and functional element. We use a dual-font strategy to separate intent.
+## Type
 
-### Headers & Titles (Sans-Serif System Stack)
-Used for structural headings. 
-*   **Style:** Bold weight, tight letter-spacing (-0.02em to -0.04em).
-*   **Intent:** Authoritative, compact, and modern.
-*   **Token Example:** `headline-sm` (1.5rem, Inter, Bold).
+One family, Inter (variable), in the spirit of Aster: weight 500 for headings, tracking that tightens as size grows, and two-tone headings where the elaboration sits in `--faint` at the same size ("Good morning." faint, "Two shipped and three need you." ink).
 
-### Data & Metrics (Space Grotesk / Monospace)
-Every piece of variable data—task IDs, timestamps, logs, and financial figures—must be rendered in Monospace.
-*   **Style:** Regular weight, consistent character width.
-*   **Intent:** Precision, readability in dense lists, and a "terminal" feel.
+| Role | Class | Size | Weight | Tracking |
+|---|---|---|---|---|
+| Display (landing hero) | `t-display` | 72px (40px on phones) | 500 | −0.04em |
+| Page and section heads, the greeting | `t-h1` | 46px (30px) | 500 | −0.03em |
+| Task and run titles | `t-h2` | 32px (24px) | 500 | −0.025em |
+| Card titles | `t-h3` | 19px | 500 | −0.02em |
+| Lede | `t-lede` | 18px / 1.6 | 400 | −0.011em |
+| Body and UI | none | 14px (13px secondary) | 400 / 500 | −0.011em |
+| Eyebrow | `t-eyebrow` | 12px mono, uppercase | 400 | +0.08em, in `--dawn` |
 
-### Labels (Small Caps)
-To distinguish metadata from content, all labels use:
-*   **Transform:** Small Caps (Uppercase 0.75rem).
-*   **Spacing:** Wide tracking (0.1em to 0.15em).
-*   **Color:** `on_surface_variant` (`#a7aabf`).
+Mono is the system stack (SF Mono, then Menlo and others) for anything that changes: token counts, times, SHAs, PR numbers, logs. Always use `tabular-nums`, and no negative tracking.
 
----
+## The Horizon
 
-## 4. Elevation & Depth: Tonal Layering
-Because shadows are forbidden, hierarchy is achieved through **The Layering Principle**.
+The signature element. A 4px band across the top of the Inbox covering the hours around the day's work, fading from ink to dawn; today's ends a little after a "now" marker. Each task is a tick at the moment it started, coloured by where it landed. Hover a tick to see the task; click it to open it. Don't use the gradient anywhere else.
 
-*   **Lowest Tier:** `surface_container_lowest` (`#000000`) is used for the deepest "wells" (e.g., the log console).
-*   **Highest Tier:** `surface_bright` (`#272b3f`) is used for temporary overlays or hover states.
-*   **The Ghost Border Fallback:** If a layout becomes visually muddy, a "Ghost Border" may be used: `outline_variant` (`#444759`) at **15% opacity**. This provides a whisper of a boundary without breaking the "No-Line" rule.
+## Theme switching
 
----
+The header toggle has three states: Match system, Night and Morning. The selected one is an inverted pill so it's unmistakable in both themes. The choice is stored locally; Match system clears it. The landing page has an icon-only Light / Dark switch (sun, moon) in its nav that is always visible, embedded or not, and follows the host's theme until you pick one.
 
-## 5. Components
+## Components
 
-### Buttons
-*   **Primary:** `primary_container` (`#3734ad`) background with `on_primary_container` (`#cdccff`) text. No rounded corners beyond `sm` (0.125rem).
-*   **Secondary:** `surface_container_highest` background. Text in `primary`.
-*   **Tertiary:** Ghost style. No background, `on_surface` text.
+- **Buttons** are pills. Primary is `dawn` on `on-dawn`. Every triage action shows its key (`1`, `2`, `3`, `H`, `U`).
+- **Rows** in the Inbox breathe (~64px). A 3px stripe on the left carries the bucket colour.
+- **Agent cards** on the Agents page carry a sweeping dawn bar while working, the phase progress, the last step, and Stop.
+- **Panes** slide in from the right on desktop and take the screen on mobile.
+- **Callouts** ("Crew note", "Your note", "Why it stopped") use a tinted surface, not a border.
+- **Icons** come from Lucide at 14–16px with 2px strokes, and are always paired with a label or `aria-label`.
 
-### Data Cells (The Core Unit)
-The primary component for this system. A vertical stack:
-1.  **Label:** `label-sm` (Small caps, wide spacing, `on_surface_variant`).
-2.  **Value:** `body-md` (Monospace, `on_surface`).
+## Motion
 
-### Input Fields
-*   **Style:** Rectangular, `surface_container_high` background.
-*   **Active State:** No glow or shadow. The background shifts to `surface_bright`. A 1px "Ghost Border" in `primary` is permitted only on focus.
+150–200ms with ease-out for hover and state changes. One easing curve for entrances: `cubic-bezier(.23, 1, .32, 1)`. No animation longer than 500ms. Respect `prefers-reduced-motion`.
 
-### Logs & Lists
-*   **Spacing:** Use `spacing.2` (0.4rem) between log lines for high density.
-*   **Dividers:** Forbidden. Use a `1px` gap between containers to let the `background` color show through, creating a natural separator.
+## Keyboard
 
-### Command Palette (Special Component)
-A floating container using `surface_container_highest`. Apply a `backdrop-blur` of 20px to the background to create a "glass" feel that maintains the dark aesthetic while indicating the element is in a separate layer.
+Keyboard-first everywhere: `J`/`K` to move, `Esc` to close, single-key triage. Merge asks for a second press instead of opening a dialog.
 
----
+## Copy
 
-## 6. Do’s and Don’ts
+Write from the user's side. The crew "shipped", "needs you", or "stopped because…". Errors say what happened and what to do next. Use specific numbers ("98k tokens"), never vague ones.
 
-### Do:
-*   **Do** embrace density. Information is the hero.
-*   **Do** use `monospace` for any value that might change (IDs, numbers, dates).
-*   **Do** use `surface_container` shifts to group related items.
-*   **Do** use tight leading on large headlines to give them a "blocky," structural feel.
+## Numbers
 
-### Don’t:
-*   **Don’t** use icons. If an action is needed, use a label (e.g., "RETENTION" instead of a trash can).
-*   **Don’t** use gradients or shadows. The UI should feel mathematically flat but tonally deep.
-*   **Don’t** use standard "Blue" for links. Use `primary` (Muted Violet) or `secondary` (Amber).
-*   **Don’t** use rounded corners larger than `md` (0.375rem). The system should feel sharp and architectural.
+Talk in tokens, never dollars: per run ("98k tokens"), per day ("1.2M of 20M tokens today"), and in budgets. Format with `formatTokens` (950, 98k, 2.3M).

@@ -70,6 +70,38 @@ const send = (method: string, path: string, body?: unknown) =>
   });
 
 describe("running tasks and protected branches", () => {
+  test("preflight is read-only and validates composer dependency indexes", async () => {
+    const repo = addRepo(db, { name: "demo", path: "/demo/repo", defaultBranch: "main" });
+    const tasks = [
+      { repoId: repo.id, title: "First", type: "ui" },
+      { repoId: repo.id, title: "Second", dependsOnIndex: [0] },
+    ];
+    const before = db.$client.query("SELECT count(*) AS n FROM tasks").get();
+    const response = await send("POST", "/api/preflight", { tasks });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const result = (await response.json()) as {
+      tasks: { signals: { code: string }[] }[];
+      budget: { reserved: number };
+    };
+    expect(result.tasks[0]?.signals.some((s) => s.code === "preview")).toBe(true);
+    expect(result.tasks[1]?.signals.some((s) => s.code === "dependency")).toBe(true);
+    expect(result.budget.reserved).toBe(0);
+    expect(db.$client.query("SELECT count(*) AS n FROM tasks").get()).toEqual(before);
+    for (const input of [
+      null,
+      { tasks: [null] },
+      { tasks: [{ ...tasks[0], scope: "src/**" }] },
+      { tasks: [{ ...tasks[0], dependsOnIndex: [1] }] },
+      { tasks: [{ ...tasks[0], tokenBudget: -1 }] },
+    ]) {
+      expect((await send("POST", "/api/preflight", input)).status).toBe(400);
+    }
+    expect(
+      (await send("POST", "/api/tasks/batch", { tasks: [{ ...tasks[0], dependsOnIndex: [1] }], when: "later" })).status,
+    ).toBe(400);
+    expect(db.$client.query("SELECT count(*) AS n FROM tasks").get()).toEqual(before);
+  });
   test("task routes persist and malformed policies are rejected without changing them", async () => {
     const repo = addRepo(db, { name: "acme", path: "/code/acme", defaultBranch: "main" });
     const policies = {
@@ -402,7 +434,7 @@ describe("task status, budgets and timing", () => {
       when: "later",
       tasks: [
         { repoId: r.id, title: "Add the API" },
-        { repoId: r.id, title: "Use it in the UI", dependsOnIndex: [0, 7] },
+        { repoId: r.id, title: "Use it in the UI", dependsOnIndex: [0] },
         { repoId: r.id, title: "Pick a chart", question: "Bar or line?", dependsOnIndex: [1] },
       ],
     });

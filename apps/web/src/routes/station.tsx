@@ -47,7 +47,8 @@ export function StationPage({ runId }: { runId?: string }) {
     return () => window.removeEventListener("keydown", onKey);
   });
   const questions = drafts.data ?? [];
-  const needsYou = decisions.length + questions.length;
+  const setupHolds = station.data?.queue.filter((entry) => entry.kind === "setup") ?? [];
+  const needsYou = decisions.length + questions.length + setupHolds.length;
   const active = crew.data?.active.length ?? 0;
   const queue = station.data?.queue ?? [];
 
@@ -139,6 +140,19 @@ export function StationPage({ runId }: { runId?: string }) {
                 <span className="text-[13px] text-muted">
                   {task.question ?? "Review the scope and acceptance criteria, then queue this task."}
                 </span>
+              </Link>
+            ))}
+            {setupHolds.map((entry) => (
+              <Link
+                key={entry.taskId}
+                to="/task/$taskId"
+                params={{ taskId: entry.taskId }}
+                className="grid gap-2 rounded-2xl bg-surface p-5 ring-1 ring-line hover:ring-dawn/50"
+              >
+                <span className="text-[12px] text-dawn">Setup needed · {entry.repoName}</span>
+                <span className="font-medium">{entry.title}</span>
+                <span className="text-[13px] text-muted">{entry.reason}</span>
+                <span className="text-[12px] text-dawn">Open departure checks →</span>
               </Link>
             ))}
             {station.isPending && <p className="rounded-2xl bg-surface p-5 text-muted">Loading decisions…</p>}

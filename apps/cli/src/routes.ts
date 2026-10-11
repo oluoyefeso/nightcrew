@@ -4,6 +4,8 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { extname, join, relative, sep } from "node:path";
 import {
   AUTONOMY_LABEL,
+  DEFAULT_TASK_TOKENS,
+  type DepartureTask,
   formatTokens,
   nextStart,
   type Repo,
@@ -59,7 +61,62 @@ const MAX_TASK_MINUTES = 600;
 export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: AgentEngine; dataDir: string }) {
   const { db, crew } = deps;
   const body = async <T>(c: { req: { json: <J>() => Promise<J> } }) =>
-    (await c.req.json<T>().catch(() => ({}))) as Partial<T>;
+    ((await c.req.json<T>().catch(() => ({}))) ?? {}) as Partial<T>;
+
+  // Preview only: no agents, commands, database writes or budget reservations.
+  app.post("/api/preflight", async (c) => {
+    const { tasks } = await body<{ tasks: (Partial<DepartureTask> & { dependsOnIndex?: number[] })[] }>(c);
+    if (!Array.isArray(tasks) || !tasks.length || tasks.length > 50)
+      return c.json({ error: "Preview between 1 and 50 tasks." }, 400);
+    const inputs: DepartureTask[] = [];
+    for (const [i, task] of tasks.entries()) {
+      if (!task || typeof task !== "object" || Array.isArray(task))
+        return c.json({ error: "Each preview needs a task." }, 400);
+      if (
+        typeof task.repoId !== "string" ||
+        typeof task.title !== "string" ||
+        (task.type !== undefined && !TASK_TYPES.includes(task.type))
+      )
+        return c.json({ error: "Provide a repo, title and valid task type." }, 400);
+      if (
+        [task.scope, task.dependsOn].some(
+          (list) => list !== undefined && (!Array.isArray(list) || list.some((x) => typeof x !== "string")),
+        )
+      )
+        return c.json({ error: "Scope and dependencies must be lists of strings." }, 400);
+      if (
+        [task.testCommand, task.question, task.runAt, task.id].some(
+          (value) => value != null && typeof value !== "string",
+        )
+      )
+        return c.json({ error: "Commands, questions, dates and IDs must be text." }, 400);
+      if (
+        task.tokenBudget !== undefined &&
+        (!Number.isSafeInteger(task.tokenBudget) || task.tokenBudget < MIN_TASK_TOKENS)
+      )
+        return c.json({ error: "Give each task a valid token cap." }, 400);
+      if (task.runAt && Number.isNaN(Date.parse(task.runAt)))
+        return c.json({ error: "Give the start time as an ISO date." }, 400);
+      const dependencyError = batchDependencyError(task.dependsOnIndex, i);
+      if (dependencyError) return c.json({ error: dependencyError }, 400);
+      const id = task.id ?? `draft:${i}`;
+      if (inputs.some((t) => t.id === id)) return c.json({ error: "Task IDs must be unique in a preview." }, 400);
+      inputs.push({
+        id,
+        repoId: task.repoId,
+        title: task.title,
+        type: task.type ?? "implementation",
+        scope: task.scope ?? [],
+        dependsOn: task.dependsOnIndex ? task.dependsOnIndex.map((index) => inputs[index]!.id) : (task.dependsOn ?? []),
+        tokenBudget: task.tokenBudget ?? Math.min(DEFAULT_TASK_TOKENS, getSettings(db).dailyTokenBudget),
+        testCommand: task.testCommand ?? null,
+        question: task.question ?? null,
+        runAt: task.runAt ?? null,
+      });
+    }
+    c.header("cache-control", "no-store");
+    return c.json(crew.preflight(inputs));
+  });
 
   // ── Repos ──
   app.get("/api/repos", (c) => c.json(listRepos(db)));
@@ -163,7 +220,10 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
     if (!Array.isArray(tasks) || tasks.length === 0) return c.json({ error: "No tasks to save." }, 400);
     if (status !== undefined && !NEW_STATUSES.includes(status))
       return c.json({ error: "New tasks start as draft, queued or later." }, 400);
-    for (const t of tasks) {
+    for (const [i, t] of tasks.entries()) {
+      if (!t || typeof t !== "object") return c.json({ error: "Each entry needs a task." }, 400);
+      const dependencyError = batchDependencyError(t.dependsOnIndex, i);
+      if (dependencyError) return c.json({ error: dependencyError }, 400);
       const err = validateTask(db, t) ?? validateLimits(db, t);
       if (err) return c.json({ error: err }, 400);
     }
@@ -224,6 +284,11 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
     if ((clean.status === "running" || clean.status === "done") && clean.status !== current.status)
       return c.json({ error: "Only the crew marks a task running or done. Queue it instead." }, 400);
     if (clean.title !== undefined && !clean.title?.trim()) return c.json({ error: "Every task needs a title." }, 400);
+    if (
+      clean.dependsOn !== undefined &&
+      (!Array.isArray(clean.dependsOn) || clean.dependsOn.some((id) => typeof id !== "string"))
+    )
+      return c.json({ error: "Dependencies must be a list of task IDs." }, 400);
     if (clean.repoId !== undefined && !getRepo(db, clean.repoId))
       return c.json({ error: "Pick a repo for the task." }, 400);
     const err = validateLimits(db, clean);
@@ -287,6 +352,10 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
 
   // ── Crew ──
   app.get("/api/crew", (c) => c.json(crew.getStatus()));
+  app.get("/api/crew/queue", (c) => {
+    c.header("cache-control", "no-store");
+    return c.json(crew.getQueue());
+  });
   /** Pause dispatch: running agents finish, nothing new starts. */
   app.post("/api/crew/pause", (c) => {
     updateSettings(db, { dispatch: false });
@@ -457,6 +526,13 @@ function validateTask(db: Db, t: Partial<NewTask>): string | null {
   if (t.type && !TASK_TYPES.includes(t.type)) return "Unknown task type.";
   if (t.status !== undefined && !NEW_STATUSES.includes(t.status)) return "New tasks start as draft, queued or later.";
   return null;
+}
+
+function batchDependencyError(value: unknown, index: number): string | null {
+  if (value === undefined) return null;
+  return Array.isArray(value) && value.every((i) => Number.isInteger(i) && i >= 0 && i < index)
+    ? null
+    : "Batch dependencies must refer to earlier tasks in the batch.";
 }
 
 /** Budgets, time limits and timing, for new tasks and edits alike. */

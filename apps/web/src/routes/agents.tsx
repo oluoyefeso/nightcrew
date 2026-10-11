@@ -1,4 +1,4 @@
-import { formatTokens, type Repo, TASK_TYPE_LABEL, TASK_TYPES, type Task } from "@nightcrew/core";
+import { formatTokens, type QueueEntry, type Repo, TASK_TYPE_LABEL, TASK_TYPES, type Task } from "@nightcrew/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { clsx } from "clsx";
@@ -9,6 +9,7 @@ import {
   api,
   crewQuery,
   type DraftTask,
+  queueQuery,
   reposQuery,
   settingsQuery,
   tasksQuery,
@@ -17,6 +18,7 @@ import {
 } from "../api";
 import { AddRepo } from "../components/add-repo";
 import { AgentBoard, CrewSummary } from "../components/agent-board";
+import { DepartureChecks } from "../components/departure-checks";
 import { ChipsEditor, inlineEdit, ListEditor, Select, TextInput } from "../components/form";
 import { TaskRoute } from "../components/task-route";
 import { Button } from "../components/ui";
@@ -28,6 +30,7 @@ export function AgentsPage() {
   const crew = useQuery(crewQuery);
   const queued = useQuery(tasksQuery(["queued"]));
   const waiting = useQuery(tasksQuery(["draft"]));
+  const departures = useQuery(queueQuery);
   // Composer text and unsaved drafts a restart's reload stashed (pending.ts).
   const [restored] = useState(() => {
     const text = unstash<string>("composer");
@@ -69,7 +72,7 @@ export function AgentsPage() {
             {working
               ? `${working} working right now.`
               : queue.length
-                ? "Starting on the queue."
+                ? "Work is queued."
                 : "Give them something to do."}
           </span>
         </h1>
@@ -143,7 +146,7 @@ export function AgentsPage() {
             </p>
           </div>
         ) : (
-          <Queue tasks={queue} />
+          <Queue tasks={queue} departures={departures.data ?? []} />
         )}
       </section>
 
@@ -316,7 +319,7 @@ function Drafts({
       onDone();
       toast(
         when === "now"
-          ? "Dispatched. Agents start as soon as a slot is free."
+          ? "Queued. Agents start when departure checks pass and a slot is free."
           : when === "schedule"
             ? `Scheduled for ${settings.data?.scheduleAt ?? "later"}.`
             : "Saved to Later.",
@@ -357,7 +360,7 @@ function Drafts({
                     : "bg-[color-mix(in_srgb,var(--ok)_14%,transparent)] text-ok",
                 )}
               >
-                {d.question ? "1 question" : "Ready"}
+                {d.question ? "1 question" : "Draft"}
               </span>
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -419,6 +422,7 @@ function Drafts({
           </article>
         ))}
       </div>
+      <DepartureChecks tasks={drafts.map((d) => ({ ...d, dependsOn: undefined, dependsOnIndex: d.dependsOn }))} />
       <div className="flex flex-wrap items-center justify-end gap-2">
         {save.error && <span className="text-[12px] text-bad">{save.error.message}</span>}
         <Button variant="ghost" onClick={onDone}>
@@ -480,7 +484,7 @@ function QuestionRow({ task }: { task: Task }) {
 
 // ── Queue ───────────────────────────────────────────────────────────────────
 
-function Queue({ tasks }: { tasks: Task[] }) {
+function Queue({ tasks, departures }: { tasks: Task[]; departures: QueueEntry[] }) {
   const [order, setOrder] = useState(tasks);
   const invalidate = useInvalidateTasks();
   useEffect(() => setOrder(tasks), [tasks]);
@@ -497,13 +501,29 @@ function Queue({ tasks }: { tasks: Task[] }) {
       className="divide-y divide-line overflow-hidden rounded-2xl bg-surface ring-1 ring-line"
     >
       {order.map((t, i) => (
-        <QueueRow key={t.id} task={t} index={i} onDrop={() => persist.mutate(order.map((x) => x.id))} />
+        <QueueRow
+          key={t.id}
+          task={t}
+          departure={departures.find((entry) => entry.taskId === t.id)}
+          index={i}
+          onDrop={() => persist.mutate(order.map((x) => x.id))}
+        />
       ))}
     </Reorder.Group>
   );
 }
 
-function QueueRow({ task, index, onDrop }: { task: Task; index: number; onDrop: () => void }) {
+function QueueRow({
+  task,
+  departure,
+  index,
+  onDrop,
+}: {
+  task: Task;
+  departure?: QueueEntry;
+  index: number;
+  onDrop: () => void;
+}) {
   const controls = useDragControls();
   const navigate = useNavigate();
   const invalidate = useInvalidateTasks();
@@ -551,6 +571,11 @@ function QueueRow({ task, index, onDrop }: { task: Task; index: number; onDrop: 
           {task.scope.length > 0 && <span className="truncate">{task.scope.join(" ")}</span>}
           {task.dependsOn.length > 0 && <span>after {task.dependsOn.length} other</span>}
         </span>
+        {departure && (
+          <span className={departure.kind === "setup" ? "text-[12px] text-dawn" : "text-[12px] text-muted"}>
+            {departure.reason}
+          </span>
+        )}
       </button>
       <span className="hidden font-mono text-[11.5px] text-muted tabular sm:inline">
         ≤{formatTokens(task.tokenBudget)} tokens · {task.maxMinutes}m

@@ -1,6 +1,7 @@
 import type {
   Night,
   NightReport,
+  QueueEntry,
   Repo,
   RunDetail,
   Settings,
@@ -290,6 +291,11 @@ export const infoQuery = queryOptions({
   staleTime: Number.POSITIVE_INFINITY,
 });
 export const crewQuery = queryOptions({ queryKey: ["crew"], queryFn: () => api.get<CrewStatus>("/api/crew") });
+export const queueQuery = queryOptions({
+  queryKey: ["queue"],
+  queryFn: () => api.get<QueueEntry[]>("/api/crew/queue"),
+  refetchInterval: 5000,
+});
 export const eventsQuery = (runId: string) =>
   queryOptions({
     queryKey: ["events", runId],
@@ -302,6 +308,8 @@ export function useInvalidateTasks() {
   return () => {
     qc.invalidateQueries({ queryKey: ["tasks"] });
     qc.invalidateQueries({ queryKey: ["task"] });
+    qc.invalidateQueries({ queryKey: ["queue"] });
+    qc.invalidateQueries({ queryKey: ["preflight"] });
     qc.invalidateQueries({ queryKey: ["station"] });
   };
 }

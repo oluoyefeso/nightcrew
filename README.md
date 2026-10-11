@@ -34,7 +34,7 @@ Agents start as soon as a slot is free: up to 3 at once and 1 per repo by defaul
 
 ## How it works
 
-1. **Dispatch.** Describe the work. NightCrew drafts task cards with scope, acceptance criteria, the evidence it will need and a token budget, and asks one question if something is unclear. Run now, schedule it, or park it in Later.
+1. **Dispatch.** Describe the work. NightCrew drafts task cards with scope, acceptance criteria, the evidence it will need and a token budget, and asks one question if something is unclear. Departure checks show missing setup, prerequisites, scope overlap and available budget before dispatch. Run now, schedule it, or park it in Later.
 2. **Agents work, in parallel.** The **Agents** page shows every agent live: its phase, its last step, and a Stop button.
    - Each task gets its own clone of the repo (under `~/.nightcrew/work`) and an isolated Claude session, and lands by commit. Repos that use git-lfs, git-crypt or sparse checkout aren't supported yet.
    - Small tasks build directly; bigger ones plan first.
@@ -73,6 +73,10 @@ Each repo earns autonomy from its track record:
 `main`, the default branch and anything you protect are never touched. NightCrew suggests a promotion when the record earns it ("8 of the last 10 tasks merged without changes"). See [docs/trust-ladder.md](docs/trust-ladder.md).
 
 **Routes by task type** make that authority precise. Keep refactors at draft PRs while tests join the train, or require visual evidence for features. The repo level stays the ceiling. Preview each route before dispatch and inspect its recorded requirements in the run's **Route** tab. Tightening a rule holds running work when it no longer qualifies; raising authority applies to the next run.
+
+**Departure checks** hold queued tasks before an agent starts when required test or preview commands are missing. Fix the settings and dispatch can pick them up automatically. The preview also explains dependency, schedule, capacity and budget waits; you can edit prerequisites on the task. Scope overlap is an advisory based on path patterns. These checks inspect configuration, not whether commands will succeed. Running reservations count against the available budget; proposed caps are not usage estimates or reservations.
+
+**Decision briefs** explain a run's stop reason, missing evidence and next steps, with links to the relevant artifacts and settings. Retry uses saved work where available and reruns verification under current rules.
 
 ## Tokens
 

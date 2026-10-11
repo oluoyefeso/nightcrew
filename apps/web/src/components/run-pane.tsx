@@ -1,14 +1,15 @@
 import {
   type ArtifactKind,
   BUCKET_LABEL,
-  decisionFor,
   formatDuration,
   formatTokens,
+  interventionFor,
   needsDecision,
   type Run,
   type TriageAction,
 } from "@nightcrew/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { clsx } from "clsx";
 import { ArrowLeft, ExternalLink, GitBranch, GitPullRequest, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -61,6 +62,7 @@ export function RunPane({
   const active = tab ?? artifacts[0]?.kind ?? null;
   const artifact = artifacts.find((a) => a.kind === active);
   const dur = durationMs(run.startedAt, run.endedAt);
+  const intervention = interventionFor(run, artifacts);
 
   return (
     <PaneFrame onClose={onClose}>
@@ -124,12 +126,40 @@ export function RunPane({
           </Callout>
         )}
 
-        {needsDecision(run) && run.status === "complete" && (
-          <Callout tone="dawn" label={decisionFor(run).label}>
-            {decisionFor(run).reason} {decisionFor(run).action}
-          </Callout>
+        {needsDecision(run) && (
+          <section aria-label="Decision brief" className="grid gap-3 rounded-xl bg-raised p-4">
+            <h3 className="text-[14px] font-medium text-dawn">{intervention.title}</h3>
+            <p className="text-[13px] leading-relaxed">{intervention.reason}</p>
+            {intervention.missing.length > 0 && (
+              <ul className="grid gap-1 text-[12.5px] text-bad">
+                {[...new Set(intervention.missing)].map((item) => (
+                  <li key={item}>• {item}</li>
+                ))}
+              </ul>
+            )}
+            <p className="text-[13px] text-muted leading-relaxed">{intervention.next}</p>
+            <div className="flex flex-wrap gap-2">
+              {intervention.inspect.map((kind) => (
+                <Button key={kind} size="sm" variant="ghost" onClick={() => setTab(kind)}>
+                  Inspect {TAB_LABEL[kind].toLowerCase()}
+                </Button>
+              ))}
+            </div>
+            {run.source === "local" && (
+              <div className="flex flex-wrap gap-4 text-[12.5px] text-dawn">
+                <Link to="/task/$taskId" params={{ taskId: run.taskId }}>
+                  Edit task & departure checks
+                </Link>
+                <Link to="/settings">Repository settings</Link>
+              </div>
+            )}
+            <p className="text-[11.5px] text-faint">
+              Retry uses saved work where available and reruns verification under current rules. Previous evidence does
+              not approve a new attempt.
+            </p>
+          </section>
         )}
-        {run.status !== "complete" && run.reason && (
+        {!needsDecision(run) && run.status !== "complete" && run.reason && (
           <Callout tone="bad" label="Why it stopped">
             {run.reason}
           </Callout>
@@ -162,7 +192,7 @@ export function RunPane({
 
         {artifacts.length > 0 && (
           <div className="grid gap-3">
-            <div role="tablist" className="flex gap-1 border-line border-b">
+            <div role="tablist" className="flex flex-wrap gap-1 border-line border-b">
               {artifacts.map((a) => (
                 <button
                   key={a.kind}

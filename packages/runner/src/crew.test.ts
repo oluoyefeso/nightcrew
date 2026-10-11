@@ -57,6 +57,82 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 const crewWith = (engine: ScriptedEngine) => new Crew({ db, engine, dataDir: join(dir, "data"), publish: false });
 
 describe("dispatcher", () => {
+  test("required setup holds spend no tokens and resume after configuration is fixed", async () => {
+    const r = await repo("preflight");
+    updateRepo(db, r.id, {
+      policies: { implementation: { autonomy: null, requireTests: true, visual: false, regression: false } },
+    });
+    const task = createTask(db, { repoId: r.id, title: "Build a feature", status: "queued", scope: ["src/**"] });
+    const engine = slowEngine(1, { concurrent: 0, peak: 0, order: [] });
+    const crew = crewWith(engine);
+    expect(crew.preflight([task]).tasks[0]?.signals.some((s) => s.code === "tests" && s.kind === "hold")).toBe(true);
+    await crew.drain();
+    expect(engine.calls).toHaveLength(0);
+    expect(getTask(db, task.id)?.lastRunId).toBeNull();
+    expect(crew.getQueue()[0]?.kind).toBe("setup");
+    updateRepo(db, r.id, { testCommand: "test -f src/1.ts" });
+    await crew.drain();
+    expect(getTask(db, task.id)?.status).toBe("done");
+    expect(engine.calls.some((c) => c.phase === "implement")).toBe(true);
+  });
+
+  test("preview accounts for running reservations without creating tasks or starting work", async () => {
+    const r = await repo("reservations");
+    updateSettings(db, { dailyTokenBudget: 1_500_000 });
+    const task = createTask(db, {
+      repoId: r.id,
+      title: "Active",
+      status: "queued",
+      tokenBudget: 1_000_000,
+      scope: ["src/**"],
+    });
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let start = () => {};
+    const started = new Promise<void>((resolve) => {
+      start = resolve;
+    });
+    const engine = new ScriptedEngine({
+      implement: async (req) => {
+        start();
+        await gate;
+        writeFileSync(join(req.cwd, "src/feature.ts"), "export {};\n");
+        return { text: "Done" };
+      },
+      review: () => ({ structured: READY }),
+    });
+    const crew = crewWith(engine);
+    try {
+      await crew.pump();
+      await started;
+      const report = crew.preflight([{ ...task, id: "draft:0", title: "Next", tokenBudget: 600_000 }]);
+      expect(report.budget).toMatchObject({ reserved: 1_000_000, available: 500_000, requested: 600_000 });
+      expect(report.tasks[0]?.signals.some((s) => s.code === "budget" && s.kind === "wait")).toBe(true);
+      expect(getTask(db, "draft:0")).toBeNull();
+    } finally {
+      release();
+      await crew.drain();
+    }
+  });
+
+  test("preview distinguishes dependency cycles, missing prerequisites and possible overlap", async () => {
+    const r = await repo("dependencies");
+    const a = createTask(db, { repoId: r.id, title: "A", status: "queued", scope: ["src/**"] });
+    const b = createTask(db, { repoId: r.id, title: "B", status: "queued", dependsOn: [a.id], scope: ["src/ui/**"] });
+    const crew = crewWith(new ScriptedEngine({}));
+    const cycle = crew.preflight([{ ...a, dependsOn: [b.id] }]);
+    expect(cycle.tasks[0]?.signals.some((s) => s.code === "dependency-cycle" && s.kind === "hold")).toBe(true);
+    const missing = crew.preflight([{ ...a, dependsOn: ["gone"] }]);
+    expect(missing.tasks[0]?.signals.some((s) => s.code === "dependency-missing")).toBe(true);
+    const independent = crew.preflight([{ ...a, id: "draft:0", title: "New work", scope: ["src/ui/button.ts"] }]);
+    expect(independent.tasks[0]?.signals.some((s) => s.code === "overlap" && s.kind === "notice")).toBe(true);
+    const ordered = crew.preflight([{ ...b }]);
+    expect(ordered.tasks[0]?.signals.some((s) => s.code === "overlap")).toBe(false);
+    expect(ordered.tasks[0]?.signals.some((s) => s.code === "dependency" && s.taskId === a.id)).toBe(true);
+  });
+
   test("the Station explains dependency failures, schedules, pause, and budget without dispatching", () => {
     const r = addRepo(db, { name: "example", path: "/example/project", defaultBranch: "main" });
     const dependency = createTask(db, { repoId: r.id, title: "API change", status: "done" });

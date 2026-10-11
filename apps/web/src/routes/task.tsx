@@ -4,7 +4,8 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { clsx } from "clsx";
 import { ArrowLeft, Check, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { ApiError, api, reposQuery, settingsQuery, taskQuery, useInvalidateTasks } from "../api";
+import { ApiError, api, reposQuery, settingsQuery, taskQuery, tasksQuery, useInvalidateTasks } from "../api";
+import { DepartureChecks } from "../components/departure-checks";
 import { ChipsEditor, Field, inlineEdit, ListEditor, Select, TextArea, TextInput } from "../components/form";
 import { TaskRoute } from "../components/task-route";
 import { Button, Pill } from "../components/ui";
@@ -32,6 +33,7 @@ const CONTENT_FIELDS = [
   "model",
   "testCommand",
   "repoId",
+  "dependsOn",
 ] as const satisfies readonly (keyof Task)[];
 
 type Edits = Partial<Task>;
@@ -118,6 +120,7 @@ function TaskEditor({
   const [saved, setSaved] = useState(false);
   const repos = useQuery(reposQuery);
   const settings = useQuery(settingsQuery);
+  const allTasks = useQuery(tasksQuery([]));
   // The API refuses a task budget above the daily budget, so the field stops there too.
   const maxTokens = settings.data?.dailyTokenBudget ?? Number.POSITIVE_INFINITY;
   const invalidate = useInvalidateTasks();
@@ -443,9 +446,46 @@ function TaskEditor({
         </div>
       </fieldset>
 
+      {!locked && (
+        <section className="grid gap-2">
+          <h2 className="text-[13px] font-medium">Wait for tasks</h2>
+          {t.dependsOn.map((id) => (
+            <div
+              key={id}
+              className="flex items-center justify-between gap-2 rounded-xl bg-surface px-3 py-2 text-[13px]"
+            >
+              <span>{allTasks.data?.find((task) => task.id === id)?.title ?? "Missing prerequisite"}</span>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => edit({ dependsOn: t.dependsOn.filter((dep) => dep !== id) })}
+              >
+                Remove
+              </Button>
+            </div>
+          ))}
+          <Select
+            aria-label="Add prerequisite"
+            value=""
+            onChange={(e) => {
+              if (e.target.value) edit({ dependsOn: [...t.dependsOn, e.target.value] });
+            }}
+          >
+            <option value="">Add a prerequisite…</option>
+            {allTasks.data
+              ?.filter((task) => task.id !== t.id && !t.dependsOn.includes(task.id))
+              .map((task) => (
+                <option key={task.id} value={task.id}>
+                  {task.repoName} · {task.title}
+                </option>
+              ))}
+          </Select>
+        </section>
+      )}
       {repos.data?.find((r) => r.id === t.repoId) && (
         <TaskRoute repo={repos.data.find((r) => r.id === t.repoId)!} type={t.type} />
       )}
+      {!locked && <DepartureChecks tasks={[t]} />}
 
       <section className="grid gap-3">
         <h2 className="font-medium text-[13px] text-muted">Notes and attempts</h2>

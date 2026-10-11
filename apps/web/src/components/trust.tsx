@@ -6,12 +6,14 @@ import { api } from "../api";
 import { Button } from "./ui";
 
 /** Today's trains: one integration branch per repo, one PR to merge. */
-export function TrainCards({ nightId, onOpen }: { nightId: string; onOpen: (runId: string) => void }) {
+export function TrainCards({ nightId, onOpen }: { nightId?: string; onOpen: (runId: string) => void }) {
   const trains = useQuery({
     queryKey: ["trains", nightId],
-    queryFn: () => api.get<Train[]>(`/api/trains?night=${nightId}`),
+    queryFn: () => api.get<Train[]>(`/api/trains${nightId ? `?night=${encodeURIComponent(nightId)}` : ""}`),
   });
-  const list = (trains.data ?? []).filter((t) => t.cars.length > 0);
+  const list = (trains.data ?? []).filter((t) =>
+    nightId ? t.cars.length > 0 : ["open", "published"].includes(t.status) && t.cars.some((c) => c.state === "on"),
+  );
   if (!list.length) return null;
   return (
     <div className="grid gap-3">
@@ -25,7 +27,7 @@ export function TrainCards({ nightId, onOpen }: { nightId: string; onOpen: (runI
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 className="flex items-center gap-2.5 font-medium text-[14px]">
                 <TrainFront className="size-4 text-sky" />
-                Daily train · {t.repoName}
+                Train · {t.repoName} · {t.nightId}
                 <span className="font-mono text-[12px] text-faint">
                   {on.length} {on.length === 1 ? "task" : "tasks"}, tested together
                 </span>

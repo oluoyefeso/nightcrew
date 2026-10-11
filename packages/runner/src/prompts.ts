@@ -1,26 +1,35 @@
 // Prompts for each phase. Ported from the classic templates and tightened:
 // artifacts go to NightCrew's own folder, never into the user's repo.
 
-import { EVIDENCE_FOR, type Repo, type Task, type TaskNote } from "@nightcrew/core";
+import {
+  policyEvidence,
+  policySummary,
+  type Repo,
+  type ResolvedPolicy,
+  resolvePolicy,
+  type Task,
+  type TaskNote,
+} from "@nightcrew/core";
 
 export interface PromptContext {
   task: Task;
   repo: Repo;
   artifactsDir: string;
-  /** Your notes from earlier mornings, newest last. */
+  /** Your notes from earlier attempts, newest last. */
   feedback: TaskNote[];
   /** Commits already on the branch from an earlier attempt. */
   resumeCommits: number;
   plan?: string;
   /** Summary of the evidence NightCrew gathered itself. */
   evidence?: string;
+  policy?: ResolvedPolicy;
 }
 
 const scopeLine = (t: Task) => (t.scope.length ? t.scope.join(", ") : "anything in the repository (no scope was set)");
 const criteria = (t: Task) =>
   t.criteria.length ? t.criteria.map((c) => `- ${c}`).join("\n") : "- Do what the brief asks, with tests.";
 
-function taskBlock({ task, repo }: PromptContext) {
+function taskBlock({ task, repo, policy }: PromptContext) {
   return `## Task
 ${task.title}
 
@@ -30,7 +39,12 @@ ${task.brief || "(No further detail. Infer the intent from the title and the cod
 ${criteria(task)}
 
 ## Evidence the reviewer expects
-${EVIDENCE_FOR[task.type].map((e) => `- ${e}`).join("\n")}
+${policyEvidence(policy ?? resolvePolicy(repo, task.type))
+  .map((e) => `- ${e}`)
+  .join("\n")}
+
+## Route
+${policySummary(policy ?? resolvePolicy(repo, task.type))}
 
 ## Limits
 - Repository: ${repo.name}. Branch: \`${task.branch}\` (based on \`${repo.defaultBranch}\`).
@@ -57,7 +71,7 @@ This feedback overrides the original brief where they conflict.`);
 
 export function planPrompt(ctx: PromptContext): { system: string; prompt: string } {
   return {
-    system: `You are the planning step of NightCrew, an overnight coding crew. A separate agent will implement your plan while nobody is awake to answer questions, so the plan must settle every decision.
+    system: `You are the planning step of NightCrew, a coding crew. A separate agent will implement your plan without relying on a person answering questions during execution, so the plan must settle every decision.
 
 You are NOT implementing. Read the code, then reply with the plan.`,
     prompt: `${taskBlock(ctx)}
@@ -66,7 +80,7 @@ ${feedbackBlock(ctx)}
 
 ## How to plan
 1. Scope: what existing code already solves part of this? What's the smallest change that meets every criterion? Flag anything that could be deferred.
-2. Decide. Pick an approach for every open question and say why in one line. Rate your confidence 1–10 next to each decision; the morning reviewer will look hardest at the low ones.
+2. Decide. Pick an approach for every open question and say why in one line. Rate your confidence 1–10 next to each decision; the reviewer will look hardest at the low ones.
 3. Files: list each file to change or add, in order, with what changes.
 4. Tests: which tests prove each acceptance criterion. For a bug fix, the test must fail on the current code and pass after the fix.
 5. Risks: what could break, and how the implementer should check it.
@@ -78,7 +92,7 @@ Keep it tight. Reply with the plan as markdown, starting with a one-line summary
 
 export function implementPrompt(ctx: PromptContext): { system: string; prompt: string } {
   return {
-    system: `You are NightCrew's implementer. You work unattended overnight; nobody will answer questions until morning.
+    system: `You are NightCrew's implementer. You work independently within the task's scope and repo policy. Record blockers and decisions for the conductor.
 
 When something is ambiguous, don't stop. Choose the most conservative reasonable option, note it in ${ctx.artifactsDir}/DECISIONS.md (what, why, alternatives, risk) and keep going.
 
@@ -182,7 +196,7 @@ Then give your verdict.`,
 
 export function researchPrompt(ctx: PromptContext): { system: string; prompt: string } {
   return {
-    system: `You are NightCrew's researcher. You work unattended overnight. Read code and the web as needed, but don't change the repository. Write your report to ${ctx.artifactsDir}/REPORT.md.`,
+    system: `You are NightCrew's researcher. You work independently within the task's scope. Read code and the web as needed, but don't change the repository. Write your report to ${ctx.artifactsDir}/REPORT.md.`,
     prompt: `${taskBlock(ctx)}
 
 ${feedbackBlock(ctx)}

@@ -1,4 +1,4 @@
-import { EVIDENCE_FOR, TASK_TYPE_LABEL, TASK_TYPES, type Task } from "@nightcrew/core";
+import { TASK_TYPE_LABEL, TASK_TYPES, type Task } from "@nightcrew/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { clsx } from "clsx";
@@ -6,6 +6,7 @@ import { ArrowLeft, Check, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, api, reposQuery, settingsQuery, taskQuery, useInvalidateTasks } from "../api";
 import { ChipsEditor, Field, inlineEdit, ListEditor, Select, TextArea, TextInput } from "../components/form";
+import { TaskRoute } from "../components/task-route";
 import { Button, Pill } from "../components/ui";
 import { fmtDay, fmtTime } from "../lib";
 import { dropStash, unstash, useStashOnReload } from "../pending";
@@ -442,17 +443,9 @@ function TaskEditor({
         </div>
       </fieldset>
 
-      <section className="grid gap-2">
-        <h2 className="font-medium text-[13px] text-muted">Evidence the crew must bring back</h2>
-        <ul className="grid gap-1.5">
-          {EVIDENCE_FOR[t.type].map((e) => (
-            <li key={e} className="flex items-center gap-2.5 text-[13.5px]">
-              <span className="size-1.5 rounded-full bg-ok" />
-              {e}
-            </li>
-          ))}
-        </ul>
-      </section>
+      {repos.data?.find((r) => r.id === t.repoId) && (
+        <TaskRoute repo={repos.data.find((r) => r.id === t.repoId)!} type={t.type} />
+      )}
 
       <section className="grid gap-3">
         <h2 className="font-medium text-[13px] text-muted">Notes and attempts</h2>

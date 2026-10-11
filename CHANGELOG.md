@@ -2,6 +2,30 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.3] - 2026-10-11
+
+NightCrew becomes the conductor's station: dispatch work, configure each task's
+verification and authority, and keep unresolved decisions in view across days.
+
+### Added
+- **Station dashboard.** Decisions across all days, draft questions, live agents, explained queue holds, integration trains, repo authority and recent outcomes. Daily reports remain in History.
+- **Routes by task type.** Cap each code task type at a plan, draft PR, train or ship, within the repo's autonomy ceiling. Require tests, visual evidence or regression proof; UI and bug-fix evidence requirements remain in force.
+- **Route previews and records.** Preview the effective route before dispatch and inspect its starting requirements, effective route and hold reasons in each run's Route tab.
+
+### Changed
+- Running tasks retain the strictest route observed. Promotions apply to the next run; tighter settings are checked before landing and after combined integration tests.
+- The local open-source runner is the supported experience. Managed mode is marked Coming soon and cannot be selected from the CLI.
+
+### Fixed
+- Missing or stale evidence prevents automatic landing, including when the reviewer changes files after evidence collection.
+- Always-ask paths hold train tasks as well as shipping tasks.
+- Failed, dismissed and plan-only prerequisites no longer unblock dependent code tasks.
+- Failed runs can be dismissed from the Station, and landing hold reasons persist for review.
+
+### Upgrade
+- Existing repositories keep their autonomy and inherit the default routes. The local SQLite database migrates automatically.
+- Releases remain alpha prereleases. Managed hosting is not included.
+
 ## [1.0.0-alpha.2] - 2026-10-10
 
 NightCrew stops being night-only. It's a control room for coding agents:

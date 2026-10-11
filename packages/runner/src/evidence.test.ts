@@ -93,6 +93,28 @@ describe("fail-then-pass", () => {
     expect(ev.missing[0]).toContain("also passes without the fix");
   });
 
+  test("a task-type rule gathers regression proof for an implementation task", async () => {
+    const repo = addRepo(db, {
+      name: "app",
+      path: repoPath,
+      defaultBranch: "main",
+      testCommand: "sh tests/add.test.sh",
+    });
+    updateRepo(db, repo.id, {
+      policies: { implementation: { autonomy: null, requireTests: false, visual: false, regression: true } },
+    });
+    const wt = await clone(repo.id, "crew/proof");
+    writeFileSync(join(wt, "math.sh"), "add() { echo $(( $1 + $2 )); }\n");
+    writeFileSync(join(wt, "tests", "add.test.sh"), '. ./math.sh; [ "$(add 2 3)" = "5" ]\n');
+    mkdirSync(join(dir, "artifacts"), { recursive: true });
+    const options = opts("implementation proof", wt, repo.id);
+    options.task.type = "implementation";
+    const ev = await gatherEvidence(options);
+    expect(ev.testProof?.failsOnBase).toBe(true);
+    expect(ev.testProof?.passesOnBranch).toBe(true);
+    expect(ev.missing).toEqual([]);
+  });
+
   // Value: protects=fail-then-pass only takes plain files from the clone's (agent-controlled) changed list, so a test file that's a symlink to something outside the clone is never copied into your repo's base checkout or counted as proof; fails_when=plainFile is dropped or goes back to existsSync, which follows links; why_new=afca3f3 added the plain-file rule with no test; seam=none
   test("a symlinked test file is not copied or counted as proof", async () => {
     const repo = addRepo(db, {

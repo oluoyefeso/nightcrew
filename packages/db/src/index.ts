@@ -6,11 +6,13 @@ import {
   classify,
   type Night,
   type NightReport,
+  needsDecision,
   type PrState,
   type Run,
   type RunDetail,
   type RunSource,
   type RunStatus,
+  type StationReport,
   type TriageAction,
 } from "@nightcrew/core";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
@@ -21,7 +23,9 @@ import previewMigration from "../migrations/0002_preview.sql" with { type: "text
 import trustMigration from "../migrations/0003_trust.sql" with { type: "text" };
 import scheduleMigration from "../migrations/0004_schedule.sql" with { type: "text" };
 import tokensMigration from "../migrations/0005_tokens.sql" with { type: "text" };
+import policiesMigration from "../migrations/0006_task_policies.sql" with { type: "text" };
 import * as schema from "./schema";
+import { listTasks } from "./tasks";
 
 export * from "./tasks";
 export * from "./trust";
@@ -36,6 +40,7 @@ const MIGRATIONS: [name: string, sql: string][] = [
   ["0003_trust", trustMigration],
   ["0004_schedule", scheduleMigration],
   ["0005_tokens", tokensMigration],
+  ["0006_task_policies", policiesMigration],
 ];
 
 export type Db = BunSQLiteDatabase<typeof schema> & { $client: Database };
@@ -174,7 +179,43 @@ export function getRun(db: Db, id: string): RunDetail | null {
   return { run: { ...run, attempt: attempts.length }, artifacts, attempts };
 }
 
-const ARTIFACT_ORDER: ArtifactKind[] = ["evidence", "report", "plan", "decisions", "review", "tests", "log"];
+const ARTIFACT_ORDER: ArtifactKind[] = ["evidence", "policy", "report", "plan", "decisions", "review", "tests", "log"];
+
+/** The Station spans report days and only shows the latest attempt of each task. */
+export function getStation(db: Db): Omit<StationReport, "queue"> {
+  const rows = db
+    .select()
+    .from(schema.runs)
+    .where(sql`${schema.runs.id} IN (
+    SELECT id FROM (
+      SELECT id, row_number() OVER (
+        PARTITION BY coalesce(repo_path, repo), task_id
+        ORDER BY started_at DESC, rowid DESC
+      ) AS rank FROM runs
+    ) WHERE rank = 1
+  )`)
+    .orderBy(desc(schema.runs.startedAt))
+    .all();
+  const tasks = new Map(listTasks(db).map((t) => [t.id, t]));
+  const runs: Run[] = [];
+  // Keep hydration queries below SQLite's parameter limit on long-lived installs.
+  for (let i = 0; i < rows.length; i += 400) runs.push(...hydrate(db, rows.slice(i, i + 400)));
+  const decisions: Run[] = [];
+  const recent: Run[] = [];
+  for (const run of runs) {
+    if (run.status === "running" || run.status === "pending") continue;
+    const task = run.source === "classic" ? undefined : tasks.get(run.taskId);
+    if (task && ["queued", "running", "draft", "later"].includes(task.status)) continue;
+    if (needsDecision(run) && task?.status !== "archived") decisions.push(run);
+    else if (recent.length < 12) recent.push(run);
+  }
+  // Put failures and requests for judgement first; oldest decisions first within each group.
+  const priority = { failed: 0, eyes: 1, ready: 2, back: 3, shipped: 4 };
+  decisions.sort(
+    (a, b) => priority[a.bucket] - priority[b.bucket] || (a.startedAt ?? "").localeCompare(b.startedAt ?? ""),
+  );
+  return { decisions, recent, latestNightId: listNights(db)[0]?.id ?? null };
+}
 
 function hydrate(db: Db, rows: (typeof schema.runs.$inferSelect)[]): Run[] {
   if (rows.length === 0) return [];

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listRepos, listTasks, openDb } from "@nightcrew/db";
@@ -41,6 +41,13 @@ async function nightcrew(cwd: string, ...args: string[]) {
 }
 
 describe("nightcrew add", () => {
+  test("managed mode is coming soon and exits before creating local data", async () => {
+    const result = await nightcrew(root, "--engine", "managed");
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Managed mode is coming soon");
+    expect(existsSync(data)).toBe(false);
+  });
+
   // Value: protects=`nightcrew add` never registers the folder it runs in, refuses with which repos to pick when it can't tell, and queues the drafted task otherwise;
   // fails_when=add falls back to registering cwd as a repo, or picks the first repo when two are known and cwd is neither; why_new=main.ts had no test;
   // seam=none; no_claim=drafting quality (the --demo crew drafts one task offline; spawned CLI against a temp --data folder)

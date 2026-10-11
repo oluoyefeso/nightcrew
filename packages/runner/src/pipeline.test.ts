@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DEFAULT_TASK_POLICY, type Repo } from "@nightcrew/core";
 import { guardToolCall } from "@nightcrew/core/guard";
 import {
   addNote,
@@ -81,6 +82,161 @@ function setupTask(over: Parameters<typeof createTask>[1] extends infer T ? Part
 }
 
 describe("runTask", () => {
+  test("a task-type plan cap forces planning even for a quick task", async () => {
+    const task = setupTask({ workflow: "quick" });
+    updateRepo(db, task.repoId, {
+      level: "train",
+      policies: { implementation: { ...DEFAULT_TASK_POLICY, autonomy: "propose" } },
+    });
+    const engine = new ScriptedEngine({ plan: () => ({ text: "A plan for your review." }) });
+    const out = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(out.status).toBe("complete");
+    expect(engine.calls.map((call) => call.phase)).toEqual(["plan"]);
+    expect(getRun(db, out.runId)?.run.verdict).toBe("needs_eyes");
+    expect(listTrains(db)).toHaveLength(0);
+  });
+
+  const routeCases: {
+    name: string;
+    initial: Partial<Repo>;
+    duringReview?: Partial<Repo>;
+    reason?: string;
+    authority: string;
+  }[] = [
+    {
+      name: "a type cap stops a train repo at a draft",
+      initial: { level: "train", policies: { implementation: { ...DEFAULT_TASK_POLICY, autonomy: "draft_pr" } } },
+      authority: "Draft PR",
+    },
+    {
+      name: "a required command cannot be skipped",
+      initial: {
+        level: "train",
+        testCommand: null,
+        policies: { implementation: { ...DEFAULT_TASK_POLICY, requireTests: true } },
+      },
+      reason: "configured test command",
+      authority: "Daily train",
+    },
+    {
+      name: "new visual requirements hold work after evidence collection",
+      initial: { level: "train" },
+      duringReview: { policies: { implementation: { ...DEFAULT_TASK_POLICY, visual: true } } },
+      reason: "visual evidence",
+      authority: "Daily train",
+    },
+    {
+      name: "a whitespace-only command cannot satisfy required tests",
+      initial: {
+        level: "train",
+        testCommand: "   ",
+        policies: { implementation: { ...DEFAULT_TASK_POLICY, requireTests: true } },
+      },
+      reason: "configured test command",
+      authority: "Daily train",
+    },
+    {
+      name: "a promotion cannot expand an in-flight run",
+      initial: { level: "draft_pr" },
+      duringReview: { level: "train" },
+      authority: "Draft PR",
+    },
+    {
+      name: "a demotion to plan holds the implementation locally",
+      initial: { level: "train" },
+      duringReview: { level: "propose" },
+      reason: "held locally",
+      authority: "Plan → your review",
+    },
+    {
+      name: "always-ask paths hold train tasks too",
+      initial: { level: "train", alwaysAsk: ["src/feature.ts"] },
+      reason: "always wait for you",
+      authority: "Daily train",
+    },
+  ];
+  test.each(routeCases)("$name", async ({ initial, duringReview, reason, authority }) => {
+    const task = setupTask();
+    updateRepo(db, task.repoId, initial);
+    const engine = new ScriptedEngine({
+      implement: (req) => {
+        writeFileSync(join(req.cwd, "src/feature.ts"), "export const feature = true;\n");
+        return { text: "Done." };
+      },
+      review: () => {
+        if (duringReview) updateRepo(db, task.repoId, duringReview);
+        return { structured: READY };
+      },
+    });
+    const out = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(out.status).toBe("complete");
+    const detail = getRun(db, out.runId);
+    expect(detail?.run.trainId).toBeNull();
+    expect(detail?.run.shipSha).toBeNull();
+    expect(listTrains(db)).toHaveLength(0);
+    expect(detail?.artifacts.find((a) => a.kind === "policy")?.content).toContain(authority);
+    if (reason) {
+      expect(out.reason).toContain(reason);
+      expect(detail?.run.verdict).toBe("needs_eyes");
+    } else {
+      expect(out.reason).toBeNull();
+      expect(detail?.run.verdict).toBe("ready");
+    }
+  });
+
+  test("a ship policy hold survives as the reason the Station presents for review", async () => {
+    const task = setupTask();
+    updateRepo(db, task.repoId, {
+      level: "ship",
+      shipBranch: "dev",
+      allowShip: ["src/**"],
+      alwaysAsk: ["src/feature.ts"],
+    });
+    const engine = new ScriptedEngine({
+      implement: (req) => {
+        writeFileSync(join(req.cwd, "src/feature.ts"), "export const feature = true;\n");
+        return { text: "Done." };
+      },
+      review: () => ({ structured: READY }),
+    });
+    const outcome = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(outcome.status).toBe("complete");
+    expect(outcome.reason).toContain("always wait for you: src/feature.ts");
+    expect(getRun(db, outcome.runId)?.run.reason).toBe(outcome.reason);
+    expect(getRun(db, outcome.runId)?.run.shipSha).toBeNull();
+  });
+
+  test.each([false, true])(
+    "regression evidence must still match the reviewed files (review edits: %s)",
+    async (edits) => {
+      const task = setupTask({ type: "bugfix" });
+      updateRepo(db, task.repoId, { level: "train", testCommand: "sh src/feature.test.sh" });
+      const engine = new ScriptedEngine({
+        implement: (req) => {
+          writeFileSync(join(req.cwd, "src/feature.ts"), "export const feature = true;\n");
+          writeFileSync(join(req.cwd, "src/feature.test.sh"), "test -f src/feature.ts\n");
+          return { text: "Done." };
+        },
+        review: (req) => {
+          if (edits) writeFileSync(join(req.cwd, "src/feature.ts"), "export const feature = false;\n");
+          return { structured: READY };
+        },
+      });
+      const out = await runTask(deps(engine), task.id, new AbortController().signal);
+      expect(out.status).toBe("complete");
+      const run = getRun(db, out.runId)?.run;
+      if (edits) {
+        expect(out.reason).toContain("Files changed after evidence collection");
+        expect(run?.trainId).toBeNull();
+        expect(run?.verdict).toBe("needs_eyes");
+      } else {
+        expect(out.reason).toBeNull();
+        expect(run?.trainId).not.toBeNull();
+        expect(run?.verdict).toBe("ready");
+      }
+    },
+  );
+
   test("plans, implements, checks, reviews and commits on the task branch", async () => {
     const task = setupTask();
     const engine = new ScriptedEngine({
@@ -101,7 +257,7 @@ describe("runTask", () => {
     expect(detail?.run.summary).toBe("Added src/feature.ts; checks pass.");
     expect(detail?.run.verdict).toBe("ready");
     expect(detail?.run.additions).toBe(1);
-    expect(detail?.artifacts.map((a) => a.kind).sort()).toEqual(["decisions", "plan", "review", "tests"]);
+    expect(detail?.artifacts.map((a) => a.kind).sort()).toEqual(["decisions", "plan", "policy", "review", "tests"]);
     expect(getTask(db, task.id)?.status).toBe("done");
 
     // The work happened in the task's own clone, outside the repo, and landed in the repo by fetch.
@@ -247,7 +403,7 @@ describe("runTask", () => {
     });
     const out = await runTask(deps(engine), task.id, new AbortController().signal);
     expect(out.status).toBe("complete");
-    expect(getRun(db, out.runId)?.artifacts.map((a) => a.kind)).toEqual(["report"]);
+    expect(getRun(db, out.runId)?.artifacts.map((a) => a.kind)).toEqual(["policy", "report"]);
   });
 
   test("a plan that fails with nothing written builds from the brief, in a fresh session", async () => {

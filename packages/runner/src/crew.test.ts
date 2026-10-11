@@ -2,7 +2,17 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addRepo, createTask, type Db, getTask, openDb, updateRepo, updateSettings } from "@nightcrew/db";
+import {
+  addRepo,
+  createTask,
+  type Db,
+  getTask,
+  openDb,
+  updateRepo,
+  updateSettings,
+  updateTask,
+  upsertRuns,
+} from "@nightcrew/db";
 import { Crew, takeCrewLock } from "./crew";
 import { ScriptedEngine } from "./engine";
 import { git } from "./git";
@@ -47,6 +57,47 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 const crewWith = (engine: ScriptedEngine) => new Crew({ db, engine, dataDir: join(dir, "data"), publish: false });
 
 describe("dispatcher", () => {
+  test("the Station explains dependency failures, schedules, pause, and budget without dispatching", () => {
+    const r = addRepo(db, { name: "example", path: "/example/project", defaultBranch: "main" });
+    const dependency = createTask(db, { repoId: r.id, title: "API change", status: "done" });
+    upsertRuns(db, [
+      {
+        run: {
+          id: "failed-dependency",
+          taskId: dependency.id,
+          title: dependency.title,
+          repo: r.name,
+          nightId: "2026-04-16",
+          sessionId: "test",
+          source: "local",
+          status: "failed",
+        },
+        artifacts: [],
+      },
+    ]);
+    updateTask(db, dependency.id, { lastRunId: "failed-dependency" });
+    const blocked = createTask(db, { repoId: r.id, title: "UI change", status: "queued", dependsOn: [dependency.id] });
+    const scheduled = createTask(db, {
+      repoId: r.id,
+      title: "Tomorrow",
+      status: "queued",
+      runAt: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+    const ready = createTask(db, { repoId: r.id, title: "Ready", status: "queued" });
+    const crew = crewWith(new ScriptedEngine({}));
+    const entry = (id: string) => crew.getQueue().find((t) => t.taskId === id);
+    expect(entry(blocked.id)?.kind).toBe("dependency");
+    expect(entry(blocked.id)?.reason).toContain("API change");
+    expect(entry(scheduled.id)?.kind).toBe("scheduled");
+    expect(entry(ready.id)?.kind).toBe("ready");
+    updateSettings(db, { dispatch: false });
+    expect(entry(ready.id)?.kind).toBe("paused");
+    updateSettings(db, { dispatch: true, dailyTokenBudget: 100_000 });
+    expect(entry(ready.id)?.kind).toBe("budget");
+    expect(crew.getStatus().active).toHaveLength(0);
+    expect(getTask(db, ready.id)?.status).toBe("queued");
+  });
+
   test("a task left running by a crash goes back to the queue when the crew recovers", async () => {
     // Value: protects=recover() requeues tasks orphaned in "running" so a crash never strands work; fails_when=the recovery loop is dropped or touches other statuses; why_new=crash recovery untested; seam=none
     updateSettings(db, { dispatch: false });
@@ -368,10 +419,38 @@ describe("dispatcher", () => {
       },
       review: () => ({ structured: READY }),
     });
-    await crewWith(engine).drain();
+    const crew = crewWith(engine);
+    await crew.drain();
     expect(order).toEqual(["First"]);
     expect(getTask(db, first.id)?.status).toBe("done");
     expect(getTask(db, second.id)?.status).toBe("queued");
+    // Dismissing the failure archives its task; that must not make it successful.
+    updateTask(db, first.id, { status: "archived" });
+    await crew.drain();
+    expect(order).toEqual(["First"]);
+    expect(getTask(db, second.id)?.status).toBe("queued");
+    expect(crew.getQueue().find((t) => t.taskId === second.id)?.kind).toBe("dependency");
+  });
+
+  test("a plan-only task does not release a code task that depends on its implementation", async () => {
+    const a = await repo("a");
+    updateRepo(db, a.id, {
+      policies: { refactor: { autonomy: "propose", requireTests: false, visual: false, regression: false } },
+    });
+    const first = createTask(db, { repoId: a.id, type: "refactor", title: "Plan the refactor", status: "queued" });
+    const second = createTask(db, {
+      repoId: a.id,
+      title: "Build on the refactor",
+      status: "queued",
+      dependsOn: [first.id],
+    });
+    const engine = new ScriptedEngine({ plan: () => ({ text: "A plan for review." }) });
+    const crew = crewWith(engine);
+    await crew.drain();
+    expect(engine.calls.map((call) => call.phase)).toEqual(["plan"]);
+    expect(getTask(db, first.id)?.status).toBe("done");
+    expect(getTask(db, second.id)?.status).toBe("queued");
+    expect(crew.getQueue().find((entry) => entry.taskId === second.id)?.kind).toBe("dependency");
   });
 
   test("in a train repo, a dependency that completed without boarding keeps its dependents waiting", async () => {

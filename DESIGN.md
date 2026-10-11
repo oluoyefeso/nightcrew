@@ -1,6 +1,6 @@
 # NightCrew Design System: "The hour before sunrise"
 
-NightCrew is a control room: you hand work to agents and judge what they bring back, at any hour. The interface should feel calm while agents are busy, and fast when it's time to decide. Blue-black ink with one warm dawn accent. Restraint does the work: one accent colour, one typeface, mono for every number.
+NightCrew is a conductor's station: you set direction and authority, dispatch work, and resolve the decisions agents bring back, at any hour. The interface should feel calm while agents are busy, and fast when it's time to decide. Blue-black ink with one warm dawn accent. Restraint does the work: one accent colour, one typeface, mono for every number.
 
 Railway already owns the violet night sky. NightCrew sits at dawn instead. Never use violet or indigo.
 
@@ -74,3 +74,9 @@ Write from the user's side. The crew "shipped", "needs you", or "stopped because
 ## Numbers
 
 Talk in tokens, never dollars: per run ("98k tokens"), per day ("1.2M of 20M tokens today"), and in budgets. Format with `formatTokens` (950, 98k, 2.3M).
+
+## The Station
+
+The home screen prioritises unresolved decisions across all report days, then active work, integration trains, queued departures, repo authority, and recent outcomes. Daily reports and the Horizon remain in History. A decision explains why it needs a person and what action moves it forward. Queue entries explain their current wait instead of implying every idle task is about to start.
+
+Use railway language when it describes behaviour: Station, Dispatch, Crew, Route, Train, and Departure. Keep task, PR, test, merge, and evidence explicit. The local open-source runner is the primary experience; managed mode is coming soon.

@@ -16,7 +16,7 @@ import {
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
-import { formatTokens, nightIdFor, planQueue, type Task } from "@nightcrew/core";
+import { formatTokens, nightIdFor, planQueue, type QueueEntry, type Task } from "@nightcrew/core";
 import {
   type Db,
   getRepo,
@@ -144,6 +144,50 @@ export class Crew {
     };
   }
 
+  /** Explain queued work using the same dependency checks and budgets as dispatch. */
+  getQueue(): QueueEntry[] {
+    const { db } = this.deps;
+    const settings = getSettings(db);
+    const all = listTasks(db);
+    const byId = new Map(all.map((t) => [t.id, t]));
+    const now = Date.now();
+    const used = tokensOnDay(db, nightIdFor(new Date(now).toISOString())) + this.inFlightBudget();
+    return all
+      .filter((t) => t.status === "queued")
+      .map((task): QueueEntry => {
+        const entry = { taskId: task.id, title: task.title, repoName: task.repoName, runAt: task.runAt };
+        const waiting = task.dependsOn.filter((id) => !byId.has(id) || !this.satisfied(byId.get(id) as Task));
+        if (waiting.length)
+          return {
+            ...entry,
+            kind: "dependency",
+            reason: `Waiting for ${waiting.map((id) => byId.get(id)?.title ?? "a missing dependency").join(", ")}.`,
+          };
+        if (task.runAt && Date.parse(task.runAt) > now)
+          return { ...entry, kind: "scheduled", reason: "Waiting for its scheduled departure." };
+        if (!settings.dispatch)
+          return { ...entry, kind: "paused", reason: "Dispatch is paused. Resume it to start queued work." };
+        if (this.pausedUntil > now)
+          return {
+            ...entry,
+            kind: "backoff",
+            reason: this.message ?? "Waiting for the provider's rate limit to clear.",
+          };
+        if (used + task.tokenBudget > settings.dailyTokenBudget)
+          return {
+            ...entry,
+            kind: "budget",
+            reason: `Needs room for ${formatTokens(task.tokenBudget)} tokens within the daily budget, including running agents' reservations.`,
+          };
+        const inRepo = [...this.running.values()].filter((r) => r.agent.repoId === task.repoId).length;
+        if (inRepo >= settings.maxPerRepo)
+          return { ...entry, kind: "capacity", reason: "Waiting for an agent slot in this repo." };
+        if (this.running.size >= settings.maxAgents)
+          return { ...entry, kind: "capacity", reason: "Waiting for an agent slot across the crew." };
+        return { ...entry, kind: "ready", reason: "Ready for dispatch, in queue order." };
+      });
+  }
+
   /** Start the dispatcher: check for work now and every few seconds. */
   startSchedule() {
     this.timer ??= setInterval(() => void this.pump(), TICK_MS);
@@ -217,18 +261,20 @@ export class Crew {
   }
 
   /**
-   * A dependency counts as met when you archived it, or its latest run
-   * completed and, in a repo that lands work itself (train or ship), its work
+   * A dependency counts as met when its latest run completed and wasn't dismissed.
+   * In a repo that lands work itself (train or ship), its work
    * is still landed (car on, ship not undone) or went to a PR. A failed or
    * timed-out run, or a pulled or undone landing, keeps dependents waiting.
    */
   private satisfied(dep: Task): boolean {
     const { db } = this.deps;
-    if (dep.status === "archived") return true;
-    if (dep.status !== "done" || !dep.lastRunId) return false;
+    if ((dep.status !== "done" && dep.status !== "archived") || !dep.lastRunId) return false;
     const run = getRun(db, dep.lastRunId)?.run;
     if (run?.status !== "complete") return false;
+    if (run.triage === "close" || run.prState === "closed") return false;
     if (dep.type === "research") return true;
+    // Finished runs clear their live phase. A proposal has a plan, but never reaches code checks.
+    if (run.artifactKinds.includes("plan") && !run.artifactKinds.includes("tests")) return false;
     const level = getRepo(db, dep.repoId)?.level;
     if (level !== "train" && level !== "ship") return true;
     if (run.prUrl || (run.shipSha && !run.undoneAt)) return true;

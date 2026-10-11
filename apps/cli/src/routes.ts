@@ -11,6 +11,7 @@ import {
   TASK_TYPES,
   type TaskStatus,
   type TaskType,
+  validatePolicies,
   type Workflow,
 } from "@nightcrew/core";
 import {
@@ -105,8 +106,13 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
       "shipBranch",
       "allowShip",
       "alwaysAsk",
+      "policies",
     ]);
     if (Object.keys(patch).length === 0) return c.json(current);
+    if (patch.policies !== undefined) {
+      const error = validatePolicies(patch.policies);
+      if (error) return c.json({ error }, 400);
+    }
     if (patch.level !== undefined && !Object.keys(AUTONOMY_LABEL).includes(patch.level))
       return c.json({ error: "Pick propose, draft_pr, train or ship." }, 400);
     const next = { ...current, ...patch };
@@ -205,6 +211,15 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
       "workflow",
     ]);
     if (clean.type && !TASK_TYPES.includes(clean.type as TaskType)) return c.json({ error: "Unknown task type." }, 400);
+    if (
+      current.status === "running" &&
+      ((clean.type !== undefined && clean.type !== current.type) ||
+        (clean.repoId !== undefined && clean.repoId !== current.repoId))
+    )
+      return c.json(
+        { error: "Stop the running task before changing its type or repo; its route is already in use." },
+        409,
+      );
     if (clean.status && !STATUSES.includes(clean.status)) return c.json({ error: "Unknown status." }, 400);
     if ((clean.status === "running" || clean.status === "done") && clean.status !== current.status)
       return c.json({ error: "Only the crew marks a task running or done. Queue it instead." }, 400);

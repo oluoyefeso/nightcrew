@@ -1,5 +1,7 @@
 # Evidence
 
+Routes in **Settings → Repos** can add verification requirements by task type. The task preview lists the effective requirements; the run's **Route** tab records what was enforced. Requirements can be added to any code task type, while UI visual evidence and bug-fix regression proof remain mandatory for automatic landing. If the Skeptic changes files after visual or regression evidence was collected, the run waits for review with a request for fresh evidence.
+
 The agent that wrote the code never grades it. NightCrew gathers evidence itself, then a separate reviewer, the Skeptic, tries to show the work isn't done.
 
 ## What gets gathered
@@ -24,6 +26,6 @@ The reviewer gets the diff, the acceptance criteria and a summary of the evidenc
 
 ## Where to see it
 
-In the Inbox, open a task and choose **Evidence**: a checklist, the screenshot gallery (before, after and changes), and the fail-then-pass output. The same summary goes into the PR description, along with the Skeptic's results.
+In the Station, open a task and choose **Evidence**: a checklist, the screenshot gallery (before, after and changes), and the fail-then-pass output. The same summary goes into the PR description, along with the Skeptic's results.
 
 Files live in `~/.nightcrew/runs/<run>/`. Nothing is committed to your repo.

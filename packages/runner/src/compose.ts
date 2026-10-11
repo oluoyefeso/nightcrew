@@ -84,7 +84,7 @@ export async function draftTasks(
       cwd: (repos.find((r) => r.id === input.defaultRepoId) ?? (repos[0] as Repo)).path,
       model: input.model,
       systemPrompt:
-        "You turn a developer's request into well-scoped tasks for an overnight coding crew that works unattended. Split unrelated work into separate tasks; keep one coherent change as one task. Never invent requirements.",
+        "You turn a developer's request into well-scoped tasks for a coding crew that works unattended. Split unrelated work into separate tasks; keep one coherent change as one task. Never invent requirements.",
       prompt: `Repos and their files:\n\n${context}\n\n---\n\nThe request:\n\n${input.text}`,
       guard: { worktree: "/nonexistent", writableDirs: [], scope: [], protectedBranches: [], readOnly: true },
       maxTokens: 200_000,

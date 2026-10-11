@@ -53,9 +53,13 @@ From a terminal: `nightcrew add "…"` (add `--schedule` or `--later`).
 
 **Agents** shows every agent working: phase, last step, elapsed time, and a Stop button. Stop one and its work so far stays on its branch. **Pause dispatch** lets running agents finish but starts nothing new. Turn on desktop or Slack notifications in Settings to hear when an agent finishes or needs you.
 
-## 6. Judge the reports
+## 6. Direct work from the Station
 
-Reports land in the **Inbox** as agents finish. Today's Inbox shows who's still working at the top.
+The **Station** is your home screen. Decisions stay visible across days until you resolve them. Open a decision to inspect evidence, merge, send instructions, retry, or dismiss. Briefs awaiting an answer appear here too.
+
+**Crew at work** shows active agents. **Next departures** explains what queued tasks are waiting for: dependencies, capacity, budget, a schedule, or paused dispatch. **Routes & authority** shows each repo's current autonomy level and links to its settings.
+
+Resolved work appears in **Recent outcomes**. **History** keeps the daily reports and their Horizon timeline.
 
 | Key | Does |
 |---|---|

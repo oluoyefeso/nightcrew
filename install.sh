@@ -21,7 +21,7 @@ esac
 
 asset="nightcrew-$os-$arch"
 url="https://github.com/$REPO/releases/download/$RELEASE_TAG/$asset"
-echo "Downloading $asset…"
+echo "Downloading ${asset}…"
 mkdir -p "$DEST"
 tmp=$(mktemp)
 if ! curl -fSL --progress-bar "$url" -o "$tmp"; then

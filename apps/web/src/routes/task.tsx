@@ -16,6 +16,7 @@ import {
 } from "../api";
 import { DepartureChecks } from "../components/departure-checks";
 import { ChipsEditor, Field, inlineEdit, ListEditor, Select, TextArea, TextInput } from "../components/form";
+import { RecoveryPanel } from "../components/recovery";
 import { TaskRoute } from "../components/task-route";
 import { Button, Pill } from "../components/ui";
 import { fmtDay, fmtTime } from "../lib";
@@ -517,6 +518,7 @@ function TaskEditor({
         <TaskRoute repo={repos.data.find((r) => r.id === t.repoId)!} type={t.type} />
       )}
       {!locked && <DepartureChecks tasks={[t]} />}
+      <RecoveryPanel task={t} />
 
       <section className="grid gap-3">
         <h2 className="font-medium text-[13px] text-muted">Notes and attempts</h2>

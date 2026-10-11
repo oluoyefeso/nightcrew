@@ -731,7 +731,8 @@ describe("dispatcher", () => {
       },
     });
     await crewWith(engine).drain();
-    expect(attempts).toBe(2);
+    expect(attempts).toBe(2); // A failed build has no build checkpoint to reuse.
+    expect(getTask(db, t.id)?.autoRetries).toBe(1);
     expect(getTask(db, t.id)?.status).toBe("done");
   });
 
@@ -775,7 +776,47 @@ describe("dispatcher", () => {
       },
     });
     await crewWith(engine).drain();
-    expect(attempts).toBe(2);
+    expect(attempts).toBe(1); // The retry verifies the saved build without rebuilding.
+    expect(getTask(db, t.id)?.autoRetries).toBe(1);
     expect(getTask(db, t.id)?.status).toBe("done");
+  });
+});
+
+describe("mission dispatch limits", () => {
+  test("priority orders independent missions, while expired deadlines and exhausted budgets hold new starts", async () => {
+    const r = await repo("priorities");
+    updateSettings(db, { maxAgents: 1 });
+    const normal = createMission(db, { title: "Normal", objective: "Normal work" });
+    const urgent = createMission(db, { title: "Urgent", objective: "Urgent work" });
+    const expired = createMission(db, { title: "Expired", objective: "Expired work" });
+    const limited = createMission(db, { title: "Limited", objective: "Limited work" });
+    updateMission(db, urgent.id, { priority: 3 });
+    updateMission(db, expired.id, { deadline: "2000-01-01T00:00:00Z" });
+    updateMission(db, limited.id, { tokenBudget: 50000 });
+    for (const mission of [normal, urgent, expired, limited])
+      createTask(db, {
+        repoId: r.id,
+        title: mission.title,
+        missionId: mission.id,
+        status: "queued",
+        scope: ["src/**"],
+      });
+    const log = { concurrent: 0, peak: 0, order: [] as string[] };
+    const crew = crewWith(slowEngine(1, log));
+    expect(crew.getQueue().find((e) => e.title === "Expired")?.reason).toContain("deadline");
+    expect(crew.getQueue().find((e) => e.title === "Limited")?.reason).toContain("Mission budget");
+    await crew.drain();
+    expect(log.order).toEqual(["Urgent", "Normal"]);
+  });
+
+  test("restarting the dispatcher cannot reset the crash retry limit", async () => {
+    const r = await repo("recover");
+    const task = createTask(db, { repoId: r.id, title: "Orphan", status: "running" });
+    for (let i = 0; i < 3; i++) {
+      updateTask(db, task.id, { status: "running" });
+      crewWith(new ScriptedEngine({})).recover();
+    }
+    expect(getTask(db, task.id)?.status).toBe("done");
+    expect(getTask(db, task.id)?.autoRetries).toBe(3);
   });
 });

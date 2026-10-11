@@ -23,7 +23,7 @@ test("existing tasks migrate unassigned and mission membership and pause survive
     const repo = addRepo(db, { name: "Demo", path: "/demo", defaultBranch: "main" });
     const task = createTask(db, { repoId: repo.id, title: "Existing work", status: "later" });
     db.$client.exec(
-      "DROP INDEX tasks_mission_idx; ALTER TABLE tasks DROP COLUMN mission_id; DROP TABLE missions; DELETE FROM __migrations WHERE name = '0007_missions'",
+      "DROP INDEX runs_mission_idx; DROP TABLE mission_acceptances; DROP TABLE checkpoints; DROP TABLE deliveries; DROP TABLE audit; DROP TABLE policy_templates; ALTER TABLE runs DROP COLUMN mission_id; ALTER TABLE repos DROP COLUMN delivery; ALTER TABLE tasks DROP COLUMN recovery_mode; ALTER TABLE tasks DROP COLUMN auto_retries; DELETE FROM __migrations WHERE name = '0008_conductor_operations'; DROP INDEX tasks_mission_idx; ALTER TABLE tasks DROP COLUMN mission_id; DROP TABLE missions; DELETE FROM __migrations WHERE name = '0007_missions'",
     );
     db.$client.close();
     db = openDb(join(dir, "crew.db"));
@@ -88,6 +88,35 @@ test("mission totals include retries, exclude classic imports and keep failed wo
     expect(listMissions(db)[0]?.counts).toMatchObject({ needsYou: 0, resolved: 1 });
     updateTask(db, queued.id, { missionId: null });
     expect(listMissions(db)[0]?.taskCaps).toBe(0);
+  } finally {
+    db.$client.close();
+  }
+});
+
+test("spent tokens stay charged to their dispatch mission after membership changes and task deletion", () => {
+  const db = openDb(":memory:");
+  try {
+    const repo = addRepo(db, { name: "Demo", path: "/demo/ledger", defaultBranch: "main" });
+    const mission = createMission(db, { title: "Ledger", objective: "Keep an accurate budget." });
+    const task = createTask(db, { repoId: repo.id, title: "Spend", missionId: mission.id });
+    const run = {
+      id: "ledger_run",
+      sessionId: "ledger_session",
+      nightId: "2026-10-11",
+      taskId: task.id,
+      title: task.title,
+      repo: repo.name,
+      status: "failed",
+      source: "local",
+      tokensIn: 200,
+      tokensOut: 50,
+    };
+    upsertRuns(db, [{ run: { ...run }, artifacts: [] }]);
+    updateTask(db, task.id, { missionId: null });
+    upsertRuns(db, [{ run: { ...run, tokensOut: 100 }, artifacts: [] }]);
+    expect(listMissions(db)[0]?.tokensUsed).toBe(300);
+    db.$client.query("DELETE FROM tasks WHERE id = ?").run(task.id);
+    expect(listMissions(db)[0]?.tokensUsed).toBe(300);
   } finally {
     db.$client.close();
   }

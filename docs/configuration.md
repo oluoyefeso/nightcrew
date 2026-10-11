@@ -78,3 +78,7 @@ nightcrew import              Import 0.x (classic) history
 --no-publish   Keep branches local: don't push or open PRs
 --port, --no-open, --data, --classic, --offline
 ```
+
+## Conductor operations
+
+Mission token limits, priority, start deadlines, acceptance, reusable verification templates, and delivery commands are documented in [Conductor operations](operations.md). Delivery is manual until a repository explicitly grants automatic stage authority. Managed mode remains Coming soon.

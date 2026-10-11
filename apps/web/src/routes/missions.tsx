@@ -5,6 +5,7 @@ import { ArrowLeft, Flag, Pause, Play, Plus } from "lucide-react";
 import { useState } from "react";
 import { api, missionQuery, missionsQuery, tasksQuery, useInvalidateTasks } from "../api";
 import { Field, Select, TextArea, TextInput } from "../components/form";
+import { MissionAcceptancePanel } from "../components/mission-acceptance";
 import { Button } from "../components/ui";
 
 export function MissionCard({ mission }: { mission: MissionSummary }) {
@@ -174,6 +175,11 @@ export function MissionPage({ missionId }: { missionId: string }) {
           </Button>
         </div>
         <p className="whitespace-pre-wrap text-[15px] text-muted leading-relaxed">{mission.objective}</p>
+        <p className="text-[13px] text-muted">
+          Priority: {["Normal", "Raised", "High", "Urgent"][mission.priority]} · Token limit:{" "}
+          {mission.tokenBudget === null ? "Daily budget only" : formatTokens(mission.tokenBudget)}
+          {mission.deadline ? ` · New starts before ${new Date(mission.deadline).toLocaleString()}` : ""}
+        </p>
         <p className="text-[12.5px] text-muted">
           {mission.paused
             ? "New starts are paused. Agents already working finish their current run."
@@ -325,6 +331,7 @@ export function MissionPage({ missionId }: { missionId: string }) {
           </p>
         )}
       </section>
+      <MissionAcceptancePanel key={`${mission.id}:${JSON.stringify(mission.criteria)}`} mission={mission} />
       {!tasks.length && (
         <div>
           <Button variant="ghost" onClick={() => remove.mutate()} disabled={remove.isPending}>
@@ -344,8 +351,23 @@ export function MissionPage({ missionId }: { missionId: string }) {
 function MissionEditor({ mission, onSaved }: { mission: Mission; onSaved: () => void }) {
   const [title, setTitle] = useState(mission.title);
   const [objective, setObjective] = useState(mission.objective);
+  const [criteria, setCriteria] = useState(mission.criteria.join("\n"));
+  const [budget, setBudget] = useState(mission.tokenBudget?.toString() ?? "");
+  const [priority, setPriority] = useState(mission.priority);
+  const [deadline, setDeadline] = useState(mission.deadline ?? "");
   const save = useMutation({
-    mutationFn: () => api.patch(`/api/missions/${mission.id}`, { title, objective }),
+    mutationFn: () =>
+      api.patch(`/api/missions/${mission.id}`, {
+        title,
+        objective,
+        criteria: criteria
+          .split("\n")
+          .map((c) => c.trim())
+          .filter(Boolean),
+        tokenBudget: budget ? Number(budget) : null,
+        priority,
+        deadline: deadline || null,
+      }),
     onSuccess: onSaved,
   });
   return (
@@ -373,6 +395,45 @@ function MissionEditor({ mission, onSaved }: { mission: Mission; onSaved: () => 
           required
           maxLength={10000}
           rows={4}
+        />
+      </Field>
+      <Field label="Mission acceptance criteria (one per line)" htmlFor="mission-criteria">
+        <TextArea id="mission-criteria" rows={4} value={criteria} onChange={(e) => setCriteria(e.target.value)} />
+      </Field>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field
+          label="Mission token limit"
+          htmlFor="mission-budget"
+          hint="Blank means no separate limit. Includes all attempts charged to this mission."
+        >
+          <TextInput
+            id="mission-budget"
+            type="number"
+            min={50000}
+            step={1000}
+            value={budget}
+            onChange={(e) => setBudget(e.target.value)}
+          />
+        </Field>
+        <Field label="Dispatch priority" htmlFor="mission-priority">
+          <Select id="mission-priority" value={priority} onChange={(e) => setPriority(Number(e.target.value))}>
+            <option value={0}>Normal</option>
+            <option value={1}>Raised</option>
+            <option value={2}>High</option>
+            <option value={3}>Urgent</option>
+          </Select>
+        </Field>
+      </div>
+      <Field
+        label="Start deadline (ISO date, optional)"
+        htmlFor="mission-deadline"
+        hint="New starts stop at this time. Active work may finish."
+      >
+        <TextInput
+          id="mission-deadline"
+          value={deadline}
+          placeholder="2027-01-20T18:00:00Z"
+          onChange={(e) => setDeadline(e.target.value)}
         />
       </Field>
       <p className="text-[12px] text-muted">

@@ -13,7 +13,7 @@ import {
 } from "@nightcrew/core";
 
 export interface PromptContext {
-  mission?: Pick<Mission, "title" | "objective"> | null;
+  mission?: (Pick<Mission, "title" | "objective"> & Partial<Pick<Mission, "criteria">>) | null;
   task: Task;
   repo: Repo;
   artifactsDir: string;
@@ -36,7 +36,7 @@ function taskBlock({ task, repo, policy, mission }: PromptContext) {
 ${task.title}
 
 ${task.brief || "(No further detail. Infer the intent from the title and the code.)"}
-${mission ? `\n## Mission\n${mission.title}\n${mission.objective}\n\nThis is shared context. Implement only this task's scope and acceptance criteria; repository rules still apply.\n` : ""}
+${mission ? `\n## Mission\n${mission.title}\n${mission.objective}\nMission acceptance criteria:\n${(mission.criteria ?? []).map((c) => `- ${c}`).join("\n")}\n\nThis is shared context. Implement only this task's scope and acceptance criteria; repository rules still apply.\n` : ""}
 
 ## Acceptance criteria
 ${criteria(task)}

@@ -1,4 +1,4 @@
-import type { TaskPolicies } from "@nightcrew/core";
+import type { DeliveryPolicy, TaskPolicies } from "@nightcrew/core";
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const runs = sqliteTable(
@@ -7,6 +7,7 @@ export const runs = sqliteTable(
     id: text("id").primaryKey(),
     nightId: text("night_id").notNull(),
     sessionId: text("session_id").notNull(),
+    missionId: text("mission_id"),
     taskId: text("task_id").notNull(),
     title: text("title").notNull(),
     repo: text("repo").notNull(),
@@ -42,7 +43,11 @@ export const runs = sqliteTable(
     undoneAt: text("undone_at"),
     trainId: text("train_id"),
   },
-  (t) => [index("runs_night_idx").on(t.nightId), index("runs_task_idx").on(t.taskId)],
+  (t) => [
+    index("runs_night_idx").on(t.nightId),
+    index("runs_task_idx").on(t.taskId),
+    index("runs_mission_idx").on(t.missionId),
+  ],
 );
 
 export const artifacts = sqliteTable(
@@ -94,6 +99,10 @@ export const repos = sqliteTable("repos", {
   allowShip: text("allow_ship", { mode: "json" }).$type<string[]>().notNull().default([]),
   /** Changes touching these always wait for you, whatever the level. */
   alwaysAsk: text("always_ask", { mode: "json" }).$type<string[]>().notNull().default([]),
+  delivery: text("delivery", { mode: "json" })
+    .$type<DeliveryPolicy>()
+    .notNull()
+    .default({ branch: "", check: "", deploy: "", release: "", automatic: "off", environment: [] }),
   policies: text("policies", { mode: "json" }).$type<TaskPolicies>().notNull().default({}),
 });
 
@@ -102,6 +111,10 @@ export const missions = sqliteTable("missions", {
   title: text("title").notNull(),
   objective: text("objective").notNull(),
   paused: integer("paused", { mode: "boolean" }).notNull().default(false),
+  criteria: text("criteria", { mode: "json" }).$type<string[]>().notNull().default([]),
+  tokenBudget: integer("token_budget"),
+  priority: integer("priority").notNull().default(0),
+  deadline: text("deadline"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -110,6 +123,8 @@ export const tasks = sqliteTable(
   "tasks",
   {
     id: text("id").primaryKey(),
+    recoveryMode: text("recovery_mode").notNull().default("auto"),
+    autoRetries: integer("auto_retries").notNull().default(0),
     missionId: text("mission_id").references(() => missions.id, { onDelete: "set null" }),
     repoId: text("repo_id")
       .notNull()
@@ -214,3 +229,61 @@ export const routines = sqliteTable("routines", {
   lastNight: text("last_night"),
   createdAt: text("created_at").notNull(),
 });
+
+export const checkpoints = sqliteTable("checkpoints", {
+  taskId: text("task_id")
+    .primaryKey()
+    .references(() => tasks.id, { onDelete: "cascade" }),
+  runId: text("run_id").notNull(),
+  stage: text("stage").notNull(),
+  fingerprint: text("fingerprint").notNull(),
+  sha: text("sha").notNull(),
+  plan: text("plan"),
+  summary: text("summary"),
+  at: text("at").notNull(),
+});
+export const audit = sqliteTable("audit", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  at: text("at").notNull(),
+  actor: text("actor").notNull(),
+  action: text("action").notNull(),
+  subjectId: text("subject_id").notNull(),
+  detail: text("detail").notNull(),
+});
+export const policyTemplates = sqliteTable("policy_templates", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  policies: text("policies", { mode: "json" }).$type<TaskPolicies>().notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+export const missionAcceptances = sqliteTable("mission_acceptances", {
+  id: text("id").primaryKey(),
+  missionId: text("mission_id")
+    .notNull()
+    .references(() => missions.id, { onDelete: "cascade" }),
+  at: text("at").notNull(),
+  fingerprint: text("fingerprint").notNull(),
+  status: text("status").notNull(),
+  checks: text("checks", { mode: "json" }).$type<import("@nightcrew/core").MissionAcceptance["checks"]>().notNull(),
+  evidence: text("evidence", { mode: "json" })
+    .$type<import("@nightcrew/core").MissionAcceptance["evidence"]>()
+    .notNull(),
+});
+export const deliveries = sqliteTable(
+  "deliveries",
+  {
+    id: text("id").primaryKey(),
+    repoId: text("repo_id")
+      .notNull()
+      .references(() => repos.id, { onDelete: "cascade" }),
+    sha: text("sha").notNull(),
+    branch: text("branch").notNull(),
+    policy: text("policy", { mode: "json" }).$type<DeliveryPolicy>().notNull(),
+    stage: text("stage").notNull(),
+    status: text("status").notNull(),
+    log: text("log").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [index("deliveries_repo_idx").on(t.repoId, t.createdAt)],
+);

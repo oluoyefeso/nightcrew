@@ -4,6 +4,7 @@ import {
   DEFAULT_TASK_POLICY,
   POLICY_TASK_TYPES,
   type PolicyTaskType,
+  type PolicyTemplate,
   policySummary,
   type Repo,
   resolvePolicy,
@@ -11,16 +12,28 @@ import {
   type TaskPolicies,
   type TaskPolicy,
 } from "@nightcrew/core";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Route } from "lucide-react";
 import { useState } from "react";
 import { api, toast } from "../api";
-import { Select } from "./form";
+import { Select, TextInput } from "./form";
 import { Button } from "./ui";
 
 export function PolicyEditor({ repo }: { repo: Repo }) {
   const [rules, setRules] = useState<TaskPolicies>(repo.policies ?? {});
   const qc = useQueryClient();
+  const [templateName, setTemplateName] = useState("");
+  const templates = useQuery({
+    queryKey: ["policy-templates"],
+    queryFn: () => api.get<PolicyTemplate[]>("/api/policy-templates"),
+  });
+  const saveTemplate = useMutation({
+    mutationFn: () => api.post("/api/policy-templates", { name: templateName, policies: rules }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["policy-templates"] });
+      setTemplateName("");
+    },
+  });
   const save = useMutation({
     mutationFn: () => api.patch<Repo>(`/api/repos/${repo.id}`, { policies: rules }),
     onSuccess: () => {
@@ -51,6 +64,47 @@ export function PolicyEditor({ repo }: { repo: Repo }) {
           The repo's autonomy is the ceiling. Each task type can stop earlier and require extra evidence. UI screenshots
           and bug-fix regression proof remain required. Research stays read-only.
         </p>
+        <div className="grid gap-2 rounded-xl bg-surface p-3">
+          <label htmlFor={`template-${repo.id}`} className="text-[12px] text-muted">
+            Reusable verification workflow
+          </label>
+          <Select
+            id={`template-${repo.id}`}
+            value=""
+            onChange={(e) => {
+              const template = templates.data?.find((t) => t.id === e.target.value);
+              if (template) setRules(template.policies);
+            }}
+          >
+            <option value="">Preview a saved template…</option>
+            {templates.data?.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </Select>
+          <p className="text-[12px] text-muted">
+            Loading a template previews its effective routes below. Save task routes to apply it within this
+            repository's authority ceiling.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <TextInput
+              aria-label="New verification template name"
+              value={templateName}
+              maxLength={100}
+              onChange={(e) => setTemplateName(e.target.value)}
+              placeholder="Name this verification workflow"
+            />
+            <Button disabled={!templateName.trim() || saveTemplate.isPending} onClick={() => saveTemplate.mutate()}>
+              Save as template
+            </Button>
+          </div>
+          {saveTemplate.error && (
+            <p role="alert" className="text-bad">
+              {saveTemplate.error.message}
+            </p>
+          )}
+        </div>
         <fieldset disabled={save.isPending} className="grid gap-3 disabled:opacity-60">
           {POLICY_TASK_TYPES.map((type) => {
             const rule = { ...DEFAULT_TASK_POLICY, ...rules[type] };
@@ -110,6 +164,19 @@ export function PolicyEditor({ repo }: { repo: Repo }) {
                     Regression proof
                   </label>
                 </div>
+                <label htmlFor={`reviewers-${repo.id}-${type}`} className="grid gap-1 text-[12px] text-muted">
+                  Independent reviews
+                  <Select
+                    id={`reviewers-${repo.id}-${type}`}
+                    aria-label={`${TASK_TYPE_LABEL[type]} independent reviews`}
+                    value={rule.reviewers ?? 1}
+                    onChange={(e) => change(type, { reviewers: Number(e.target.value) })}
+                  >
+                    <option value={1}>One reviewer</option>
+                    <option value={2}>Two reviewers</option>
+                    <option value={3}>Three reviewers</option>
+                  </Select>
+                </label>
                 <p className="flex items-start gap-2 text-[12px] text-muted">
                   <Route className="mt-0.5 size-3.5 shrink-0 text-dawn" />
                   {policySummary(effective)}

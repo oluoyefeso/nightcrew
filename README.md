@@ -82,9 +82,17 @@ Each repo earns autonomy from its track record:
 
 Group related tasks around an objective, even across repositories. Create a mission from the Station or **Missions**, then draft work for it or attach existing tasks. Agents receive the objective alongside their task; their scope and repository rules still apply. Edit prerequisites on individual tasks to control ordering.
 
-Each mission shows queued and active work, setup holds, questions, decisions and token usage across all attempts of its current tasks. Inspect a task's latest run directly from the mission. Resolved work includes merged, shipped and dismissed tasks; NightCrew does not automatically certify that the objective is achieved.
+Each mission shows queued and active work, setup holds, questions, decisions and token usage charged at dispatch. Moving or deleting tasks does not erase spent tokens. Set mission acceptance criteria, then record evidence and run combined repository checks before accepting the objective. Resolved task counts include dismissed work; dismissed tasks do not satisfy mission acceptance.
 
-**Pause mission** holds new starts while active agents finish, including landing allowed by their repository rules. Resume allows queued tasks to start when the crew's other limits permit. Objective edits apply to future attempts. Mission task caps are not an additional budget or reservation; the daily crew budget still governs dispatch.
+**Pause mission** holds new starts while active agents finish, including landing allowed by their repository rules. Resume allows queued tasks to start when the crew's other limits permit. Objective edits apply to future attempts. An optional mission token limit includes recorded usage and running reservations, alongside the daily budget. Mission priority and start deadlines govern the order and eligibility of new starts.
+
+## Recovery and delivery
+
+Task recovery offers **Resume**, **Verify saved build**, and **Rebuild**. Compatible checkpoints avoid repeating planning or implementation; checks and evidence run again. Verification mode uses read-only agent review and never invokes an agent repair. Automatic retry limits persist across restarts.
+
+Save verification routes as reusable templates, including one to three independent reviewers. The repository autonomy ceiling still applies. **Operations** shows repository setup, recent reliability, action history, and delivery from check to deploy to release. Delivery commands use a pinned local branch commit in an isolated checkout; automatic stages require explicit repository configuration. Failed or interrupted external actions wait for inspection.
+
+See [Conductor operations](docs/operations.md) for configuration, command contracts, recovery, and acceptance limits. Managed mode remains **Coming soon**.
 
 ## Tokens
 

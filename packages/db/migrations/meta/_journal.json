@@ -57,6 +57,13 @@
       "when": 1791754416705,
       "tag": "0007_missions",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1791757303938,
+      "tag": "0008_conductor_operations",
+      "breakpoints": true
     }
   ]
 }

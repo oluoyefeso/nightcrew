@@ -1,5 +1,6 @@
 import type { Mission } from "@nightcrew/core";
 import {
+  auditEvent,
   createMission,
   type Db,
   deleteMission,
@@ -49,13 +50,22 @@ export function mountMissionRoutes(app: Hono, { db, crew }: { db: Db; crew: Crew
     const value: unknown = await c.req.json().catch(() => null);
     const error = validate(value, false);
     if (error) return c.json({ error }, 400);
-    const input = value as Partial<Pick<Mission, "title" | "objective" | "paused">>;
+    const input = value as Partial<
+      Pick<Mission, "title" | "objective" | "paused" | "criteria" | "tokenBudget" | "priority" | "deadline">
+    >;
     const patch = {
+      ...(input.criteria !== undefined ? { criteria: input.criteria } : {}),
+      ...(input.tokenBudget !== undefined ? { tokenBudget: input.tokenBudget } : {}),
+      ...(input.priority !== undefined ? { priority: input.priority } : {}),
+      ...(input.deadline !== undefined
+        ? { deadline: input.deadline ? new Date(input.deadline).toISOString() : null }
+        : {}),
       ...(input.title !== undefined ? { title: input.title.trim() } : {}),
       ...(input.objective !== undefined ? { objective: input.objective.trim() } : {}),
       ...(input.paused !== undefined ? { paused: input.paused } : {}),
     };
     const result = updateMission(db, id, patch);
+    auditEvent(db, "you", "mission.updated", id, Object.keys(patch).join(", "));
     void crew.pump();
     return c.json(result);
   });
@@ -72,7 +82,16 @@ export function mountMissionRoutes(app: Hono, { db, crew }: { db: Db; crew: Crew
 function validate(value: unknown, creating: boolean): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "Provide a mission.";
   const input = value as Record<string, unknown>;
-  if (Object.keys(input).some((key) => !["title", "objective", ...(creating ? [] : ["paused"])].includes(key)))
+  if (
+    Object.keys(input).some(
+      (key) =>
+        ![
+          "title",
+          "objective",
+          ...(creating ? [] : ["paused", "criteria", "tokenBudget", "priority", "deadline"]),
+        ].includes(key),
+    )
+  )
     return "Unknown mission field.";
   for (const field of ["title", "objective"]) {
     if (creating || field in input) {
@@ -82,5 +101,32 @@ function validate(value: unknown, creating: boolean): string | null {
     }
   }
   if ("paused" in input && typeof input.paused !== "boolean") return "Paused must be true or false.";
+  if (
+    "criteria" in input &&
+    (!Array.isArray(input.criteria) ||
+      input.criteria.length > 30 ||
+      input.criteria.some((c) => typeof c !== "string" || !c.trim() || c.length > 1000) ||
+      new Set(input.criteria).size !== input.criteria.length)
+  )
+    return "Use up to 30 distinct acceptance criteria (1,000 characters each).";
+  if (
+    "tokenBudget" in input &&
+    input.tokenBudget !== null &&
+    (!Number.isSafeInteger(input.tokenBudget) || Number(input.tokenBudget) < 50000)
+  )
+    return "Mission budget must be at least 50,000 tokens, or null for no separate limit.";
+  if (
+    "priority" in input &&
+    (!Number.isInteger(input.priority) || Number(input.priority) < 0 || Number(input.priority) > 3)
+  )
+    return "Priority must be between 0 and 3.";
+  if (
+    "deadline" in input &&
+    input.deadline !== null &&
+    (typeof input.deadline !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T/.test(input.deadline) ||
+      Number.isNaN(Date.parse(input.deadline)))
+  )
+    return "Use an ISO start deadline or null.";
   return null;
 }

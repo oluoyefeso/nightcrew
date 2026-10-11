@@ -78,3 +78,9 @@ nightcrew --demo
 ```
 
 The demo crew narrates believable steps and writes a small file inside each task's scope. Nothing is pushed.
+
+## Conducting an objective
+
+Create a Mission, edit its acceptance criteria and limits, then draft work for it. Inspect departure checks and approve the proposed task breakdown. If a run fails, its task's Recovery panel offers Resume, Verify saved build, and Rebuild. After tasks succeed, record criterion evidence and verify the combined result in Mission acceptance.
+
+Open **Operations** from the navigation or command bar for delivery, repository setup, reliability and activity. Configure delivery commands in repository settings before using them. See [Conductor operations](operations.md) for the complete workflow and limits.

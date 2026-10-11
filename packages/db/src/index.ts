@@ -25,10 +25,13 @@ import scheduleMigration from "../migrations/0004_schedule.sql" with { type: "te
 import tokensMigration from "../migrations/0005_tokens.sql" with { type: "text" };
 import policiesMigration from "../migrations/0006_task_policies.sql" with { type: "text" };
 import missionsMigration from "../migrations/0007_missions.sql" with { type: "text" };
+import operationsMigration from "../migrations/0008_conductor_operations.sql" with { type: "text" };
+import { auditEvent } from "./operations";
 import * as schema from "./schema";
 import { listTasks } from "./tasks";
 
 export * from "./missions";
+export * from "./operations";
 export * from "./tasks";
 export * from "./trust";
 export { schema };
@@ -44,6 +47,7 @@ const MIGRATIONS: [name: string, sql: string][] = [
   ["0005_tokens", tokensMigration],
   ["0006_task_policies", policiesMigration],
   ["0007_missions", missionsMigration],
+  ["0008_conductor_operations", operationsMigration],
 ];
 
 export type Db = BunSQLiteDatabase<typeof schema> & { $client: Database };
@@ -88,6 +92,20 @@ export function upsertRuns(
 ) {
   db.transaction((tx) => {
     for (const { run, artifacts, keep } of rows) {
+      if (run.missionId === undefined && run.source === "local") {
+        const existing = tx
+          .select({ missionId: schema.runs.missionId })
+          .from(schema.runs)
+          .where(eq(schema.runs.id, run.id))
+          .get();
+        run.missionId = existing
+          ? existing.missionId
+          : (tx
+              .select({ missionId: schema.tasks.missionId })
+              .from(schema.tasks)
+              .where(eq(schema.tasks.id, run.taskId))
+              .get()?.missionId ?? null);
+      }
       const set: Partial<RunRow> = { ...run, id: undefined };
       for (const k of keep ?? []) delete set[k];
       tx.insert(schema.runs).values(run).onConflictDoUpdate({ target: schema.runs.id, set }).run();
@@ -106,6 +124,7 @@ export function upsertRuns(
 
 export function recordTriage(db: Db, runId: string, action: TriageAction, note: string | null) {
   db.insert(schema.triage).values({ runId, action, note, at: new Date().toISOString() }).run();
+  auditEvent(db, "you", `run.${action}`, runId);
 }
 
 export function listNights(db: Db): Night[] {

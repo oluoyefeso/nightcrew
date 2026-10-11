@@ -19,6 +19,7 @@ import {
 import {
   addNote,
   addRepo,
+  auditEvent,
   createTask,
   type Db,
   deleteTask,
@@ -313,7 +314,11 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
         );
     }
     if (answer && current.question) addNote(db, id, "you", `Q: ${current.question}\nA: ${answer}`);
-    const updated = updateTask(db, id, clean);
+    const updated = updateTask(db, id, {
+      ...clean,
+      ...(clean.status === "queued" && current.status !== "queued" ? { autoRetries: 0 } : {}),
+    });
+    auditEvent(db, "you", "task.updated", id, Object.keys(clean).join(", "));
     void crew.pump();
     return c.json(updated);
   });
@@ -489,6 +494,7 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
       patch[k] = model;
     }
     const next = updateSettings(db, patch);
+    auditEvent(db, "you", "settings.updated", "settings", Object.keys(patch).join(", "));
     void crew.pump();
     return c.json(next);
   });

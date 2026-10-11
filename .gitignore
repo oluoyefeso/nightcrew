@@ -22,3 +22,5 @@ config.yaml
 tasks.yaml
 .gstack/
 apps/cli/src/web-assets.gen.ts
+.vercel
+.env*

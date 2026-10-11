@@ -4,11 +4,13 @@ import {
   type Db,
   getCheckpoint,
   getDelivery,
+  getOperationJob,
   getRepo,
   getRun,
   getTask,
   listAudit,
   listDeliveries,
+  listOperationJobs,
   listRepos,
   listTemplates,
   saveDelivery,
@@ -17,7 +19,16 @@ import {
   updateRepo,
   updateTask,
 } from "@nightcrew/db";
-import { acceptMission, advanceDelivery, type Crew, missionReadiness, stopOperations } from "@nightcrew/runner";
+import {
+  acceptMission,
+  advanceDelivery,
+  type Crew,
+  missionReadiness,
+  startDelivery,
+  startMissionAcceptance,
+  stopOperation,
+  stopOperations,
+} from "@nightcrew/runner";
 import { desc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 
@@ -46,6 +57,7 @@ export function mountOperationsRoutes(app: Hono, deps: { db: Db; crew: Crew; dat
     return c.json({
       audit: listAudit(db),
       deliveries: listDeliveries(db),
+      jobs: listOperationJobs(db),
       reliability: {
         sample: completed.length,
         ready: completed.filter((r) => r.status === "complete" && r.verdict === "ready").length,
@@ -70,6 +82,17 @@ export function mountOperationsRoutes(app: Hono, deps: { db: Db; crew: Crew; dat
     stopOperations(db);
     auditEvent(db, "you", "operations.stop", "operations");
     return c.json({ ok: true });
+  });
+  app.get("/api/operations/:id", (c) => {
+    const job = getOperationJob(db, c.req.param("id"));
+    c.header("cache-control", "no-store");
+    return job ? c.json(job) : c.json({ error: "Operation not found." }, 404);
+  });
+  app.post("/api/operations/:id/stop", (c) => {
+    const id = c.req.param("id");
+    if (!getOperationJob(db, id)) return c.json({ error: "Operation not found." }, 404);
+    if (!stopOperation(db, id)) return c.json({ error: "This operation is no longer running." }, 409);
+    return c.json(getOperationJob(db, id));
   });
   app.post("/api/deliveries/:id/allow-retry", async (c) => {
     const row = getDelivery(db, c.req.param("id"));
@@ -129,6 +152,8 @@ export function mountOperationsRoutes(app: Hono, deps: { db: Db; crew: Crew; dat
     if (!deps.publish && value.stage !== "check")
       return c.json({ error: "Publishing is disabled for this runner." }, 409);
     try {
+      if (c.req.query("background") === "1")
+        return c.json(await startDelivery(db, c.req.param("id"), value.stage, dataDir, value.previousId), 202);
       return c.json(await advanceDelivery(db, c.req.param("id"), value.stage, dataDir, value.previousId));
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : "Delivery failed." }, 409);
@@ -163,6 +188,11 @@ export function mountOperationsRoutes(app: Hono, deps: { db: Db; crew: Crew; dat
     )
       return c.json({ error: "Provide the current snapshot and evidence notes for each criterion." }, 400);
     try {
+      if (c.req.query("background") === "1")
+        return c.json(
+          await startMissionAcceptance(db, c.req.param("id"), value.fingerprint, value.evidence, dataDir),
+          202,
+        );
       return c.json(await acceptMission(db, c.req.param("id"), value.fingerprint, value.evidence, dataDir));
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : "Verification failed." }, 409);

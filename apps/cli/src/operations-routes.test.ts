@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { DEFAULT_DELIVERY, DEFAULT_TASK_POLICY } from "@nightcrew/core";
 import {
   addRepo,
@@ -6,26 +9,34 @@ import {
   createTask,
   type Db,
   getMission,
+  getOperationJob,
   getRepo,
   getTask,
   listAudit,
   openDb,
+  updateRepo,
   updateSettings,
 } from "@nightcrew/db";
 import { Crew, ScriptedEngine } from "@nightcrew/runner";
+import { git } from "../../../packages/runner/src/git";
 import { createApp } from "./server";
 
 let db: Db;
+let dir: string;
 let app: ReturnType<typeof createApp>;
 const token = "operations-fixture-key";
 beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "nc-operation-api-"));
   db = openDb(":memory:");
   updateSettings(db, { dispatch: false });
   const engine = new ScriptedEngine({});
-  const crew = new Crew({ db, engine, dataDir: "/demo/data", publish: false });
-  app = createApp({ db, engine, crew, dataDir: "/demo/data", cwd: "/demo", publish: false, token });
+  const crew = new Crew({ db, engine, dataDir: dir, publish: false });
+  app = createApp({ db, engine, crew, dataDir: dir, cwd: "/demo", publish: false, token });
 });
-afterEach(() => db.$client.close());
+afterEach(() => {
+  db.$client.close();
+  rmSync(dir, { recursive: true, force: true });
+});
 const send = (method: string, path: string, body?: unknown) =>
   app.request(path, {
     method,
@@ -94,4 +105,43 @@ test("audit records changed field names rather than sensitive settings values", 
   const rows = listAudit(db);
   expect(rows.some((row) => row.detail.includes("slackWebhookUrl"))).toBe(true);
   expect(JSON.stringify(rows)).not.toContain(secret);
+});
+
+test("background API returns an authenticated pollable job and stopping it is scoped and durable", async () => {
+  const repoPath = join(dir, "fixture");
+  mkdirSync(repoPath);
+  writeFileSync(join(repoPath, "ready.txt"), "ready");
+  await git(repoPath, "init", "-q", "-b", "main");
+  await git(repoPath, "add", ".");
+  await git(
+    repoPath,
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "-qm",
+    "fixture",
+  );
+  const repo = addRepo(db, { name: "Fixture", path: repoPath, defaultBranch: "main" });
+  updateRepo(db, repo.id, { delivery: { ...DEFAULT_DELIVERY, branch: "main", check: "sleep 30" } });
+  const response = await send("POST", `/api/repos/${repo.id}/deliver?background=1`, { stage: "check" });
+  expect(response.status).toBe(202);
+  const job = (await response.json()) as { id: string };
+  const pollPath = `/api/operations/${job.id}`;
+  expect((await app.request(pollPath)).status).toBe(401);
+  expect((await app.request(`${pollPath}/stop`, { method: "POST" })).status).toBe(401);
+  expect((await send("GET", pollPath)).headers.get("cache-control")).toBe("no-store");
+  const state = (await (await send("GET", "/api/operations")).json()) as { jobs: { id: string }[] };
+  expect(state.jobs.some((j) => j.id === job.id)).toBe(true);
+  expect((await send("DELETE", `/api/repos/${repo.id}`)).status).toBe(409);
+  expect((await send("POST", `/api/repos/${repo.id}/deliver?background=1`, { stage: "check" })).status).toBe(409);
+  expect((await send("POST", `${pollPath}/stop`)).status).toBe(200);
+  for (let i = 0; i < 200 && getOperationJob(db, job.id)?.phase !== "finished"; i++) await Bun.sleep(10);
+  expect(getOperationJob(db, job.id)?.status).toBe("interrupted");
+  expect((await send("POST", `${pollPath}/stop`)).status).toBe(409);
+  expect((await send("GET", "/api/operations/missing")).status).toBe(404);
+  expect((await send("POST", "/api/operations/missing/stop")).status).toBe(404);
+  // Background execution must retain the runner's no-publish ceiling.
+  expect((await send("POST", `/api/repos/${repo.id}/deliver?background=1`, { stage: "deploy" })).status).toBe(409);
 });

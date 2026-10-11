@@ -1,5 +1,12 @@
-import type { AuditEntry, Checkpoint, Delivery, MissionAcceptance, PolicyTemplate } from "@nightcrew/core";
-import { and, desc, eq, lt, sql } from "drizzle-orm";
+import type {
+  AuditEntry,
+  Checkpoint,
+  Delivery,
+  MissionAcceptance,
+  OperationJob,
+  PolicyTemplate,
+} from "@nightcrew/core";
+import { and, desc, eq, inArray, lt, notInArray, sql } from "drizzle-orm";
 import type { Db } from "./index";
 import * as schema from "./schema";
 
@@ -98,4 +105,49 @@ export function deliveriesForCommit(db: Db, repoId: string, sha: string): Delive
     .where(and(eq(schema.deliveries.repoId, repoId), eq(schema.deliveries.sha, sha)))
     .orderBy(desc(schema.deliveries.createdAt))
     .all() as Delivery[];
+}
+
+export function saveOperationJob(db: Db, row: OperationJob) {
+  db.insert(schema.operationJobs).values(row).onConflictDoUpdate({ target: schema.operationJobs.id, set: row }).run();
+}
+export function getOperationJob(db: Db, id: string): OperationJob | null {
+  return (db.select().from(schema.operationJobs).where(eq(schema.operationJobs.id, id)).get() as OperationJob) ?? null;
+}
+export function latestOperationJob(db: Db, kind: OperationJob["kind"], subjectId: string): OperationJob | null {
+  return (
+    (db
+      .select()
+      .from(schema.operationJobs)
+      .where(and(eq(schema.operationJobs.kind, kind), eq(schema.operationJobs.subjectId, subjectId)))
+      .orderBy(desc(schema.operationJobs.createdAt), desc(sql`rowid`))
+      .get() as OperationJob) ?? null
+  );
+}
+export function listOperationJobs(db: Db): OperationJob[] {
+  const active = db
+    .select()
+    .from(schema.operationJobs)
+    .where(inArray(schema.operationJobs.status, ["running", "stopping"]))
+    .orderBy(desc(schema.operationJobs.createdAt))
+    .all();
+  const recent = db
+    .select()
+    .from(schema.operationJobs)
+    .where(notInArray(schema.operationJobs.status, ["running", "stopping"]))
+    .orderBy(desc(schema.operationJobs.createdAt))
+    .limit(30)
+    .all();
+  return [...active, ...recent] as OperationJob[];
+}
+export function recoverOperationJobs(db: Db) {
+  db.update(schema.operationJobs)
+    .set({
+      status: "interrupted",
+      phase: "finished",
+      updatedAt: new Date().toISOString(),
+      detail:
+        "The runner stopped before recording an outcome. Inspect the result before starting again; this action was not replayed.",
+    })
+    .where(inArray(schema.operationJobs.status, ["running", "stopping"]))
+    .run();
 }

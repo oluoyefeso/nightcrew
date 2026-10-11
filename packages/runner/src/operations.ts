@@ -12,29 +12,24 @@ import {
   getRepo,
   getRun,
   getTrain,
+  latestOperationJob,
   listAcceptances,
   listTasks,
   saveAcceptance,
   saveDelivery,
 } from "@nightcrew/db";
 import { git, resolveSha, withRepoLock } from "./git";
+import {
+  type OnOperationStarted,
+  type OperationContext,
+  OperationInputError,
+  operation,
+  startInBackground,
+} from "./operation-progress";
 import { runCheck } from "./sandbox";
 import { taskRef } from "./workspace";
 
-const active = new WeakMap<Db, Set<AbortController>>();
-function operation(db: Db) {
-  const ctrl = new AbortController();
-  let controllers = active.get(db);
-  if (!controllers) {
-    controllers = new Set();
-    active.set(db, controllers);
-  }
-  controllers.add(ctrl);
-  return { signal: ctrl.signal, end: () => controllers.delete(ctrl) };
-}
-export function stopOperations(db: Db) {
-  for (const ctrl of active.get(db) ?? []) ctrl.abort();
-}
+export { stopOperation, stopOperations } from "./operation-progress";
 
 const deliverySnapshot = (repo: Repo | null) =>
   repo ? { ...(repo.delivery ?? DEFAULT_DELIVERY), setupCommand: repo.setupCommand } : null;
@@ -57,47 +52,62 @@ async function checkedCommand(
   dataDir: string,
   env: Record<string, string> = {},
   guard?: () => Promise<boolean>,
-  signal?: AbortSignal,
+  op?: OperationContext,
 ) {
-  return withRepoLock(repo.path, async () => {
-    if (signal?.aborted) return { ok: false, detail: "Stopped before the action." };
-    if (guard && !(await guard()))
-      return { ok: false, detail: "Delivery settings or branch changed before the action. Run verification again." };
-    const dir = join(dataDir, "operations", crypto.randomUUID());
-    mkdirSync(join(dataDir, "operations"), { recursive: true });
-    const add = await git(repo.path, "worktree", "add", "--detach", dir, sha);
-    if (!add.ok) return { ok: false, detail: "Could not prepare the verification checkout." };
-    try {
-      if (repo.setupCommand) {
-        const setup = await runCheck(repo.setupCommand, dir, {
-          timeoutMs: 10 * 60_000,
-          signal,
-          env: Object.fromEntries(Object.keys(env).map((name) => [name, ""])),
-        });
-        if (!setup.ok) return { ok: false, detail: "Repository setup failed. Check the configured setup command." };
-      }
-      if (!(await git(dir, "diff", "--quiet", "HEAD", "--")).ok)
-        return { ok: false, detail: "Setup changed tracked files; configure setup to preserve the pinned commit." };
+  const signal = op?.signal;
+  op?.progress("waiting", repo.id);
+  return withRepoLock(
+    repo.path,
+    async () => {
+      if (signal?.aborted) return { ok: false, detail: "Stopped before the action." };
       if (guard && !(await guard()))
-        return { ok: false, detail: "Delivery settings or branch changed during setup. Run verification again." };
-      const result = await runCheck(command, dir, { timeoutMs: 15 * 60_000, signal, env: { ...env, NC_COMMIT: sha } });
-      const intact = (await resolveSha(dir, "HEAD")) === sha && (await git(dir, "diff", "--quiet", "HEAD", "--")).ok;
-      return {
-        ok: result.ok && intact,
-        detail: redactOperationLog(
-          `${result.stdout}\n${result.stderr}\nExit ${result.code}.${intact ? "" : " Tracked source changed during verification."}`,
-          Object.values(env),
-        ),
-      };
-    } finally {
-      await git(repo.path, "worktree", "remove", "--force", dir);
-    }
-  });
+        return { ok: false, detail: "Delivery settings or branch changed before the action. Run verification again." };
+      op?.progress("preparing", repo.id);
+      const dir = join(dataDir, "operations", crypto.randomUUID());
+      mkdirSync(join(dataDir, "operations"), { recursive: true });
+      const add = await git(repo.path, "worktree", "add", "--detach", dir, sha);
+      if (!add.ok) return { ok: false, detail: "Could not prepare the verification checkout." };
+      try {
+        if (repo.setupCommand) {
+          op?.progress("setup", repo.id);
+          const setup = await runCheck(repo.setupCommand, dir, {
+            timeoutMs: 10 * 60_000,
+            signal,
+            env: Object.fromEntries(Object.keys(env).map((name) => [name, ""])),
+          });
+          if (!setup.ok) return { ok: false, detail: "Repository setup failed. Check the configured setup command." };
+        }
+        if (!(await git(dir, "diff", "--quiet", "HEAD", "--")).ok)
+          return { ok: false, detail: "Setup changed tracked files; configure setup to preserve the pinned commit." };
+        if (guard && !(await guard()))
+          return { ok: false, detail: "Delivery settings or branch changed during setup. Run verification again." };
+        if (signal?.aborted) return { ok: false, detail: "Stopped before the command." };
+        op?.progress("command", repo.id);
+        const result = await runCheck(command, dir, {
+          timeoutMs: 15 * 60_000,
+          signal,
+          env: { ...env, NC_COMMIT: sha },
+        });
+        const intact = (await resolveSha(dir, "HEAD")) === sha && (await git(dir, "diff", "--quiet", "HEAD", "--")).ok;
+        return {
+          ok: result.ok && intact,
+          detail: redactOperationLog(
+            `${result.stdout}\n${result.stderr}\nExit ${result.code}.${intact ? "" : " Tracked source changed during verification."}`,
+            Object.values(env),
+          ),
+        };
+      } finally {
+        op?.progress("finalizing", repo.id);
+        await git(repo.path, "worktree", "remove", "--force", dir);
+      }
+    },
+    signal,
+  );
 }
 
 export async function missionReadiness(db: Db, id: string) {
   const mission = getMission(db, id);
-  if (!mission) throw new Error("Mission not found.");
+  if (!mission) throw new OperationInputError("Mission not found.");
   const tasks = listTasks(db).filter((t) => t.missionId === id);
   const blockers: string[] = [];
   if (!tasks.length) blockers.push("Attach work before accepting this mission.");
@@ -164,6 +174,7 @@ export async function missionReadiness(db: Db, id: string) {
     blockers: [...new Set(blockers)],
     targets,
     latest,
+    operation: latestOperationJob(db, "mission", id),
     accepted: blockers.length === 0 && latest?.status === "passed" && latest.fingerprint === fingerprint,
   };
 }
@@ -175,30 +186,33 @@ export async function acceptMission(
   fingerprint: string,
   evidence: MissionAcceptance["evidence"],
   dataDir: string,
+  onStarted?: OnOperationStarted,
 ) {
   let busy = accepting.get(db);
   if (!busy) {
     busy = new Set();
     accepting.set(db, busy);
   }
-  if (busy.has(id)) throw new Error("This mission is already being verified.");
+  if (busy.has(id)) throw new OperationInputError("This mission is already being verified.");
   busy.add(id);
-  const op = operation(db);
+  const op = operation(db, "mission", id, null, onStarted);
   try {
     const before = await missionReadiness(db, id);
     const mission = getMission(db, id)!;
-    if (before.fingerprint !== fingerprint) throw new Error("Mission evidence changed. Refresh before accepting.");
-    if (before.blockers.length) throw new Error(before.blockers.join(" "));
+    if (before.fingerprint !== fingerprint)
+      throw new OperationInputError("Mission evidence changed. Refresh before accepting.");
+    if (before.blockers.length) throw new OperationInputError(before.blockers.join(" "));
     if (
       evidence.length !== mission.criteria.length ||
       mission.criteria.some((c) => evidence.filter((e) => e.criterion === c && e.evidence.trim()).length !== 1)
     )
-      throw new Error("Provide an evidence note for every mission criterion.");
+      throw new OperationInputError("Provide an evidence note for every mission criterion.");
     const checks: MissionAcceptance["checks"] = [];
     for (const target of before.targets) {
       const repo = getRepo(db, target.repoId)!;
-      const result = await checkedCommand(repo, target.sha, target.command!, dataDir, {}, undefined, op.signal);
+      const result = await checkedCommand(repo, target.sha, target.command!, dataDir, {}, undefined, op);
       checks.push({ repoId: repo.id, sha: target.sha, ...result });
+      if (op.signal.aborted) break;
     }
     const after = await missionReadiness(db, id);
     if (after.fingerprint !== fingerprint)
@@ -213,15 +227,30 @@ export async function acceptMission(
       missionId: id,
       at: new Date().toISOString(),
       fingerprint,
-      status: checks.every((c) => c.ok) && !after.blockers.length ? "passed" : "failed",
+      status: !op.signal.aborted && checks.every((c) => c.ok) && !after.blockers.length ? "passed" : "failed",
       checks,
       evidence,
     };
     saveAcceptance(db, row);
+    op.finish(
+      row.status,
+      row.id,
+      row.status === "passed"
+        ? "Mission accepted. Combined checks passed."
+        : "Mission was not accepted. Review the verification result.",
+    );
     return row;
+  } catch (error) {
+    op.finish(
+      "failed",
+      null,
+      error instanceof OperationInputError
+        ? redactOperationLog(error.message)
+        : "Verification could not complete. Inspect the mission and repository setup before trying again.",
+    );
+    throw error;
   } finally {
     busy.delete(id);
-    op.end();
   }
 }
 
@@ -234,27 +263,28 @@ export async function advanceDelivery(
   dataDir: string,
   previousId?: string,
   automatic = false,
+  onStarted?: OnOperationStarted,
 ): Promise<Delivery> {
   let busy = delivering.get(db);
   if (!busy) {
     busy = new Set();
     delivering.set(db, busy);
   }
-  if (busy.has(repoId)) throw new Error("A delivery action is already running for this repository.");
+  if (busy.has(repoId)) throw new OperationInputError("A delivery action is already running for this repository.");
   busy.add(repoId);
-  const op = operation(db);
+  const op = operation(db, "delivery", repoId, stage, onStarted);
   let record: Delivery | null = null;
   try {
     const repo = getRepo(db, repoId);
-    if (!repo) throw new Error("Repository not found.");
+    if (!repo) throw new OperationInputError("Repository not found.");
     const policy = deliverySnapshot(repo)!;
     const stages = ["check", "deploy", "release"];
     if (automatic && stages.indexOf(stage) > stages.indexOf(policy.automatic))
-      throw new Error("This delivery stage needs your approval.");
+      throw new OperationInputError("This delivery stage needs your approval.");
     if (!policy.branch || !policy[stage]?.trim() || !policy.check.trim())
-      throw new Error("Configure the delivery branch and stage commands first.");
+      throw new OperationInputError("Configure the delivery branch and stage commands first.");
     const sha = await resolveSha(repo.path, `refs/heads/${policy.branch}`);
-    if (!sha) throw new Error("The configured local delivery branch does not exist.");
+    if (!sha) throw new OperationInputError("The configured local delivery branch does not exist.");
     const previous = previousId ? getDelivery(db, previousId) : null;
     if (
       stage !== "check" &&
@@ -265,19 +295,20 @@ export async function advanceDelivery(
         previous.sha !== sha ||
         hash(previous.policy) !== hash(policy))
     )
-      throw new Error("Pass the preceding delivery stage on this commit with these settings first.");
+      throw new OperationInputError("Pass the preceding delivery stage on this commit with these settings first.");
     if (
       stage !== "check" &&
       deliveriesForCommit(db, repoId, sha).some((d) => d.stage === stage && d.status !== "failed")
     )
-      throw new Error(
+      throw new OperationInputError(
         "This stage was already attempted for this commit. Inspect its outcome before starting a new release.",
       );
     const env: Record<string, string> = { NC_STAGE: stage, NC_BRANCH: policy.branch };
     for (const name of policy.environment) env[name] = "";
     if (stage !== "check")
       for (const name of policy.environment) {
-        if (!process.env[name]) throw new Error(`Required environment variable ${name} is not set in the runner.`);
+        if (!process.env[name])
+          throw new OperationInputError(`Required environment variable ${name} is not set in the runner.`);
         env[name] = process.env[name]!;
       }
     const at = new Date().toISOString();
@@ -296,19 +327,28 @@ export async function advanceDelivery(
     saveDelivery(db, record);
     auditEvent(db, automatic ? "crew" : "you", `delivery.${stage}.started`, repoId, record.id);
     // Recheck after waiting for the repository lock, before a command with side effects.
-    const result = await checkedDeliveryCommand(repo, sha, policy, stage, dataDir, env, db, op.signal);
+    const result = await checkedDeliveryCommand(repo, sha, policy, stage, dataDir, env, db, op);
     record.status = op.signal.aborted ? "interrupted" : result.ok ? "passed" : "failed";
     record.log = result.detail;
   } catch (error) {
-    if (!record) throw error;
-    record.status = "failed";
+    if (!record) {
+      op.finish(
+        "failed",
+        null,
+        error instanceof OperationInputError
+          ? redactOperationLog(error.message)
+          : "Delivery could not start. Review the repository settings.",
+      );
+      throw error;
+    }
+    record.status = "interrupted";
     record.log = "Delivery could not complete. Inspect the configured command and external outcome before retrying.";
   } finally {
     busy.delete(repoId);
-    op.end();
   }
   record.updatedAt = new Date().toISOString();
   saveDelivery(db, record);
+  op.finish(record.status, record.id, `Delivery ${stage} ${record.status}. Review the recorded outcome.`);
   auditEvent(db, automatic ? "crew" : "you", `delivery.${stage}.${record.status}`, repoId, record.id);
   return record;
 }
@@ -321,7 +361,7 @@ async function checkedDeliveryCommand(
   dataDir: string,
   env: Record<string, string>,
   db: Db,
-  signal: AbortSignal,
+  op: OperationContext,
 ) {
   // checkedCommand takes the same repo lock; validate inside its callback through the command guard.
   const current = getRepo(db, repo.id);
@@ -339,7 +379,7 @@ async function checkedDeliveryCommand(
     async () =>
       hash(deliverySnapshot(getRepo(db, repo.id))) === hash(policy) &&
       (await resolveSha(repo.path, `refs/heads/${policy.branch}`)) === sha,
-    signal,
+    op,
   );
   if (!result.ok) return result;
   if (
@@ -366,4 +406,17 @@ export async function automaticDelivery(db: Db, repoId: string, dataDir: string)
   if (!next || stages.indexOf(next) > stages.indexOf(policy.automatic as Delivery["stage"])) return;
   const previous = history.find((d) => d.stage === stages[stages.indexOf(next) - 1]);
   await advanceDelivery(db, repoId, next, dataDir, previous?.id, true);
+}
+
+export function startMissionAcceptance(
+  db: Db,
+  id: string,
+  fingerprint: string,
+  evidence: MissionAcceptance["evidence"],
+  dataDir: string,
+) {
+  return startInBackground((started) => acceptMission(db, id, fingerprint, evidence, dataDir, started));
+}
+export function startDelivery(db: Db, repoId: string, stage: Delivery["stage"], dataDir: string, previousId?: string) {
+  return startInBackground((started) => advanceDelivery(db, repoId, stage, dataDir, previousId, false, started));
 }

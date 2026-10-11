@@ -2,6 +2,16 @@
 
 These features run locally in the open-source edition. Managed mode remains **Coming soon**.
 
+## Live operation progress
+
+Mission acceptance and delivery start as background operations owned by your local runner. You can navigate away, reload, or close the browser while the runner keeps working. **Operations** shows all active jobs and the latest 30 finished jobs, with the three most recent shown initially. The mission page also shows its latest verification operation.
+
+Progress distinguishes requirement checks, waiting for repository access, checkout preparation, repository setup, command execution and cleanup. Elapsed time includes waiting and cleanup. Command output is available in the completed verification/delivery result; progress is not a live terminal stream.
+
+**Stop this operation** cancels only that operation, including a wait for repository access. Other operations and agents continue. **Stop running verification and delivery** still stops all operations. A stop cannot undo external side effects already performed. On a runner restart, unfinished operations become **Interrupted** and are never automatically replayed. Inspect any deployment outcome before allowing a manual retry.
+
+For local integrations, authenticated `POST /api/repos/:id/deliver?background=1` and `POST /api/missions/:id/acceptance?background=1` return HTTP 202 with a saved operation ID. Poll `GET /api/operations/:id`, or request `POST /api/operations/:id/stop`. A 202 response acknowledges the job, not successful validation or completion: inspect its terminal status and `resultId`. Requests without `background=1` retain the synchronous result response. Existing launch-key, origin and publishing restrictions apply to both modes.
+
 ## Recovery
 
 Open a task's Recovery panel:

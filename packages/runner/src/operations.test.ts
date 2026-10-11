@@ -9,8 +9,10 @@ import {
   createTask,
   type Db,
   getDelivery,
+  getOperationJob,
   getTask,
   listDeliveries,
+  listOperationJobs,
   openDb,
   recoverDeliveries,
   saveDelivery,
@@ -26,6 +28,9 @@ import {
   automaticDelivery,
   missionReadiness,
   redactOperationLog,
+  startDelivery,
+  startMissionAcceptance,
+  stopOperation,
   stopOperations,
 } from "./operations";
 import { taskRef } from "./workspace";
@@ -234,4 +239,102 @@ test("delivery verification binds setup and successful actions remain protected 
   for (let i = 0; i < 105; i++)
     saveDelivery(db, { ...deployed, id: `history_${i}`, sha: "other", createdAt: "2099-01-01T00:00:00Z" });
   await expect(advanceDelivery(db, repo.id, "deploy", dir, checked.id)).rejects.toThrow("already attempted");
+});
+
+async function waitForJob(id: string, predicate: (row: NonNullable<ReturnType<typeof getOperationJob>>) => boolean) {
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline) {
+    const row = getOperationJob(db, id)!;
+    if (predicate(row)) return row;
+    await Bun.sleep(10);
+  }
+  throw new Error("Operation did not reach the expected state.");
+}
+
+test("background jobs persist progress, reject duplicate starts and can stop one repository wait without stopping another job", async () => {
+  const { mission } = await readyMission();
+  const before = await missionReadiness(db, mission.id);
+  updateRepo(db, repo.id, { delivery: policy() });
+  // Delivery configuration changes the acceptance target, so take its current snapshot.
+  const fingerprint = (await missionReadiness(db, mission.id)).fingerprint;
+  let release!: () => void;
+  const held = withRepoLock(
+    repo.path,
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
+  await Bun.sleep(10);
+  const delivery = await startDelivery(db, repo.id, "check", dir);
+  const acceptance = await startMissionAcceptance(
+    db,
+    mission.id,
+    fingerprint,
+    [{ criterion: "Feature works", evidence: "Checked the fixture." }],
+    dir,
+  );
+  try {
+    await waitForJob(delivery.id, (j) => j.phase === "waiting");
+    await waitForJob(acceptance.id, (j) => j.phase === "waiting");
+    await expect(startDelivery(db, repo.id, "check", dir)).rejects.toThrow("already running");
+    await expect(startMissionAcceptance(db, mission.id, fingerprint, [], dir)).rejects.toThrow(
+      "already being verified",
+    );
+    expect(stopOperation(db, delivery.id)).toBe(true);
+    const stopped = await waitForJob(delivery.id, (j) => j.status === "interrupted");
+    expect(stopped.resultId).not.toBeNull();
+    expect(getDelivery(db, stopped.resultId!)?.status).toBe("interrupted");
+    expect(getOperationJob(db, acceptance.id)?.status).toBe("running");
+    expect(stopOperation(db, delivery.id)).toBe(false);
+    expect(listOperationJobs(db)).toHaveLength(2);
+  } finally {
+    release();
+    await held;
+  }
+  expect((await waitForJob(acceptance.id, (j) => j.phase === "finished")).status).toBe("passed");
+  expect((await missionReadiness(db, mission.id)).operation?.id).toBe(acceptance.id);
+  expect(before.blockers).toEqual([]);
+});
+
+test("background commands expose their phase, clean up after a stop, and keep scripts and credentials out of progress", async () => {
+  process.env.DEMO_JOB_SECRET = "synthetic-job-credential";
+  try {
+    updateRepo(db, repo.id, { delivery: { ...policy(), check: "sleep 30", environment: ["DEMO_JOB_SECRET"] } });
+    const job = await startDelivery(db, repo.id, "check", dir);
+    await waitForJob(job.id, (j) => j.phase === "command");
+    expect(stopOperation(db, job.id)).toBe(true);
+    expect(getOperationJob(db, job.id)?.status).toBe("stopping");
+    const finished = await waitForJob(job.id, (j) => j.status === "interrupted");
+    expect(finished.phase).toBe("finished");
+    expect((await git(repo.path, "worktree", "list", "--porcelain")).stdout.match(/^worktree /gm)).toHaveLength(1);
+    expect(JSON.stringify(listOperationJobs(db))).not.toContain("sleep 30");
+    expect(JSON.stringify(listOperationJobs(db))).not.toContain(process.env.DEMO_JOB_SECRET);
+  } finally {
+    delete process.env.DEMO_JOB_SECRET;
+  }
+});
+
+test("background validation failures are recorded instead of disappearing with the request", async () => {
+  const job = await startDelivery(db, repo.id, "check", dir);
+  const failed = await waitForJob(job.id, (j) => j.phase === "finished");
+  expect(failed.status).toBe("failed");
+  expect(failed.detail).toContain("Configure the delivery branch");
+  expect(failed.resultId).toBeNull();
+});
+
+test("stopping a research-only acceptance cannot record a pass", async () => {
+  const { mission, task } = await readyMission();
+  updateTask(db, task.id, { type: "research" });
+  const before = await missionReadiness(db, mission.id);
+  const job = await startMissionAcceptance(
+    db,
+    mission.id,
+    before.fingerprint,
+    [{ criterion: "Feature works", evidence: "Reviewed the research." }],
+    dir,
+  );
+  expect(stopOperation(db, job.id)).toBe(true);
+  expect((await waitForJob(job.id, (j) => j.phase === "finished")).status).toBe("interrupted");
+  expect((await missionReadiness(db, mission.id)).accepted).toBe(false);
 });

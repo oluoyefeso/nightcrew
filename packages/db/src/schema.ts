@@ -287,3 +287,21 @@ export const deliveries = sqliteTable(
   },
   (t) => [index("deliveries_repo_idx").on(t.repoId, t.createdAt)],
 );
+
+export const operationJobs = sqliteTable(
+  "operation_jobs",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").notNull(),
+    subjectId: text("subject_id").notNull(),
+    stage: text("stage"),
+    status: text("status").notNull(),
+    phase: text("phase").notNull(),
+    repoId: text("repo_id"),
+    resultId: text("result_id"),
+    detail: text("detail").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [index("operation_jobs_subject_idx").on(t.kind, t.subjectId, t.createdAt)],
+);

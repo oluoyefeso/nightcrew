@@ -236,7 +236,9 @@ export async function acceptMission(
       row.status,
       row.id,
       row.status === "passed"
-        ? "Mission accepted. Combined checks passed."
+        ? before.targets.length
+          ? "Mission accepted. Combined checks passed."
+          : "Mission accepted from your evidence and ready research."
         : "Mission was not accepted. Review the verification result.",
     );
     return row;

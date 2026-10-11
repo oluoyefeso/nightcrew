@@ -10,9 +10,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { clsx } from "clsx";
 import { ArrowLeft, ExternalLink, GitBranch, GitPullRequest, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import Markdown from "react-markdown";
 import { api, runQuery, useTriage } from "../api";
 import { BUCKET_COLOR, durationMs, fmtModel, fmtTime, isTypingTarget } from "../lib";
+import { AgentMarkdown } from "../markdown";
 import { EvidenceView, parseEvidence } from "./evidence";
 import { Button, Chip, Kbd, Pill } from "./ui";
 
@@ -178,7 +178,7 @@ export function RunPane({
               })()
             ) : artifact ? (
               <div className="prose-nc">
-                <Markdown>{artifact.content}</Markdown>
+                <AgentMarkdown>{artifact.content}</AgentMarkdown>
               </div>
             ) : null}
           </div>
@@ -326,7 +326,7 @@ function TriageBar({ run, onToast }: { run: Run; onToast: (msg: string) => void 
 
   const sendBack = () => {
     if (!note.trim()) return;
-    if (onTrain) pull.mutate();
+    // The server takes it off the train first, and refuses if it can't.
     act("send_back", "Sent back. An agent picks it up with your note.", note);
     setComposing(false);
     setNote("");

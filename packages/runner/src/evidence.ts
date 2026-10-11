@@ -9,7 +9,7 @@ import { dirname, extname, isAbsolute, join, normalize } from "node:path";
 import { EVIDENCE_FOR, type Repo, slugify, type Task } from "@nightcrew/core";
 import { matchesAny } from "@nightcrew/core/guard";
 import axeSource from "axe-core/axe.min.js" with { type: "text" };
-import { baseWorktree } from "./git";
+import { baseWorktree, type Exec, lastLine, terminateTree, trackTree } from "./git";
 import { checkEnv, runCheck, sandboxed } from "./sandbox";
 import { cloneChangedFiles } from "./workspace";
 
@@ -36,7 +36,14 @@ export interface Evidence {
   screenshots: Shot[];
   a11y: { before: number | null; after: number; newIssues: A11yIssue[] } | null;
   consoleErrors: string[];
-  testProof: { testFiles: string[]; failsOnBase: boolean | null; passesOnBranch: boolean; log: string } | null;
+  testProof: {
+    testFiles: string[];
+    failsOnBase: boolean | null;
+    passesOnBranch: boolean;
+    log: string;
+    /** Why the base run proves nothing either way (setup failed, the runner couldn't start, timed out). */
+    unavailable?: string;
+  } | null;
   /** What was asked for but couldn't be gathered, in plain words. */
   missing: string[];
   notes: string[];
@@ -89,11 +96,18 @@ export async function gatherEvidence(o: EvidenceOptions): Promise<Evidence> {
   let base: Awaited<ReturnType<typeof baseWorktree>> | null = null;
   try {
     base = await baseWorktree(o.repo.path, o.base ?? o.repo.defaultBranch, `${o.task.id}`);
+    let setupFailed: string | undefined;
     if (o.repo.setupCommand) {
       o.log(`Installing dependencies on ${o.repo.defaultBranch} for comparison`);
-      await runCheck(o.repo.setupCommand, base.dir, { timeoutMs: 10 * 60_000, signal: o.signal, warn: o.log });
+      const setup = await runCheck(o.repo.setupCommand, base.dir, {
+        timeoutMs: 10 * 60_000,
+        signal: o.signal,
+        warn: o.log,
+      });
+      if (!setup.ok)
+        setupFailed = `setup failed on ${o.repo.defaultBranch} (exit ${setup.code}): ${lastLine(setup.stderr) || lastLine(setup.stdout)}`;
     }
-    if (needsProof) ev.testProof = await failThenPass(o, base.dir);
+    if (needsProof) ev.testProof = await failThenPass(o, base.dir, setupFailed);
     if (needsShots) await screenshots(o, base.dir, ev);
   } catch (e) {
     ev.notes.push(`Evidence gathering hit a problem: ${e instanceof Error ? e.message : String(e)}`);
@@ -105,7 +119,10 @@ export async function gatherEvidence(o: EvidenceOptions): Promise<Evidence> {
     if (!ev.testProof || ev.testProof.testFiles.length === 0) ev.missing.push("No new or changed test proves the fix.");
     else if (ev.testProof.failsOnBase === false)
       ev.missing.push("The new test also passes without the fix, so it doesn't prove anything.");
-    else if (ev.testProof.failsOnBase === null) ev.missing.push("Couldn't run the new test against the base branch.");
+    else if (ev.testProof.failsOnBase === null)
+      ev.missing.push(
+        `Couldn't run the new test against the base branch${ev.testProof.unavailable ? `: ${ev.testProof.unavailable}` : "."}`,
+      );
   }
   if (needsShots && ev.screenshots.length === 0) {
     ev.missing.push(
@@ -120,7 +137,26 @@ export async function gatherEvidence(o: EvidenceOptions): Promise<Evidence> {
 
 // ── Fail-then-pass ──────────────────────────────────────────────────────────
 
-async function failThenPass(o: EvidenceOptions, baseDir: string): Promise<Evidence["testProof"]> {
+/**
+ * Why a failed base run isn't a test failure, or null when it is one. Only a
+ * runner that started and exited 1-125 counts: 126/127 (couldn't run), signals
+ * (128+), timeouts and stops are the machinery failing, not the test.
+ */
+export function baseRunUnavailable(r: Exec): string | null {
+  const last = lastLine(r.stderr);
+  if (last === "Timed out." || last === "Stopped.")
+    return `the test command ${last === "Stopped." ? "was stopped" : "timed out"}`;
+  if (r.code === 126 || r.code === 127) return `the test command couldn't start (exit ${r.code})`;
+  if (r.code < 1 || r.code > 125) return `the test command crashed or was killed (exit ${r.code})`;
+  return null;
+}
+
+async function failThenPass(
+  o: EvidenceOptions,
+  baseDir: string,
+  /** Why the base checkout's setup failed, if it did: a run there proves nothing. */
+  setupFailed?: string,
+): Promise<Evidence["testProof"]> {
   const cmd = o.task.testCommand ?? o.repo.testCommand;
   const changed =
     o.files ?? (await cloneChangedFiles(o.worktree, o.base ?? o.repo.defaultBranch, { signal: o.signal, warn: o.log }));
@@ -134,6 +170,15 @@ async function failThenPass(o: EvidenceOptions, baseDir: string): Promise<Eviden
       log: cmd ? "No test files changed." : "No test command.",
     };
 
+  if (setupFailed)
+    return {
+      testFiles,
+      failsOnBase: null,
+      passesOnBranch: o.branchTestsPassed,
+      log: `Not run: ${setupFailed}`,
+      unavailable: setupFailed,
+    };
+
   o.log(`Running the new tests against ${o.repo.defaultBranch}, where they should fail`);
   for (const f of testFiles) {
     const dest = join(baseDir, f);
@@ -142,11 +187,13 @@ async function failThenPass(o: EvidenceOptions, baseDir: string): Promise<Eviden
   }
   const r = await runCheck(cmd, baseDir, { timeoutMs: 15 * 60_000, signal: o.signal, warn: o.log });
   const out = `${r.stdout}\n${r.stderr}`.trim();
+  const unavailable = r.ok ? null : baseRunUnavailable(r);
   return {
     testFiles,
-    failsOnBase: !r.ok,
+    failsOnBase: r.ok ? false : unavailable ? null : true,
     passesOnBranch: o.branchTestsPassed,
     log: `$ ${cmd}  (on ${o.repo.defaultBranch} with the new tests, exit ${r.code})\n${out.slice(-4000)}`,
+    ...(unavailable ? { unavailable } : {}),
   };
 }
 
@@ -163,7 +210,7 @@ interface Preview {
   stop: () => Promise<void>;
 }
 
-async function startPreview(
+export async function startPreview(
   repo: Repo,
   dir: string,
   signal: AbortSignal,
@@ -189,23 +236,30 @@ async function startPreview(
     return { url, stop: async () => server.stop(true) };
   }
 
-  const proc = Bun.spawn(sandboxed(repo.previewCommand, dir, warn, { clone }), {
+  const argv = sandboxed(repo.previewCommand, dir, warn, { clone });
+  const proc = Bun.spawn(argv, {
     cwd: dir,
     env: checkEnv({ PORT: String(port), BROWSER: "none", CI: "1" }),
     stdout: "ignore",
     stderr: "ignore",
+    // The app leads its own process group, so a stop reaches the servers it
+    // starts. The sandboxed argv starts its own session; a plain `sh -c` doesn't.
+    detached: argv[0] === "sh",
   });
+  trackTree(proc);
   // A stop kills the app at once, not after the remaining screenshots.
-  const kill = () => proc.kill();
+  const kill = () => void terminateTree(proc);
   signal.addEventListener("abort", kill, { once: true });
   const stop = async () => {
     signal.removeEventListener("abort", kill);
-    proc.kill();
-    await Promise.race([proc.exited, Bun.sleep(3000)]);
+    await terminateTree(proc);
   };
   const deadline = Date.now() + 120_000;
   while (Date.now() < deadline && !signal.aborted) {
-    if (proc.exitCode !== null) throw new Error(`The preview command exited (${proc.exitCode}) before serving.`);
+    if (proc.exitCode !== null) {
+      await stop();
+      throw new Error(`The preview command exited (${proc.exitCode}) before serving.`);
+    }
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
       if (res.status < 500) return { url, stop };
@@ -389,7 +443,7 @@ export function summarizeEvidence(ev: Evidence): string {
     const p = ev.testProof;
     lines.push(
       p.testFiles.length
-        ? `- Fail-then-pass: new tests (${p.testFiles.join(", ")}) ${p.failsOnBase === true ? "FAIL on the base branch" : p.failsOnBase === false ? "also PASS on the base branch (they don't prove the fix)" : "couldn't be run on the base branch"} and ${p.passesOnBranch ? "pass" : "fail"} on this branch.`
+        ? `- Fail-then-pass: new tests (${p.testFiles.join(", ")}) ${p.failsOnBase === true ? "FAIL on the base branch" : p.failsOnBase === false ? "also PASS on the base branch (they don't prove the fix)" : `couldn't be run on the base branch${p.unavailable ? ` (${p.unavailable})` : ""}`} and ${p.passesOnBranch ? "pass" : "fail"} on this branch.`
         : "- Fail-then-pass: no test files were added or changed.",
     );
   }

@@ -105,6 +105,10 @@ async function branchWorktree(
       if (!r.ok) throw new Error(`Couldn't undo an interrupted landing on ${branch}: ${r.stderr.trim()}`);
       await endLanding(lane, false);
     }
+    // What one landing's tests left behind (build output, caches, stray files)
+    // must not reach the next one. Installed dependencies stay.
+    const clean = await git(dir, "clean", "-ffdxq", ...KEEP.flatMap((k) => ["-e", k]));
+    if (!clean.ok) throw new Error(`Couldn't clean the ${branch} checkout: ${lastLine(clean.stderr)}`);
   } else {
     await git(repo.path, "worktree", "prune");
     const local = (await git(repo.path, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`)).ok;
@@ -140,6 +144,9 @@ async function branchWorktree(
   return { ...lane, start };
 }
 
+/** Dependency folders the integration checkouts keep between landings. */
+const KEEP = ["node_modules", ".venv", "venv", "vendor"];
+
 const identity = ["-c", "user.name=NightCrew", "-c", "user.email=crew@nightcrew.dev"];
 
 /** What the final gate approved: the diff from `base` to the task's sha touches exactly `files`. */
@@ -153,16 +160,66 @@ export interface Approved {
   files: string[];
   /** Checks to run again before the merge stays; a reason to refuse, or null. */
   recheck?: (files: string[]) => string | null;
+  /** This task's earlier landings, from NightCrew's records. Read inside the repo lock, so a Pull or Undo that just finished counts. */
+  earlier?: () => Earlier | Promise<Earlier>;
+}
+
+/** A task's earlier tip that NightCrew landed and then took off again. */
+export interface TakenOff {
+  /** The task's tip that landed. */
+  tip: string;
+  /** The merge commit that landed it, which the Pull or Undo reverted. */
+  merge: string;
+  /** Where it landed. */
+  branch: string;
+}
+
+export interface Earlier {
   /**
    * This task's earlier tips that NightCrew landed on this branch and that are
    * still there by its records (cars on the train, ships not undone). A merge
    * may build on one of them and land only what's new since.
    */
-  landed?: string[];
-  /** This task's earlier tips that were landed here and then taken off (pulled or undone). */
-  takenOff?: string[];
+  landed: string[];
+  /** This task's earlier tips, on any of the repo's trains or ship branches, that were pulled or undone. */
+  takenOff: TakenOff[];
   /** How to start the task over, for when its earlier work was taken off. */
   restart?: string;
+}
+
+/** Does the history at `at` hold NightCrew's revert of `merge` (git revert's own message)? */
+async function holdsRevert(cwd: string, merge: string, at: string): Promise<boolean> {
+  if (!SHA.test(merge)) return false;
+  const r = await git(cwd, "log", "-1", "--format=%H", "-F", `--grep=This reverts commit ${merge}`, at, "--");
+  return r.ok && SHA.test(r.stdout.trim());
+}
+
+/**
+ * The first taken-off tip that one of `heads` builds on (is it or descends
+ * from it). Building on it would land only the work after it, with the
+ * taken-off part left out, so the task has to start fresh. Not when the
+ * default branch at `base` (the gate's base) already holds the revert: then
+ * the task's change is diffed against a base without that work, and what
+ * lands is what the gate saw.
+ */
+export async function buildsOnTakenOff(
+  cwd: string,
+  takenOff: TakenOff[],
+  heads: string[],
+  base: string,
+): Promise<TakenOff | null> {
+  for (const t of takenOff) {
+    if (!SHA.test(t.tip)) continue;
+    let under = false;
+    for (const h of heads) {
+      if (h === t.tip || (await git(cwd, "merge-base", "--is-ancestor", t.tip, h)).ok) {
+        under = true;
+        break;
+      }
+    }
+    if (under && !(await holdsRevert(cwd, t.merge, base))) return t;
+  }
+  return null;
 }
 
 const lines = (out: string) => out.split("\0").filter(Boolean);
@@ -195,14 +252,19 @@ async function mergeInto(
   const mergeBases = bases.ok ? bases.stdout.split("\n").filter(Boolean) : [];
   if (!mergeBases.length)
     return { ok: false, error: `The task's work shares no history with ${lane.branch}, so it wasn't merged.` };
+  // Taken-off work first: a merge base on (or under) a pulled tip passes the
+  // checks below once the revert reached the default branch or a later car of
+  // the task is still on, and the pulled part would never come back.
+  const earlier: Earlier = (await approved.earlier?.()) ?? { landed: [], takenOff: [] };
+  const off = await buildsOnTakenOff(dir, earlier.takenOff, [...mergeBases, ...earlier.landed, sha], approved.base);
+  if (off)
+    return {
+      ok: false,
+      error: `This task's earlier work was taken off ${off.branch} (pulled or undone), so merging again would land only part of it. ${earlier.restart ?? "Start the task fresh and run it again."}`,
+    };
   for (const mb of mergeBases) {
-    if (approved.landed?.includes(mb)) continue;
+    if (earlier.landed.includes(mb)) continue;
     if ((await git(dir, "merge-base", "--is-ancestor", mb, approved.base)).ok) continue;
-    if (approved.takenOff?.includes(mb))
-      return {
-        ok: false,
-        error: `This task's earlier work was taken off ${lane.branch} (pulled or undone), so merging again would land only part of it. ${approved.restart ?? "Start the task fresh and run it again."}`,
-      };
     return {
       ok: false,
       error: `The task's history takes in commits from ${lane.branch} that its checks didn't cover, so it wasn't merged.`,
@@ -395,6 +457,8 @@ async function undoShipUnlocked(
   // branchWorktree brings the branch level with origin, or fails with why.
   const lane = await branchWorktree(repo, shipBranch, { publish, ship: true });
   try {
+    // A second Undo that waited on the lock: say so instead of a failed revert.
+    if (await holdsRevert(lane.dir, sha, "HEAD")) return { ok: false, error: "That ship is already undone." };
     const r = await revertMerge(lane, sha);
     if (!r.ok)
       return { ok: false, error: `Couldn't revert ${sha.slice(0, 7)}: ${r.error || "conflicts with later changes"}` };
@@ -450,7 +514,10 @@ async function boardTrainUnlocked(
 }
 
 /** Push the train and open (or refresh) its one PR. */
-async function publishTrainUnlocked(repo: Repo, train: Train): Promise<{ prUrl: string; prNumber: number } | null> {
+async function publishTrainUnlocked(
+  repo: Repo,
+  train: Train,
+): Promise<{ prUrl: string; prNumber: number; warning?: string } | null> {
   const on = train.cars.filter((c) => c.state === "on");
   if (!on.length) return null;
   const lane = await branchWorktree(repo, train.branch, {
@@ -476,7 +543,7 @@ Made by [NightCrew](https://github.com/oluoyefeso/nightcrew)`;
     title: `Daily train ${train.nightId}: ${on.length} ${on.length === 1 ? "task" : "tasks"}`,
     body,
   });
-  return { prUrl: pr.url, prNumber: pr.number };
+  return { prUrl: pr.url, prNumber: pr.number, warning: pr.warning };
 }
 
 /** Take one task off the train: revert its merge commit. */
@@ -492,6 +559,8 @@ async function pullCarUnlocked(
     createFrom: repo.defaultBranch,
   });
   try {
+    // A second Pull that waited on the lock: say so instead of a failed revert.
+    if (await holdsRevert(lane.dir, mergeSha, "HEAD")) return { ok: false, error: "It's already off the train." };
     const r = await revertMerge(lane, mergeSha);
     if (!r.ok) return { ok: false, error: "That task can't come off cleanly; later tasks build on it." };
     const failed = await publishBranch(lane, publish);

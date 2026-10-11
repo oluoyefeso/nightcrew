@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addRepo, createTask, type Db, getTask, openDb, updateSettings } from "@nightcrew/db";
+import { addRepo, createTask, type Db, getTask, openDb, updateRepo, updateSettings } from "@nightcrew/db";
 import { Crew, takeCrewLock } from "./crew";
 import { ScriptedEngine } from "./engine";
 import { git } from "./git";
@@ -147,6 +147,75 @@ describe("dispatcher", () => {
     if (mine.ok) mine.release();
   });
 
+  /** A stale lock: its pid is a live process that isn't NightCrew (a reused pid). */
+  function staleLock(data: string, pid: number) {
+    mkdirSync(data, { recursive: true });
+    const lockFile = join(data, "crew.lock");
+    writeFileSync(
+      lockFile,
+      JSON.stringify({ pid, startedAt: new Date().toISOString(), nonce: "old", command: "nightcrew dashboard" }),
+    );
+    return lockFile;
+  }
+  const notNightCrew = () => ({ command: "sleep 30", startedAt: null });
+
+  test("two dispatchers taking over one stale lock: exactly one wins", async () => {
+    // Value: protects=two processes that both find the lock stale can't both take it over and dispatch the same queue; fails_when=the takeover isn't guarded by an exclusive takeover file, so a second takeover that starts while the first is between its check and its swap also wins; why_new=Z2; seam=none
+    const other = Bun.spawn(["sleep", "30"]);
+    try {
+      // B starts while A holds the takeover file (A's re-check under it looks at the owner).
+      const data = join(dir, "lock-a");
+      const lockFile = staleLock(data, other.pid);
+      let lookups = 0;
+      let b: ReturnType<typeof takeCrewLock> | null = null;
+      const a = takeCrewLock(data, (pid) => {
+        if (pid === other.pid && ++lookups === 2) b = takeCrewLock(data, notNightCrew);
+        return notNightCrew();
+      });
+      expect(b as ReturnType<typeof takeCrewLock> | null).toEqual({ ok: false, pid: other.pid, file: lockFile });
+      expect(a.ok).toBe(true);
+      expect(existsSync(`${lockFile}.takeover`)).toBe(false);
+      if (a.ok) a.release();
+
+      // B starts and finishes while A is still deciding the lock is stale: B's lock stands.
+      const data2 = join(dir, "lock-b");
+      const lockFile2 = staleLock(data2, other.pid);
+      let first = true;
+      let b2: ReturnType<typeof takeCrewLock> | null = null;
+      const a2 = takeCrewLock(data2, (pid) => {
+        if (pid === other.pid && first) {
+          first = false;
+          b2 = takeCrewLock(data2, notNightCrew);
+        }
+        return notNightCrew();
+      });
+      expect((b2 as ReturnType<typeof takeCrewLock> | null)?.ok).toBe(true);
+      expect(a2.ok).toBe(false);
+      expect(JSON.parse(readFileSync(lockFile2, "utf8")).nonce).not.toBe("old");
+    } finally {
+      other.kill();
+    }
+  });
+
+  test("a takeover file left by a takeover that died is cleared; a fresh one means someone is taking over", async () => {
+    // Value: protects=a crash mid-takeover can't wedge the lock forever, and a takeover in progress isn't trampled; fails_when=the takeover file never goes stale, or is ignored; why_new=Z2; seam=none
+    const other = Bun.spawn(["sleep", "30"]);
+    try {
+      const data = join(dir, "lock-c");
+      const lockFile = staleLock(data, other.pid);
+      writeFileSync(`${lockFile}.takeover`, "someone");
+      expect(takeCrewLock(data, notNightCrew)).toEqual({ ok: false, pid: other.pid, file: lockFile });
+      const old = new Date(Date.now() - 60_000);
+      utimesSync(`${lockFile}.takeover`, old, old);
+      const mine = takeCrewLock(data, notNightCrew);
+      expect(mine.ok).toBe(true);
+      expect(existsSync(`${lockFile}.takeover`)).toBe(false);
+      if (mine.ok) mine.release();
+    } finally {
+      other.kill();
+    }
+  });
+
   test("shutting down puts in-flight work back in the queue and publishes nothing", async () => {
     // Value: protects=Ctrl-C requeues the running task, starts nothing new and never pushes a train on the way out; fails_when=Crew.finished treats a shutdown stop like a finished run (task marked done, retry or publishTrains runs); why_new=the first Ctrl-C used to mark in-flight tasks done and could git push during shutdown; seam=none
     const a = await repo("a");
@@ -277,6 +346,52 @@ describe("dispatcher", () => {
     await crewWith(slowEngine(80, log)).drain();
     expect(log.peak).toBe(1);
     expect(log.order).toEqual(["First", "Second"]);
+  });
+
+  test("a dependency whose last run failed keeps its dependents waiting", async () => {
+    // Value: protects=a prerequisite that failed or timed out (status done) doesn't release the tasks built on it; fails_when=nextRunnable counts status done as met whatever the run's outcome; why_new=Z5; seam=none
+    const a = await repo("a");
+    const first = createTask(db, { repoId: a.id, title: "First", scope: ["src/**"], status: "queued" });
+    const second = createTask(db, {
+      repoId: a.id,
+      title: "Second",
+      scope: ["src/**"],
+      status: "queued",
+      dependsOn: [first.id],
+    });
+    const order: string[] = [];
+    const engine = new ScriptedEngine({
+      // Changes nothing: the run fails.
+      implement: (req) => {
+        order.push(req.prompt.match(/## Task\n(.+)/)?.[1] ?? "?");
+        return { text: "done" };
+      },
+      review: () => ({ structured: READY }),
+    });
+    await crewWith(engine).drain();
+    expect(order).toEqual(["First"]);
+    expect(getTask(db, first.id)?.status).toBe("done");
+    expect(getTask(db, second.id)?.status).toBe("queued");
+  });
+
+  test("in a train repo, a dependency that completed without boarding keeps its dependents waiting", async () => {
+    // Value: protects=at the train level a prerequisite counts only once its work is landed or in a PR, not merely complete; fails_when=a complete run alone releases dependents in a repo that lands its own work; why_new=Z5; seam=none
+    const a = await repo("a");
+    updateRepo(db, a.id, { level: "train" });
+    const first = createTask(db, { repoId: a.id, title: "First", scope: ["src/**"], status: "queued" });
+    createTask(db, { repoId: a.id, title: "Second", scope: ["src/**"], status: "queued", dependsOn: [first.id] });
+    const order: string[] = [];
+    const engine = new ScriptedEngine({
+      implement: (req) => {
+        order.push(req.prompt.match(/## Task\n(.+)/)?.[1] ?? "?");
+        writeFileSync(join(req.cwd, "src", "x.ts"), "export {};\n");
+        return { text: "done" };
+      },
+      // The reviewer wants a person to look: no train, and no PR with publishing off.
+      review: () => ({ structured: { ...READY, verdict: "needs_eyes" } }),
+    });
+    await crewWith(engine).drain();
+    expect(order).toEqual(["First"]);
   });
 
   test("holds work that would pass the daily token budget (tokens used + caps of running agents)", async () => {

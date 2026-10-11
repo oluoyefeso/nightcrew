@@ -1,6 +1,7 @@
 import { clsx } from "clsx";
 import { Check, CircleAlert, X } from "lucide-react";
-import { useState } from "react";
+import { type ImgHTMLAttributes, useEffect, useState } from "react";
+import { authFetch } from "../api";
 
 interface Shot {
   path: string;
@@ -117,7 +118,7 @@ export function EvidenceView({ runId, evidence }: { runId: string; evidence: Evi
                             )}
                           >
                             {src ? (
-                              <img
+                              <RunImage
                                 src={file(src)}
                                 alt={`${path} ${viewport} ${theme} ${view}`}
                                 loading="lazy"
@@ -173,12 +174,12 @@ export function EvidenceView({ runId, evidence }: { runId: string; evidence: Evi
             <div className={clsx("grid gap-3", zoom.before ? "md:grid-cols-2" : "")}>
               {zoom.before && (
                 <figure className="grid gap-1.5">
-                  <img src={file(zoom.before)} alt="Before" className="rounded-lg ring-1 ring-line" />
+                  <RunImage src={file(zoom.before)} alt="Before" className="rounded-lg ring-1 ring-line" />
                   <figcaption className="font-mono text-[11px] text-muted">Before</figcaption>
                 </figure>
               )}
               <figure className="grid gap-1.5">
-                <img src={file(zoom.after)} alt="After" className="rounded-lg ring-1 ring-line" />
+                <RunImage src={file(zoom.after)} alt="After" className="rounded-lg ring-1 ring-line" />
                 <figcaption className="font-mono text-[11px] text-muted">
                   After · {zoom.path} · {zoom.viewport} · {zoom.theme}
                 </figcaption>
@@ -196,6 +197,32 @@ export function EvidenceView({ runId, evidence }: { runId: string; evidence: Evi
       )}
     </div>
   );
+}
+
+/**
+ * A run's screenshot. The API wants the launch key in a header, which an
+ * <img src> can't send, so fetch it and show it from a blob URL.
+ */
+function RunImage({ src, alt, ...rest }: ImgHTMLAttributes<HTMLImageElement> & { src: string; alt: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    let made: string | null = null;
+    setUrl(null);
+    void authFetch(src)
+      .then((r) => (r.ok && r.headers.get("content-type")?.startsWith("image/") ? r.blob() : null))
+      .then((b) => {
+        if (!b || !live) return;
+        made = URL.createObjectURL(b);
+        setUrl(made);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+      if (made) URL.revokeObjectURL(made);
+    };
+  }, [src]);
+  return url ? <img src={url} alt={alt} {...rest} /> : <span role="img" aria-label={alt} className="block size-full" />;
 }
 
 export function evidenceChecks(e: Evidence): { label: string; value: string; ok: boolean | null }[] {

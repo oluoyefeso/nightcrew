@@ -1,23 +1,25 @@
 import { timingSafeEqual } from "node:crypto";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { extname, join, sep } from "node:path";
 import type { TriageAction } from "@nightcrew/core";
 import {
   addNote,
   type Db,
+  getRepo,
   getReport,
   getRun,
   getTask,
+  getTrain,
   listNights,
   recordTriage,
   schema,
+  setCarState,
   updateTask,
 } from "@nightcrew/db";
-import type { AgentEngine, Crew } from "@nightcrew/runner";
+import { type AgentEngine, type Crew, pullCar, taskRef } from "@nightcrew/runner";
 import { eq } from "drizzle-orm";
 import { type Context, Hono } from "hono";
-import { getCookie, setCookie } from "hono/cookie";
 import { mergePr } from "./github";
 import { mountTaskRoutes } from "./routes";
 import { syncClassic } from "./sync";
@@ -35,9 +37,10 @@ export interface ServerOptions {
   dataDir: string;
   publish: boolean;
   /**
-   * The per-launch key from the link `nightcrew` prints. When set, the page
-   * and API answer only a browser that opened that link (or a caller sending
-   * it in X-NightCrew-Token). Unset: no key check (tests, development).
+   * The per-launch key from the link `nightcrew` prints. When set, the API
+   * answers only callers sending it in X-NightCrew-Token: the dashboard reads
+   * it from the link once and keeps it per origin. The page shell itself is
+   * public; it holds no data. Unset: no key check (tests, development).
    */
   token?: string;
 }
@@ -47,26 +50,9 @@ export function createApp(opts: ServerOptions) {
   const app = new Hono();
 
   const { token } = opts;
-  const hasKey = (c: Context) =>
-    token === undefined ||
-    sameSecret(c.req.header(TOKEN_HEADER), token) ||
-    Object.entries(getCookie(c)).some(([name, value]) => name.startsWith(COOKIE) && sameSecret(value, token));
-
-  // Opening the printed link trades ?t= for a cookie and drops it from the address bar.
-  app.use("*", async (c, next) => {
-    if (token === undefined) return next();
-    const url = new URL(c.req.url);
-    if (sameSecret(url.searchParams.get("t") ?? undefined, token)) {
-      setCookie(c, `${COOKIE}_${url.port || "80"}`, token, { path: "/", httpOnly: true, sameSite: "Strict" });
-      url.searchParams.delete("t");
-      return c.redirect(`${url.pathname}${url.search}`, 302);
-    }
-    if (c.req.path.startsWith("/api/")) return next();
-    // The locked page styles itself, but let the dashboard's own files load.
-    if (c.req.path.startsWith("/assets/") || /^\/favicon\.(svg|ico)$/.test(c.req.path) || hasKey(c)) return next();
-    const host = c.req.header("host") ?? url.host;
-    return c.html(lockedPage(isLocalHost(host) ? host : "localhost:3721", await interFont(opts.webDir)), 401);
-  });
+  // The key travels only in a header. A cookie would reach every localhost
+  // port, so any other local server could pick it up and replay it.
+  const hasKey = (c: Context) => token === undefined || sameSecret(c.req.header(TOKEN_HEADER), token);
 
   // The API is for this machine only: refuse DNS-rebound hosts, callers without
   // this launch's key, and cross-site writes.
@@ -123,9 +109,29 @@ export function createApp(opts: ServerOptions) {
 
     if (action === "merge") {
       if (!detail.run.prUrl) return c.json({ error: "This run has no pull request to merge." }, 400);
-      const merged = await mergePr(detail.run.prUrl);
+      // Merge only the commit the crew checked: a branch changed since then is refused by GitHub.
+      // Classic runs predate the gate and have no recorded commit.
+      const sha = detail.run.source === "classic" ? null : await gatedSha(db, id);
+      if (detail.run.source !== "classic" && !sha)
+        return c.json({ error: "Can't find the commit NightCrew checked for this run, so it won't merge it." }, 409);
+      const merged = await mergePr(detail.run.prUrl, sha);
       if (!merged.ok) return c.json({ error: merged.error }, 502);
       db.update(schema.runs).set({ prState: "merged" }).where(eq(schema.runs.id, id)).run();
+    }
+
+    // Sending back a task that's still on its train takes it off first, so the
+    // train never carries work you rejected.
+    if (action === "send_back" && detail.run.trainId && !detail.run.shipSha) {
+      const train = getTrain(db, detail.run.trainId);
+      const car = train?.cars.find((x) => x.runId === id);
+      if (train && car?.state === "on") {
+        const repo = getRepo(db, train.repoId);
+        if (!repo) return c.json({ error: "Repo not found." }, 404);
+        const pulled = await pullCar(repo, train, car.mergeSha, opts.publish);
+        if (!pulled.ok)
+          return c.json({ error: `Couldn't take it off the train, so it wasn't sent back: ${pulled.error}` }, 409);
+        setCarState(db, train.id, id, "pulled");
+      }
     }
     const note = body.note?.trim() || null;
     recordTriage(db, id, action, note);
@@ -162,6 +168,8 @@ export function createApp(opts: ServerOptions) {
       headers: {
         "content-type": asset.type,
         "cache-control": asset.immutable ? "public, max-age=31536000, immutable" : "no-cache",
+        // The launch link carries the key in ?t= until the app strips it; don't pass it on.
+        "referrer-policy": "no-referrer",
       },
     });
   });
@@ -169,65 +177,33 @@ export function createApp(opts: ServerOptions) {
   return app;
 }
 
+/** The commit the crew's final gate accepted for this run's task, read from your repo. */
+async function gatedSha(db: Db, runId: string): Promise<string | null> {
+  const row = db
+    .select({ taskId: schema.runs.taskId, repoPath: schema.runs.repoPath })
+    .from(schema.runs)
+    .where(eq(schema.runs.id, runId))
+    .get();
+  if (!row) return null;
+  const task = getTask(db, row.taskId);
+  const path = (task && getRepo(db, task.repoId)?.path) ?? row.repoPath;
+  if (!path) return null;
+  try {
+    const proc = Bun.spawn(["git", "rev-parse", "--verify", "--quiet", `${taskRef(row.taskId)}^{commit}`], {
+      cwd: path,
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    return code === 0 && /^[0-9a-f]{40,64}$/.test(out.trim()) ? out.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-const COOKIE = "nc_session";
 const TOKEN_HEADER = "x-nightcrew-token";
 const LOCKED = "Open NightCrew from the link it printed in your terminal.";
-/** The dashboard's own Inter (latin, variable), so the locked page matches it. Null before a build. */
-let interUrl: Promise<string | null> | undefined;
-function interFont(webDir?: string): Promise<string | null> {
-  interUrl ??= (async () => {
-    const files = await loadEmbedded();
-    let names = files && Object.keys(files).length ? Object.keys(files) : [];
-    if (!names.length && webDir) {
-      try {
-        names = readdirSync(join(webDir, "assets")).map((f) => `/assets/${f}`);
-      } catch {}
-    }
-    return names.find((f) => /^\/assets\/inter-latin-wght-normal-[\w-]+\.woff2$/.test(f)) ?? null;
-  })();
-  return interUrl;
-}
-
-const NIGHT =
-  "--bg:#0a0e16;--raised:#18202f;--line:rgb(236 232 225/.16);--fg:#ece8e1;--muted:#8b92a3;--dawn:#f2a65a;--horizon:#1a2236;color-scheme:dark";
-const MORNING =
-  "--bg:#f3f5f8;--raised:#eaeef3;--line:rgb(20 26 38/.18);--fg:#141a26;--muted:#5e6676;--dawn:#b65a12;--horizon:#c9d3e2;color-scheme:light";
-
-/** What a browser without this launch's key sees: NightCrew's look, and how to get back in. */
-function lockedPage(host: string, font: string | null): string {
-  const esc = (v: string) => v.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
-  const face = font
-    ? `@font-face{font-family:"Inter Variable";font-style:normal;font-weight:100 900;font-display:swap;src:url(${font}) format("woff2-variations")}`
-    : "";
-  return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark light">
-<title>NightCrew</title>
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<script>try{var t=localStorage.getItem("nc-theme");if(t==="dark"||t==="light")document.documentElement.dataset.theme=t}catch(e){}</script>
-<style>
-${face}
-:root{${NIGHT}}
-@media (prefers-color-scheme:light){:root:not([data-theme="dark"]){${MORNING}}}
-:root[data-theme="light"]{${MORNING}}
-*{box-sizing:border-box}
-body{margin:0;min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:32px 16px;background:var(--bg);color:var(--fg);font:400 16px/1.6 "Inter Variable",Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;letter-spacing:-.011em;-webkit-font-smoothing:antialiased}
-main{width:100%;max-width:34rem}
-.brand{display:flex;align-items:center;gap:10px;margin-bottom:48px;font-weight:500;font-size:15px;letter-spacing:-.02em}
-.brand svg{width:22px;height:22px;flex:none}
-h1{margin:0 0 16px;font-size:clamp(30px,6vw,40px);font-weight:500;line-height:1.12;letter-spacing:-.03em;text-wrap:balance}
-p{margin:0 0 12px;color:var(--muted)}
-code{font-family:ui-monospace,"SF Mono","SFMono-Regular",Menlo,Consolas,monospace;font-size:.86em;letter-spacing:0;color:var(--fg);background:var(--raised);border-radius:6px;padding:2px 6px;display:inline-block;max-width:100%;line-height:1.4;overflow-wrap:anywhere}
-</style></head>
-<body><main>
-<div class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><defs><clipPath id="m"><circle cx="16" cy="16" r="15"/></clipPath></defs><g clip-path="url(#m)"><rect width="32" height="32" fill="var(--horizon)"/><rect y="17" width="32" height="15" fill="var(--dawn)"/></g><circle cx="16" cy="16" r="15" fill="none" stroke="var(--line)"/></svg>NightCrew</div>
-<h1>This dashboard needs its launch link.</h1>
-<p>Each time <code>nightcrew</code> starts it prints a link like <code>http://${esc(host)}/?t=…</code>; open that one.</p>
-<p>Lost it, or restarted? Run <code>nightcrew</code> again and use the new link.</p>
-</main></body></html>
-`;
-}
 
 /** Constant-time compare of a presented key with the real one. */
 function sameSecret(given: string | undefined, secret: string): boolean {

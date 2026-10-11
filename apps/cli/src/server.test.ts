@@ -1,8 +1,29 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addRepo, type Db, getSettings, listTasks, openDb } from "@nightcrew/db";
-import { Crew, ScriptedEngine } from "@nightcrew/runner";
+import type { TrainCar } from "@nightcrew/core";
+import {
+  addCar,
+  addRepo,
+  createTask,
+  createTrain,
+  type Db,
+  getRun,
+  getSettings,
+  getTask,
+  getTrain,
+  listNotes,
+  listTasks,
+  openDb,
+  type RunRow,
+  setRunTrain,
+  updateSettings,
+  updateTask,
+  upsertRuns,
+} from "@nightcrew/db";
+import { Crew, ScriptedEngine, setLandingHome } from "@nightcrew/runner";
+import { mergeArgs } from "./github";
 import { createApp, tildePath } from "./server";
 
 let db: Db;
@@ -119,44 +140,26 @@ describe("per-launch key", () => {
     expect(await error(res)).toBe("Open NightCrew from the link it printed in your terminal.");
     const wrong = await locked.request("/api/crew", { headers: { host, "x-nightcrew-token": "nope" } });
     expect(wrong.status).toBe(401);
-    const wrongCookie = await locked.request("/api/crew", { headers: { host, cookie: "nc_session_3721=nope" } });
-    expect(wrongCookie.status).toBe(401);
   });
 
-  test("the printed link sets the cookie and redirects without the key", async () => {
-    // Value: protects=opening ?t=<key> logs the browser in with an HttpOnly SameSite=Strict cookie and strips the key from the URL; fails_when=the cookie flags change or the redirect keeps ?t; why_new=D10 adds the per-launch key; seam=none
-    const res = await locked.request(`http://${host}/?t=${KEY}&night=n1`);
-    expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/?night=n1");
-    const cookie = res.headers.get("set-cookie") ?? "";
-    expect(cookie).toContain(`nc_session_3721=${KEY}`);
-    expect(cookie).toContain("HttpOnly");
-    expect(cookie).toContain("SameSite=Strict");
-    expect(cookie).toContain("Path=/");
-  });
-
-  test("the cookie or the header opens the API", async () => {
-    // Value: protects=the dashboard (cookie) and scripted callers (X-NightCrew-Token) still get in with the key; fails_when=hasKey stops reading either one; why_new=D10 adds the per-launch key; seam=none
-    const byCookie = await locked.request("/api/crew", {
-      headers: { host, cookie: `other=1; nc_session_3721=${KEY}` },
-    });
-    expect(byCookie.status).toBe(200);
+  test("only the header opens the API: not a cookie, not ?t=", async () => {
+    // Value: protects=the key can't be replayed from a cookie (sent to every localhost port) or a URL; fails_when=hasKey reads cookies or the query string again; why_new=X1, the session cookie leaked to other local servers; seam=none
     const byHeader = await locked.request("/api/crew", { headers: { host, "x-nightcrew-token": KEY } });
     expect(byHeader.status).toBe(200);
+    const byCookie = await locked.request("/api/crew", { headers: { host, cookie: `nc_session_3721=${KEY}` } });
+    expect(byCookie.status).toBe(401);
+    const byQuery = await locked.request(`http://${host}/api/crew?t=${KEY}`);
+    expect(byQuery.status).toBe(401);
   });
 
-  test("a page without the key gets the explainer, its assets still load", async () => {
-    // Value: protects=a stray tab gets a plain explanation (with this dashboard's own address), not the dashboard shell; fails_when=the page gate is dropped, blocks /assets, or echoes an unchecked Host header; why_new=D10 adds the per-launch key, W6 restyled the page and added the host; seam=none
-    const page = await locked.request("/", { headers: { host } });
-    expect(page.status).toBe(401);
-    const html = await page.text();
-    expect(html).toContain("This dashboard needs its launch link.");
-    // The example link names the port this dashboard is on, and a forged Host can't inject markup.
-    expect(html).toContain(`http://${host}/?t=`);
-    const forged = await locked.request("/", { headers: { host: "<script>x</script>" } });
-    expect(await forged.text()).not.toContain("<script>x");
-    const asset = await locked.request("/assets/app.js", { headers: { host } });
-    expect(asset.status).not.toBe(401);
+  test("the page shell loads without the key and never sets a cookie", async () => {
+    // Value: protects=the app shell (no data) loads so it can read ?t= itself, and no cookie or redirect carries the key; fails_when=the server goes back to trading ?t= for a cookie; why_new=X1 moves the key to a header; seam=none
+    for (const path of ["/", `/?t=${KEY}`, "/assets/app.js"]) {
+      const res = await locked.request(`http://${host}${path}`);
+      expect(res.status).not.toBe(401);
+      expect(res.status).not.toBe(302);
+      expect(res.headers.get("set-cookie")).toBeNull();
+    }
   });
 
   test("a write from another localhost port is refused, even body-less", async () => {
@@ -177,6 +180,126 @@ describe("per-launch key", () => {
   test("without a token option the app answers as before", async () => {
     // Value: protects=tests and dev (NIGHTCREW_DEV, --dev) work without a key; fails_when=the token check runs when no token was given; why_new=D10 made the key optional; seam=none
     expect((await app.request("/api/crew", { headers: { host } })).status).toBe(200);
-    expect((await app.request(`/?t=${KEY}`, { headers: { host } })).status).not.toBe(302);
   });
 });
+
+describe("merge pins the checked commit", () => {
+  test("mergeArgs adds --match-head-commit when there is a sha", () => {
+    // Value: protects=GitHub refuses the merge when the PR head moved after the crew's gate; fails_when=the sha is dropped from the gh args; why_new=X4, merges weren't pinned; seam=none
+    expect(mergeArgs("https://github.com/o/r/pull/1", "a".repeat(40))).toEqual([
+      "pr",
+      "merge",
+      "https://github.com/o/r/pull/1",
+      "--squash",
+      "--match-head-commit",
+      "a".repeat(40),
+    ]);
+    expect(mergeArgs("https://github.com/o/r/pull/1", null)).toEqual([
+      "pr",
+      "merge",
+      "https://github.com/o/r/pull/1",
+      "--squash",
+    ]);
+  });
+
+  test("a crew run with no recorded commit isn't merged", async () => {
+    // Value: protects=merge never goes out unpinned for a crew run; fails_when=the triage route merges when the gated sha can't be read; why_new=X4; seam=none
+    const repo = addRepo(db, { name: "acme", path: join(tmpdir(), "nc-no-such-repo"), defaultBranch: "main" });
+    const task = createTask(db, { repoId: repo.id, title: "A" });
+    upsertRuns(db, [{ run: runRow(task.id, { prUrl: "https://github.com/o/r/pull/1", prNumber: 1 }), artifacts: [] }]);
+    const res = await triage("run_a", { action: "merge" });
+    expect(res.status).toBe(409);
+    expect(await error(res)).toContain("commit NightCrew checked");
+    expect(getRun(db, "run_a")?.run.triage).toBeNull();
+  });
+});
+
+describe("send back takes the task off its train", () => {
+  const dirs: string[] = [];
+  beforeEach(() => {
+    const home = mkdtempSync(join(tmpdir(), "nc-server-home-"));
+    dirs.push(home);
+    setLandingHome(home);
+    updateSettings(db, { dispatch: false }); // a requeued task must not start in a test
+  });
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+  const git = (cwd: string, ...args: string[]) => {
+    const p = Bun.spawnSync(["git", "-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd });
+    if (p.exitCode !== 0) throw new Error(p.stderr.toString());
+    return p.stdout.toString().trim();
+  };
+
+  function onTrain(path: string, mergeSha: string) {
+    const repo = addRepo(db, { name: "acme", path, defaultBranch: "main" });
+    const task = createTask(db, { repoId: repo.id, title: "A" });
+    updateTask(db, task.id, { status: "done" });
+    const train = createTrain(db, { repoId: repo.id, nightId: "2026-10-10", branch: "crew/train" });
+    const car: TrainCar = { runId: "run_a", taskId: task.id, title: "A", mergeSha, state: "on" };
+    upsertRuns(db, [{ run: runRow(task.id), artifacts: [] }]);
+    setRunTrain(db, car.runId, train.id);
+    addCar(db, train.id, car);
+    return { task, trainId: train.id, car };
+  }
+
+  test("a car that can't come off refuses the send back", async () => {
+    // Value: protects=a rejected task never stays on the train while also being requeued; fails_when=send_back requeues without pulling, or ignores a failed pull; why_new=X5, send back left the car on; seam=none
+    const dir = mkdtempSync(join(tmpdir(), "nc-sendback-"));
+    dirs.push(dir); // not a git repo, so the pull fails
+    const { task, trainId, car } = onTrain(dir, "c".repeat(40));
+    const res = await triage("run_a", { action: "send_back", note: "try again" });
+    expect(res.status).toBe(409);
+    expect(await error(res)).toContain("wasn't sent back");
+    expect(getTrain(db, trainId)?.cars).toEqual([car]);
+    expect(getTask(db, task.id)?.status).toBe("done");
+    expect(getRun(db, "run_a")?.run.triage).toBeNull();
+  });
+
+  test("a car that comes off is pulled, then the task is requeued with the note", async () => {
+    // Value: protects=send back on a train run reverts it off the train before requeueing; fails_when=the triage route skips pullCar or doesn't mark the car pulled; why_new=X5; seam=none
+    const dir = mkdtempSync(join(tmpdir(), "nc-sendback-"));
+    dirs.push(dir);
+    git(dir, "init", "-q", "-b", "main");
+    writeFileSync(join(dir, "a.txt"), "a\n");
+    git(dir, "add", ".");
+    git(dir, "commit", "-qm", "init");
+    git(dir, "checkout", "-qb", "feature");
+    writeFileSync(join(dir, "b.txt"), "b\n");
+    git(dir, "add", ".");
+    git(dir, "commit", "-qm", "task a");
+    git(dir, "checkout", "-qb", "crew/train", "main");
+    git(dir, "merge", "-q", "--no-ff", "-m", "Merge task a", "feature");
+    const mergeSha = git(dir, "rev-parse", "HEAD");
+    git(dir, "checkout", "-q", "main");
+
+    const { task, trainId, car } = onTrain(dir, mergeSha);
+    const res = await triage("run_a", { action: "send_back", note: "use the helper" });
+    expect(res.status).toBe(200);
+    expect(getTrain(db, trainId)?.cars).toEqual([{ ...car, state: "pulled" }]);
+    expect(getTask(db, task.id)?.status).toBe("queued");
+    expect(listNotes(db, task.id).map((n) => n.body)).toEqual(["use the helper"]);
+    expect(Bun.spawnSync(["git", "cat-file", "-e", "crew/train:b.txt"], { cwd: dir }).exitCode).not.toBe(0);
+  });
+});
+
+function runRow(taskId: string, over: Partial<RunRow> = {}): RunRow {
+  return {
+    id: "run_a",
+    nightId: "2026-10-10",
+    sessionId: "s",
+    taskId,
+    title: "A",
+    repo: "acme",
+    status: "complete",
+    source: "local",
+    ...over,
+  };
+}
+
+const triage = (id: string, body: unknown) =>
+  app.request(`/api/runs/${id}/triage`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });

@@ -1,7 +1,7 @@
 // API for repos, tasks, the composer, the crew and its live event stream.
 
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
+import { extname, join, relative, sep } from "node:path";
 import {
   AUTONOMY_LABEL,
   formatTokens,
@@ -292,15 +292,34 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
     return c.json(crew.getStatus());
   });
 
-  /** Screenshots and other files a run produced. */
+  /**
+   * Screenshots and other files a run produced. The run folder is agent
+   * writable, so nothing here is served as an active type: images as images,
+   * everything else as a plain-text download, and never through a symlink.
+   */
   app.get("/api/runs/:id/files/*", (c) => {
     const id = c.req.param("id");
-    const rel = decodeURIComponent(c.req.path.split(`/api/runs/${id}/files/`)[1] ?? "");
-    if (!/^run_[a-z0-9]+$/.test(id) || !rel || rel.includes("..") || rel.startsWith("/"))
-      return c.json({ error: "Not found." }, 404);
-    const file = join(deps.dataDir, "runs", id, rel);
-    if (!existsSync(file)) return c.json({ error: "Not found." }, 404);
-    return new Response(Bun.file(file), { headers: { "cache-control": "public, max-age=31536000, immutable" } });
+    const notFound = () =>
+      new Response(JSON.stringify({ error: "Not found." }), { status: 404, headers: FILE_HEADERS });
+    let rel: string;
+    try {
+      rel = decodeURIComponent(c.req.path.split(`/api/runs/${id}/files/`)[1] ?? "");
+    } catch {
+      return notFound();
+    }
+    if (!/^run_[a-z0-9]+$/.test(id) || !rel || rel.includes("..") || rel.startsWith("/") || rel.includes("\0"))
+      return notFound();
+    const file = runFile(join(deps.dataDir, "runs", id), rel);
+    if (!file) return notFound();
+    const image = IMAGE_TYPES[extname(file).toLowerCase()];
+    return new Response(Bun.file(file), {
+      headers: {
+        ...FILE_HEADERS,
+        "content-type": image ?? "text/plain; charset=utf-8",
+        ...(image ? {} : { "content-disposition": "attachment" }),
+        "cache-control": "private, max-age=31536000, immutable",
+      },
+    });
   });
 
   app.get("/api/runs/:id/events", (c) => {
@@ -378,6 +397,43 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
     void crew.pump();
     return c.json(next);
   });
+}
+
+/** Every answer from the run files route: never sniffed, never scripted. */
+const FILE_HEADERS = {
+  "content-type": "application/json",
+  "x-content-type-options": "nosniff",
+  "content-security-policy": "sandbox; default-src 'none'",
+};
+const IMAGE_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+};
+
+/**
+ * The regular file at `rel` inside `dir`, or null. Refuses a symlink at any
+ * step of the path, and anything whose real path leaves `dir`.
+ */
+export function runFile(dir: string, rel: string): string | null {
+  try {
+    if (lstatSync(dir).isSymbolicLink()) return null;
+    let at = dir;
+    for (const part of rel.split("/")) {
+      if (!part || part === "." || part === "..") return null;
+      at = join(at, part);
+      if (lstatSync(at).isSymbolicLink()) return null;
+    }
+    if (!lstatSync(at).isFile()) return null;
+    const root = realpathSync(dir);
+    const inside = relative(root, realpathSync(at));
+    if (!inside || inside.startsWith(`..${sep}`) || inside === ".." || inside.startsWith(sep)) return null;
+    return at;
+  } catch {
+    return null;
+  }
 }
 
 function validateTask(db: Db, t: Partial<NewTask>): string | null {

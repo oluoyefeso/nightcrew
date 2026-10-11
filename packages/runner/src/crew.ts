@@ -3,14 +3,27 @@
 // limits and the daily budget); scheduled tasks wait for their time. Each
 // agent reports back when it finishes.
 
-import { closeSync, openSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import {
+  closeSync,
+  linkSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { join } from "node:path";
-import { formatTokens, nightIdFor, planQueue } from "@nightcrew/core";
+import { formatTokens, nightIdFor, planQueue, type Task } from "@nightcrew/core";
 import {
   type Db,
   getRepo,
+  getRun,
   getSettings,
   getTask,
+  getTrain,
   listTasks,
   listTrains,
   type RunEvent,
@@ -195,12 +208,32 @@ export class Crew {
       const t = byId.get(id);
       if (!t || this.running.has(id) || skip.has(id)) continue;
       if (t.runAt && new Date(t.runAt).getTime() > now) continue;
-      // Dependencies must have finished, not just started.
-      if (t.dependsOn.some((d) => byId.get(d) && !["done", "archived"].includes(byId.get(d)?.status ?? ""))) continue;
+      // Dependencies must have finished and succeeded, not just started or stopped.
+      if (t.dependsOn.some((d) => byId.has(d) && !this.satisfied(byId.get(d) as Task))) continue;
       if ((perRepo.get(t.repoId) ?? 0) >= maxPerRepo) continue;
       return t;
     }
     return null;
+  }
+
+  /**
+   * A dependency counts as met when you archived it, or its latest run
+   * completed and, in a repo that lands work itself (train or ship), its work
+   * is still landed (car on, ship not undone) or went to a PR. A failed or
+   * timed-out run, or a pulled or undone landing, keeps dependents waiting.
+   */
+  private satisfied(dep: Task): boolean {
+    const { db } = this.deps;
+    if (dep.status === "archived") return true;
+    if (dep.status !== "done" || !dep.lastRunId) return false;
+    const run = getRun(db, dep.lastRunId)?.run;
+    if (run?.status !== "complete") return false;
+    if (dep.type === "research") return true;
+    const level = getRepo(db, dep.repoId)?.level;
+    if (level !== "train" && level !== "ship") return true;
+    if (run.prUrl || (run.shipSha && !run.undoneAt)) return true;
+    if (!run.trainId) return false;
+    return getTrain(db, run.trainId)?.cars.some((c) => c.runId === run.id && c.state === "on") ?? false;
   }
 
   private inFlightBudget(): number {
@@ -335,6 +368,7 @@ export class Crew {
       try {
         const pr = await publishTrain(repo, train);
         if (pr) updateTrain(this.deps.db, train.id, { status: "published", prUrl: pr.prUrl, prNumber: pr.prNumber });
+        if (pr?.warning) this.message = `${repo.name} train: ${pr.warning}`;
       } catch (e) {
         this.message = `Couldn't publish the ${repo.name} train: ${e instanceof Error ? e.message : String(e)}`;
       }
@@ -440,23 +474,59 @@ export function takeCrewLock(dataDir: string, probe: ProcessProbe = processInfo)
   if (owner && owner.pid !== process.pid && ownsLock(owner, self ? probe : null))
     return { ok: false, pid: owner.pid, file };
 
-  // Stale. Swap our lock in with one rename (no unlink-then-create gap), then
-  // read it back: if two processes raced, only the one whose nonce is there won.
+  // Stale. Only one process takes it over: crew.lock.takeover, created
+  // exclusively, guards the re-check and the swap, so two dispatchers that
+  // both saw the stale lock can't both end up holding it.
+  const busy = (): CrewLock => ({ ok: false, pid: readLock(file)?.pid ?? owner?.pid ?? 0, file });
+  const mutex = `${file}.takeover`;
+  if (!takeMutex(mutex, mine.nonce)) return busy();
   const tmp = `${file}.${mine.nonce}.tmp`;
-  writeFileSync(tmp, body);
   try {
-    if (readRaw(file) !== raw) {
-      // Someone else changed it while we looked: let their lock decide.
-      const now = readLock(file);
-      return { ok: false, pid: now?.pid ?? owner?.pid ?? 0, file };
-    }
-    renameSync(tmp, file);
+    // Changed since we looked (someone took it over or released it): their lock decides.
+    if (readRaw(file) !== raw) return busy();
+    const now = readLock(file);
+    if (now && now.pid !== process.pid && ownsLock(now, self ? probe : null)) return busy();
+    writeFileSync(tmp, body);
+    if (raw === null) {
+      // No lock to replace: link fails if a fresh start created one meanwhile.
+      try {
+        linkSync(tmp, file);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "EEXIST") return busy();
+        throw e;
+      }
+    } else renameSync(tmp, file);
   } finally {
     rmSync(tmp, { force: true });
+    try {
+      if (readRaw(mutex) === mine.nonce) unlinkSync(mutex);
+    } catch {}
   }
-  const now = readLock(file);
-  if (now?.nonce === mine.nonce) return held();
-  return { ok: false, pid: now?.pid ?? owner?.pid ?? 0, file };
+  return readLock(file)?.nonce === mine.nonce ? held() : busy();
+}
+
+/** A takeover file older than this was left by a takeover that died part way. */
+const TAKEOVER_STALE_MS = 30_000;
+
+/** Create the takeover file exclusively, clearing one a dead takeover left behind. */
+function takeMutex(path: string, nonce: string): boolean {
+  for (let i = 0; i < 2; i++) {
+    try {
+      const fd = openSync(path, "wx");
+      writeSync(fd, nonce);
+      closeSync(fd);
+      return true;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    }
+    try {
+      if (Date.now() - statSync(path).mtimeMs < TAKEOVER_STALE_MS) return false;
+      unlinkSync(path);
+    } catch {
+      // Gone already: try again.
+    }
+  }
+  return false;
 }
 
 /**

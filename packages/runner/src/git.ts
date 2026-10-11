@@ -23,13 +23,18 @@ export interface Exec {
 const KILL_GRACE_MS = 2000;
 /** How long a killed command's output gets once it has exited; its children can hold the pipes. */
 const PIPE_GRACE_MS = 1000;
+/** How long a command that exited on its own gets for its output to finish before leftovers holding it are killed. */
+const EXIT_GRACE_MS = 1000;
+/** Output kept per stream: the start and the end, with the middle dropped. */
+const HEAD_BYTES = 64 * 1024;
+const TAIL_BYTES = 1024 * 1024;
 
 /**
  * Signal a command and everything in its process group. Checks lead their own
  * group (they start a new session), so a stop also reaches what they spawned.
  * A command that isn't a group leader gets the signal by pid.
  */
-function signalTree(pid: number, sig: NodeJS.Signals | 0, fallback: () => void): boolean {
+export function signalTree(pid: number, sig: NodeJS.Signals | 0, fallback: () => void): boolean {
   try {
     process.kill(-pid, sig);
     return true;
@@ -39,6 +44,114 @@ function signalTree(pid: number, sig: NodeJS.Signals | 0, fallback: () => void):
     } catch {}
     return false;
   }
+}
+
+type Proc = {
+  pid: number;
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | number | null;
+  kill: (sig?: NodeJS.Signals) => void;
+};
+
+const alive = (proc: Proc) => proc.exitCode === null && proc.signalCode === null;
+
+/**
+ * Commands that may still have a live process group. While the leader runs,
+ * `-pid` can only be its own group, and once it's gone a group by that id is
+ * still its own until the group empties; so NightCrew only signals tracked ids.
+ */
+const live = new Map<number, Proc>();
+let exitHook = false;
+
+/** Keep a command (and its group) on the list SIGKILLed when NightCrew exits. Returns the untrack. */
+export function trackTree(proc: Proc): () => void {
+  if (!exitHook) {
+    exitHook = true;
+    process.on("exit", () => {
+      for (const [pid, p] of live) signalTree(pid, "SIGKILL", () => alive(p) && p.kill("SIGKILL"));
+    });
+  }
+  live.set(proc.pid, proc);
+  return () => {
+    if (live.get(proc.pid) === proc) live.delete(proc.pid);
+  };
+}
+
+const terminating = new WeakMap<Proc, Promise<void>>();
+
+/**
+ * SIGTERM a command and its group, then SIGKILL whatever is left after
+ * `graceMs`. Resolves once the leader and the group are gone (or SIGKILLed).
+ * The group is re-checked every tick, so a group that empties is never
+ * signalled again, even if its id gets reused.
+ */
+export function terminateTree(proc: Proc, graceMs = KILL_GRACE_MS): Promise<void> {
+  const prior = terminating.get(proc);
+  if (prior) return prior;
+  const untrack = trackTree(proc);
+  const group = signalTree(proc.pid, "SIGTERM", () => alive(proc) && proc.kill("SIGTERM"));
+  const started = Date.now();
+  const done = new Promise<void>((resolve) => {
+    const tick = () => {
+      const leader = alive(proc);
+      const gone = group ? !leader && !signalTree(proc.pid, 0, () => {}) : !leader;
+      if (!gone && Date.now() - started >= graceMs) {
+        if (group && (leader || signalTree(proc.pid, 0, () => {}))) signalTree(proc.pid, "SIGKILL", () => {});
+        else if (leader) proc.kill("SIGKILL");
+      } else if (!gone) return void setTimeout(tick, 100);
+      untrack();
+      resolve();
+    };
+    tick();
+  });
+  terminating.set(proc, done);
+  return done;
+}
+
+/** Read a stream, keeping only its first HEAD_BYTES and last TAIL_BYTES. */
+function boundedReader(stream: ReadableStream<Uint8Array>) {
+  const head: Uint8Array[] = [];
+  let headLen = 0;
+  const tail: Uint8Array[] = [];
+  let tailLen = 0;
+  let omitted = 0;
+  const reader = stream.getReader();
+  const done = (async () => {
+    try {
+      for (;;) {
+        const r = await reader.read();
+        if (r.done) return;
+        let chunk = r.value;
+        if (headLen < HEAD_BYTES) {
+          const take = Math.min(HEAD_BYTES - headLen, chunk.length);
+          head.push(chunk.slice(0, take));
+          headLen += take;
+          chunk = chunk.subarray(take);
+        }
+        if (!chunk.length) continue;
+        tail.push(chunk);
+        tailLen += chunk.length;
+        while (tail.length > 1 && tailLen - (tail[0]?.length ?? 0) >= TAIL_BYTES) {
+          const dropped = tail.shift()?.length ?? 0;
+          tailLen -= dropped;
+          omitted += dropped;
+        }
+        if (tailLen > TAIL_BYTES && tail[0]) {
+          const extra = tailLen - TAIL_BYTES;
+          tail[0] = tail[0].slice(extra);
+          tailLen -= extra;
+          omitted += extra;
+        }
+      }
+    } catch {}
+  })();
+  const decode = (parts: Uint8Array[]) => new TextDecoder().decode(Buffer.concat(parts));
+  return {
+    done,
+    stop: () => void reader.cancel().catch(() => {}),
+    text: () =>
+      omitted ? `${decode(head)}\n… ${omitted} bytes omitted …\n${decode(tail)}` : decode([...head, ...tail]),
+  };
 }
 
 export async function run(
@@ -60,35 +173,55 @@ export async function run(
       stderr: "pipe",
       env: { ...(opts.baseEnv ?? process.env), ...opts.env, GIT_TERMINAL_PROMPT: "0" },
     });
+    const untrack = trackTree(proc);
+    const out = boundedReader(proc.stdout);
+    const err = boundedReader(proc.stderr);
+    const output = Promise.all([out.done, err.done]);
     let killed: "Stopped." | "Timed out." | undefined;
-    let group = false;
-    let forceKill: ReturnType<typeof setTimeout> | undefined;
+    let leftovers = false;
+    let wake = () => {};
+    const woken = new Promise<void>((r) => {
+      wake = r;
+    });
+    // Armed until the output settles, not just until the leader exits: a stop
+    // or timeout still reaches what's left of the group.
     const kill = (why: "Stopped." | "Timed out.") => {
       if (killed) return;
       killed = why;
-      group = signalTree(proc.pid, "SIGTERM", () => proc.kill("SIGTERM"));
-      // The grace covers the whole group: children that outlive their leader still get SIGKILL.
-      forceKill = setTimeout(() => {
-        if (group) signalTree(proc.pid, "SIGKILL", () => {});
-        else if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGKILL");
-      }, KILL_GRACE_MS);
+      void terminateTree(proc);
+      wake();
     };
     const timer = opts.timeoutMs ? setTimeout(() => kill("Timed out."), opts.timeoutMs) : undefined;
     const onAbort = () => kill("Stopped.");
     opts.signal?.addEventListener("abort", onAbort, { once: true });
-    const output = Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-    const code = await proc.exited;
-    clearTimeout(timer);
-    opts.signal?.removeEventListener("abort", onAbort);
-    // Nothing left to SIGKILL once the leader is gone and so is its group.
-    if (!group || !signalTree(proc.pid, 0, () => {})) clearTimeout(forceKill);
-    if (!killed) {
-      const [stdout, stderr] = await output;
+    try {
+      const code = await proc.exited;
+      if (!killed) {
+        const settled = await Promise.race([
+          output.then(() => true),
+          woken.then(() => false),
+          Bun.sleep(EXIT_GRACE_MS).then(() => false),
+        ]);
+        // Finished, but something it left behind still holds the output.
+        if (!settled && !killed) {
+          leftovers = true;
+          void terminateTree(proc);
+        }
+      }
+      // A killed command's children can hold its pipes open; don't wait on them.
+      if (killed || leftovers) await Promise.race([output, Bun.sleep(PIPE_GRACE_MS)]);
+      out.stop();
+      err.stop();
+      const stdout = out.text();
+      const stderr = err.text();
+      if (killed) return { ok: false, code: code ?? -1, stdout, stderr: `${stderr}\n${killed}`.trim() };
       return { ok: code === 0, code, stdout, stderr };
+    } finally {
+      clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", onAbort);
+      // A group being terminated stays tracked until it's gone.
+      if (!terminating.has(proc)) untrack();
     }
-    // A killed command's children can hold its pipes open; don't wait on them.
-    const [stdout, stderr] = await Promise.race([output, Bun.sleep(PIPE_GRACE_MS).then(() => ["", ""] as const)]);
-    return { ok: false, code: code ?? -1, stdout, stderr: `${stderr}\n${killed}`.trim() };
   } catch (e) {
     return { ok: false, code: -1, stdout: "", stderr: e instanceof Error ? e.message : String(e) };
   }
@@ -454,51 +587,76 @@ export async function forkPoint(dir: string, defaultBranch: string, head: string
   return local ?? remote ?? defaultBranch;
 }
 
+/** Default limits for publishing, so a stalled remote fails the step instead of hanging it. */
+export const PUSH_TIMEOUT_MS = 120_000;
+export const GH_TIMEOUT_MS = 60_000;
+
 /** Push a commit (by sha) or ref to origin's `branch`, never by a short name git could resolve elsewhere. */
-export async function pushTo(dir: string, src: string, branch: string, timeoutMs?: number): Promise<Exec> {
-  return gitRun(dir, ["push", "--quiet", "--no-verify", "origin", `${src}:refs/heads/${branch}`], { timeoutMs });
+export async function pushTo(
+  dir: string,
+  src: string,
+  branch: string,
+  timeoutMs: number = PUSH_TIMEOUT_MS,
+  signal?: AbortSignal,
+): Promise<Exec> {
+  return gitRun(dir, ["push", "--quiet", "--no-verify", "origin", `${src}:refs/heads/${branch}`], {
+    timeoutMs,
+    signal,
+  });
 }
 
 export interface PrRef {
   url: string;
   number: number;
+  /** Set when the PR exists but updating it failed, e.g. `gh pr edit` didn't take the new body. */
+  warning?: string;
 }
 
-/** Open a draft PR for the branch, or update the body of the one already open. */
+/** A gh failure for messages: the last line, which says "Timed out." or "Stopped." when NightCrew cut it off. */
+const ghError = (r: Exec) => lastLine(r.stderr) || `exit ${r.code}`;
+const cutOff = (r: Exec) => /^(Timed out|Stopped)\.$/.test(lastLine(r.stderr));
+
+/**
+ * Open a draft PR for the branch, or update the body of the one already open.
+ * Each gh call gets `timeoutMs` (default GH_TIMEOUT_MS); a timeout or stop
+ * throws rather than hang.
+ */
 export async function openOrUpdatePr(
   dir: string,
   input: { branch: string; base: string; title: string; body: string },
+  opts: { timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<PrRef> {
-  const existing = await run(
-    ["gh", "pr", "list", "--head", input.branch, "--state", "open", "--json", "url,number"],
-    dir,
-  );
-  const list = existing.ok ? (JSON.parse(existing.stdout || "[]") as PrRef[]) : [];
+  const gh = (args: string[]) =>
+    run(["gh", ...args], dir, { timeoutMs: opts.timeoutMs ?? GH_TIMEOUT_MS, signal: opts.signal });
+  const existing = await gh(["pr", "list", "--head", input.branch, "--state", "open", "--json", "url,number"]);
+  if (cutOff(existing)) throw new Error(`gh pr list failed: ${ghError(existing)}`);
+  let list: PrRef[] = [];
+  try {
+    list = existing.ok ? (JSON.parse(existing.stdout || "[]") as PrRef[]) : [];
+  } catch {}
   const tmp = mkdtempSync(join(tmpdir(), "nightcrew-pr-"));
   const bodyFile = join(tmp, `${slugify(input.branch)}.md`);
   await Bun.write(bodyFile, input.body);
   try {
-    if (list[0]) {
-      await run(["gh", "pr", "edit", String(list[0].number), "--body-file", bodyFile], dir);
-      return list[0];
+    const open = list[0];
+    if (open) {
+      const edit = await gh(["pr", "edit", String(open.number), "--body-file", bodyFile]);
+      const pr = { url: open.url, number: open.number };
+      return edit.ok ? pr : { ...pr, warning: `gh pr edit failed, so the PR body is out of date: ${ghError(edit)}` };
     }
-    const created = await run(
-      [
-        "gh",
-        "pr",
-        "create",
-        "--draft",
-        "--base",
-        input.base,
-        "--head",
-        input.branch,
-        "--title",
-        input.title,
-        "--body-file",
-        bodyFile,
-      ],
-      dir,
-    );
+    const created = await gh([
+      "pr",
+      "create",
+      "--draft",
+      "--base",
+      input.base,
+      "--head",
+      input.branch,
+      "--title",
+      input.title,
+      "--body-file",
+      bodyFile,
+    ]);
     if (!created.ok) throw new Error(`gh pr create failed: ${created.stderr.trim()}`);
     const url = created.stdout.trim().split("\n").pop() ?? "";
     return { url, number: Number(url.split("/").pop()) || 0 };

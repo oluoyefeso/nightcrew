@@ -522,6 +522,51 @@ describe("integration branches", () => {
   });
 });
 
+describe("trust changed while a task runs", () => {
+  /** Writes the feature, and runs `during` while the crew is still building. */
+  const building = (during: () => void = () => {}) =>
+    new ScriptedEngine({
+      implement: (req) => {
+        writeFileSync(join(req.cwd, "src", "feature.ts"), "export const feature = true;\n");
+        during();
+        return { text: "Done." };
+      },
+      review: () => ({ structured: READY }),
+    });
+
+  test("a repo demoted from ship to train mid-run boards the train instead of shipping", async () => {
+    // Value: protects=you can take Ship to dev away while agents are running and no run already in flight ships on the old setting; fails_when=runTask lands with the repo it read at the start; why_new=Z3; seam=none
+    await git(repoPath, "branch", "dev");
+    const first = setupTask();
+    updateRepo(db, first.repoId, { level: "ship", shipBranch: "dev", allowShip: ["src/**"] });
+    const shipped = await runTask(deps(building()), first.id, new AbortController().signal);
+    expect(getRun(db, shipped.runId)?.run.shipSha).toBeTruthy();
+
+    const second = createTask(db, {
+      repoId: first.repoId,
+      title: "Second",
+      scope: ["src/**"],
+      criteria: ["Feature file exists"],
+      status: "queued",
+    });
+    const engine = building(() => updateRepo(db, first.repoId, { level: "train" }));
+    const out = await runTask(deps(engine), second.id, new AbortController().signal);
+    expect(getRun(db, out.runId)?.run.shipSha).toBeNull();
+    const texts = listRunEvents(db, out.runId).map((e) => e.text);
+    expect(texts.some((t) => t.startsWith("Shipped to"))).toBe(false);
+    expect(texts.some((t) => t.startsWith("On today's train"))).toBe(true);
+  });
+
+  test("a scope narrowed mid-run is what the final gate checks", async () => {
+    // Value: protects=narrowing a task's scope while it runs stops files outside the new scope from landing; fails_when=the final gate checks the scope read at the start of the run; why_new=Z3; seam=none
+    const task = setupTask();
+    const engine = building(() => updateTask(db, task.id, { scope: ["docs/**"] }));
+    const out = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(out.status).toBe("failed");
+    expect(out.reason).toContain("Changed files outside scope: src/feature.ts");
+  });
+});
+
 describe("rate limits", () => {
   test("only a failed run whose last phase was rate limited reports a rate limit", async () => {
     // Value: protects=rateLimited means the run failed because of a rate limit, so the crew backs off only then; fails_when=an early rate limit the run got past is sticky, or a stop or timeout after one reports rateLimited; why_new=G7 rateLimited was set once and never cleared; seam=none

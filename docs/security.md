@@ -31,9 +31,9 @@ NightCrew's own git commands, in your repo and everywhere else, run with hooks o
 ## The guard
 
 Every tool call goes through the guard before it runs. It refuses:
-- writes outside the task's clone and NightCrew's artifact folder, and outside the task's scope globs,
-- `.github/workflows/`, `.env` files, keys, `.git`, `.gitattributes`, `.lfsconfig` and `.gitmodules`, whatever the scope says. These match in any letter case, because macOS reads `.GITATTRIBUTES` as `.gitattributes`. The same list is checked again on the result,
-- reading secrets files,
+- writes outside the task's clone and NightCrew's artifact folder, and outside the task's scope globs. The guard judges where a write really lands: symlinks in the path are resolved, a write to a path that is itself a symlink is refused, and so is one through a dangling link. A symlinked folder that stays inside the clone is fine, and the protected list and scope are checked against both the path as written and where it lands,
+- `.github/workflows/`, `.github/actions/` (composite actions run in CI with its secrets), `.env` files, keys, `.git`, `.gitattributes`, `.lfsconfig` and `.gitmodules`, whatever the scope says. These match in any letter case, because macOS reads `.GITATTRIBUTES` as `.gitattributes`. The same list is checked again on the result,
+- reading secrets files, and reading browser profiles with Read, Grep or Glob (see the dashboard API below),
 - `git push`, history rewrites, `git reset --hard`, `git clean -f`, changing remotes or git config, deleting branches and tagging,
 - checking out or moving a protected branch,
 - `gh pr`, `gh api` and friends (NightCrew opens the pull request itself),
@@ -59,7 +59,9 @@ Tasks started before 1.0 may still have an old linked worktree under `<repo>/.wo
 
 Network stays open, because tests and installs need it. The guard still refuses network writes.
 
-File edits (Write, Edit) don't run in the sandbox; the guard checks each path instead.
+File edits (Write, Edit, MultiEdit, NotebookEdit) don't run in the sandbox. They run inside the agent's own process, and the SDK's sandbox covers Bash only. A real probe confirmed it: Bash in a clone made `dirlink -> ~/nc-probe-dir` (Bash itself can't write there), and a Write to `dirlink/nc-probe-target.txt` created `~/nc-probe-dir/nc-probe-target.txt`. The Write tool does refuse a path that is itself a symlink, but it follows symlinked folders. So file tools are guarded by path resolution in the guard (above), not by the OS sandbox. The guard decides on the path as it is when the call is made.
+
+Bash also can't read browser profiles (Chrome, Chromium, Brave, Edge, Arc, Firefox and Safari, on macOS and Linux), where the dashboard keeps its token. That is the SDK's `denyRead`; the guard covers the Read, Grep and Glob tools.
 
 ## The sandbox for checks
 
@@ -70,6 +72,8 @@ NightCrew runs the repo's own commands (setup, tests, previews) and its git comm
 - the package caches: `~/.npm`, `~/.bun/install/cache`, `~/.cache`, `~/.pnpm-store`, `~/Library/pnpm`, `~/.yarn`, `~/Library/Caches`, `~/.cargo/registry`, `~/.cargo/git`, `~/go/pkg/mod`, `~/.local/share/uv`.
 
 Checks in NightCrew's own worktrees of your repo (integration worktrees for the ship branch and trains, and the base worktree used for before-and-after evidence) can write only that worktree's folder, minus its `.git` pointer file. None of your repo's git data is writable from there: not the worktree's git dir, not your repo's hooks or config, and not its `lfs` or `modules` folders.
+
+Checks can't read browser profiles, where the dashboard keeps its token: on macOS the profile denies reading them, and on Linux each one that exists is covered by an empty tmpfs. On macOS a check also can't connect to the dashboard API's port on loopback (`localhost`, `127.0.0.1` or `::1`); other local ports and the internet still work. On Linux bubblewrap can't block one port without a network namespace of its own, so the API port stays reachable there (see the gaps).
 
 Checks can't read or write a terminal: each starts in a new session with no controlling terminal and no terminal on its input or output, so it can't open `/dev/tty`, and on macOS the profile also blocks terminal ioctls, so it can't type into the terminal NightCrew was started from. Stopping a check, on a timeout or when you stop the task, stops its child processes too.
 
@@ -111,8 +115,9 @@ NightCrew compares each task's work against the default branch, with the base wo
 ## The dashboard API
 
 The API listens on `127.0.0.1` only, and it checks every request:
-- each launch makes a new API token. The dashboard link `nightcrew` prints and opens carries it once; the dashboard swaps it for an HttpOnly, SameSite=Strict cookie,
+- each launch makes a new API token. The dashboard link `nightcrew` prints and opens carries it once; the dashboard moves it into the browser's localStorage, scoped to that exact origin and port, and sends it in a header. It is never a cookie, which any page on another localhost port could have sent along,
 - every `/api` call needs that token, so another local user or a web page can't use the API without it,
+- check commands on macOS can't connect to the API's port, and neither checks nor the agent's Bash can read browser profiles, where localStorage lives on disk. The agent's Bash can still connect to the port (see the gaps), but without the token it gets nothing,
 - requests that change something also need an `Origin` that exactly matches the dashboard's,
 - the `Host` header must name `localhost`, `127.0.0.1` or `[::1]`, which stops DNS rebinding.
 
@@ -132,7 +137,9 @@ The sandbox mounts your repo with the GitHub token from `gh auth token`. That to
 
 - **Shell tricks get past the guard.** It reads commands as text. On the local engine the sandboxes are the backstop; they limit where a command can write, not what it tries.
 - **Linux without bubblewrap.** Both sandboxes need `bubblewrap` (the agent's also needs `socat`). Without them, Bash and checks run unsandboxed with the guard only. Install them: `sudo apt install bubblewrap socat`.
-- **Reads aren't limited.** The sandboxes limit writes. A command can still read any file your user can read, such as `~/.config/gh/hosts.yml`, `~/.aws/credentials` or `~/.ssh`, and the network is open. The guard refuses reading the common secrets files by name, but a shell trick gets past that.
+- **Reads aren't limited.** The sandboxes limit writes. Apart from browser profiles, a command can still read any file your user can read, such as `~/.config/gh/hosts.yml`, `~/.aws/credentials` or `~/.ssh`, and the network is open. The guard refuses reading the common secrets files by name, but a shell trick gets past that. The Read tool runs outside the OS sandbox and can read anything the guard doesn't refuse by name or folder.
+- **File tools follow the path as it is when checked.** Write and Edit aren't in the OS sandbox; the guard resolves symlinks when the call is made. A symlink swapped in between the guard's check and the write (by a command running at the same moment) isn't caught by the guard. The Write tool's own check refuses some of these.
+- **The dashboard API's port from the agent's Bash.** The agent's sandbox lets commands bind and connect to `localhost` (tests need local servers), and that path doesn't go through the SDK's network filter, so a probe reached the API's port from the agent's Bash even with the port in `deniedDomains`. NightCrew doesn't set that entry, since it would only tell the agent the port. On Linux, checks can reach it too. The token is never in a cookie or in the agent's environment, and browser profiles are unreadable, so a request gets refused without it.
 - **Terminals in tests.** Checks can't open new pseudo-terminals (`/dev/ptmx` and `/dev/ttys*` aren't writable on macOS), so tests that spawn a pty fail inside the check sandbox.
 - **Package caches are writable.** A command can plant something in `~/.npm` or `~/.cache` that a later install on this machine picks up.
 - **Local services.** The network is open, including to services on this machine. Anything listening locally that runs commands (a Docker socket, an SSH server with your keys) is reachable.

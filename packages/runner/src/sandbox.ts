@@ -4,9 +4,10 @@
 // terminal and get an environment without credentials (see env.ts).
 
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
-import { cacheDirs, childEnv } from "./env";
+import { browserProfileDirs } from "@nightcrew/core/guard";
+import { cacheDirs, childEnv, dashboardPort } from "./env";
 import { type Exec, run } from "./git";
 
 /** Set to 1 to run checks without a sandbox, for test suites that need it. */
@@ -98,7 +99,7 @@ const DEVICES = [
  * The macOS Seatbelt profile for a command in `dir`. Seatbelt applies the
  * last matching rule, so the denies come after the allows.
  */
-export function seatbeltProfile(dir: string, place: CheckPlace = {}): string {
+export function seatbeltProfile(dir: string, place: CheckPlace = {}, home = homedir()): string {
   const wt = real(dir);
   const allow = [
     `(subpath ${sbString(wt)})`,
@@ -106,10 +107,11 @@ export function seatbeltProfile(dir: string, place: CheckPlace = {}): string {
     '(subpath "/private/tmp")',
     '(subpath "/private/var/folders")',
     ...DEVICES,
-    ...cacheDirs().map((d) => `(subpath ${sbString(real(d))})`),
+    ...cacheDirs(home).map((d) => `(subpath ${sbString(real(d))})`),
   ];
   const deny = denies(wt, place).map((p) => `(literal ${sbString(p)})`);
   const launchers = [...new Set(LAUNCHERS.flatMap((p) => [p, real(p)]))];
+  const port = dashboardPort();
   return [
     "(version 1)",
     "(allow default)",
@@ -122,16 +124,24 @@ export function seatbeltProfile(dir: string, place: CheckPlace = {}): string {
     '(deny file-ioctl (literal "/dev/tty") (regex #"^/dev/ttys"))',
     // No opening another terminal to read what's typed there, or a new pty.
     '(deny file-read* (literal "/dev/tty") (regex #"^/dev/ttys[0-9]+$") (literal "/dev/ptmx"))',
+    // The dashboard token lives in the browser's localStorage, on disk here.
+    `(deny file-read*\n  ${browserProfileDirs(home)
+      .map((d) => `(subpath ${sbString(real(d))})`)
+      .join("\n  ")})`,
+    // The dashboard API. Seatbelt's "localhost" covers 127.0.0.1 and ::1; it
+    // takes no other host name or address.
+    ...(port ? [`(deny network-outbound (remote ip "localhost:${port}"))`] : []),
   ].join("\n");
 }
 
 /**
  * The bubblewrap arguments for a command in `dir`. A new session (no
  * TIOCSTI into the caller's terminal), its own pid namespace, and it dies
- * with NightCrew. Network stays on. A repo or clone under /tmp is hidden by
- * the private /tmp; NightCrew keeps clones under its data dir.
+ * with NightCrew. Network stays on, the dashboard API's port included: bwrap
+ * can't filter one port without a network namespace. A repo or clone under
+ * /tmp is hidden by the private /tmp; NightCrew keeps clones under its data dir.
  */
-export function bwrapArgs(dir: string, place: CheckPlace = {}): string[] {
+export function bwrapArgs(dir: string, place: CheckPlace = {}, home = homedir()): string[] {
   const wt = real(dir);
   const args = [
     "--ro-bind",
@@ -150,9 +160,11 @@ export function bwrapArgs(dir: string, place: CheckPlace = {}): string[] {
   const tmp = real(tmpdir());
   if (tmp !== "/tmp" && existsSync(tmp)) args.push("--bind", tmp, tmp);
   args.push("--bind", wt, wt);
-  for (const d of cacheDirs()) if (existsSync(d)) args.push("--bind", real(d), real(d));
+  for (const d of cacheDirs(home)) if (existsSync(d)) args.push("--bind", real(d), real(d));
   // After the private /tmp, so a clone of a repo under /tmp reads the objects it borrows.
   if (place.clone) for (const o of place.objects ?? []) if (existsSync(o)) args.push("--ro-bind", real(o), real(o));
+  // Browser profiles (the dashboard token's localStorage) read as empty.
+  for (const d of browserProfileDirs(home)) if (existsSync(d)) args.push("--tmpfs", real(d));
   // Later mounts win, so the denies go last.
   for (const p of denies(wt, place)) if (existsSync(p)) args.push("--ro-bind", p, p);
   return [...args, "--chdir", wt];

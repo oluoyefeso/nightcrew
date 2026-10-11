@@ -1,9 +1,10 @@
 import "./styles.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, createRoute, createRouter, RouterProvider, redirect } from "@tanstack/react-router";
-import { StrictMode } from "react";
+import { StrictMode, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
-import { shouldRetry } from "./api";
+import { checkKey, lockStore, shouldRetry, takeLaunchKey } from "./api";
+import { LockedPage } from "./components/locked";
 import { Shell } from "./components/shell";
 import { resumeReturnPath } from "./pending";
 import { AgentsPage } from "./routes/agents";
@@ -67,8 +68,11 @@ const runRoute = createRoute({
   },
 });
 
-// Back to the page a restart's reload left edits on, before the router reads the URL.
+// The launch link's ?t= key goes to storage and leaves the address bar, then
+// back to the page a restart left edits on, before the router reads the URL.
+takeLaunchKey();
 resumeReturnPath();
+void checkKey();
 
 const router = createRouter({
   routeTree: rootRoute.addChildren([
@@ -97,10 +101,20 @@ const queryClient = new QueryClient({
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing #root");
 
-createRoot(root).render(
-  <StrictMode>
+/** The dashboard once the API takes our key; the locked page when it doesn't. */
+function Gate() {
+  const lock = useSyncExternalStore(lockStore.subscribe, lockStore.get);
+  if (lock === "checking") return null;
+  if (lock === "locked") return <LockedPage />;
+  return (
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
     </QueryClientProvider>
+  );
+}
+
+createRoot(root).render(
+  <StrictMode>
+    <Gate />
   </StrictMode>,
 );

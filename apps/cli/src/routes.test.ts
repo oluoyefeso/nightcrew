@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -361,5 +361,61 @@ describe("task status, budgets and timing", () => {
     const note = await send("POST", "/api/tasks/task_missing/notes", { text: "hi" });
     expect(note.status).toBe(404);
     expect(await errorOf(note)).toBe("Task not found.");
+  });
+});
+
+describe("GET /api/runs/:id/files/*", () => {
+  const dirs: string[] = [];
+  let data: string;
+  let runDir: string;
+  beforeEach(() => {
+    data = mkdtempSync(join(tmpdir(), "nc-files-"));
+    dirs.push(data);
+    runDir = join(data, "runs", "run_abc");
+    mkdirSync(join(runDir, "shots"), { recursive: true });
+    const engine = new ScriptedEngine({});
+    app = new Hono();
+    mountTaskRoutes(app, { db, crew: new Crew({ db, engine, dataDir: data, publish: false }), engine, dataDir: data });
+  });
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+  const get = (rel: string) => app.request(`/api/runs/run_abc/files/${rel}`);
+  const locked = (res: Response) => {
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'");
+  };
+
+  test("images are images; HTML, SVG and the rest are plain-text downloads", async () => {
+    // Value: protects=an agent-written HTML or SVG file can't run script on the dashboard origin; fails_when=the route guesses an active type, drops nosniff/CSP, or serves non-images inline; why_new=X2, run files were served with extension-guessed types; seam=none
+    writeFileSync(join(runDir, "shots", "a.png"), "png");
+    writeFileSync(join(runDir, "x.html"), "<script>alert(1)</script>");
+    writeFileSync(join(runDir, "x.svg"), "<svg onload=alert(1)>");
+    writeFileSync(join(runDir, "notes.md"), "# hi");
+    const png = await get("shots/a.png");
+    expect(png.status).toBe(200);
+    expect(png.headers.get("content-type")).toBe("image/png");
+    expect(png.headers.get("content-disposition")).toBeNull();
+    locked(png);
+    for (const rel of ["x.html", "x.svg", "notes.md"]) {
+      const res = await get(rel);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+      expect(res.headers.get("content-disposition")).toBe("attachment");
+      locked(res);
+    }
+  });
+
+  test("symlinks and paths out of the run folder are refused", async () => {
+    // Value: protects=an agent can't plant a symlink to read files outside its run folder (or run a linked HTML); fails_when=the route follows symlinks or stops checking the real path; why_new=X2; seam=none
+    const secret = join(data, "secret.txt");
+    writeFileSync(secret, "token");
+    symlinkSync(secret, join(runDir, "leak.txt"));
+    symlinkSync(join(data), join(runDir, "up"));
+    for (const rel of ["leak.txt", "up/secret.txt", "..%2Fsecret.txt", "missing.png", "shots"]) {
+      const res = await get(rel);
+      expect(res.status).toBe(404);
+      locked(res);
+    }
   });
 });

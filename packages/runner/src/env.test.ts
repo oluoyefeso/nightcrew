@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { childEnv, isSecretVar } from "./env";
+import { childEnv, dashboardPort, isSecretVar } from "./env";
 import { git, run } from "./git";
 import { checkEnv } from "./sandbox";
 import { agentEnv } from "./sdk-engine";
@@ -147,4 +147,11 @@ describe("one environment policy", () => {
     expect(keys).toContain("credential.helper");
     expect(Number(extra.GIT_CONFIG_COUNT)).toBe(keys.length);
   });
+});
+
+test("dashboardPort reads a valid port and ignores anything else", () => {
+  // Value: protects=the sandboxes' API port deny gets a real port or none, never a broken rule; fails_when=dashboardPort accepts junk or drops a valid port; why_new=Y2; seam=none
+  expect(dashboardPort({ NIGHTCREW_API_PORT: "4321" })).toBe(4321);
+  for (const v of [undefined, "", "0", "65536", "12.5", "80; (allow default)"])
+    expect(dashboardPort({ NIGHTCREW_API_PORT: v })).toBeUndefined();
 });

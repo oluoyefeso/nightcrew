@@ -5,7 +5,7 @@
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { formatTokens, nightIdFor, type Repo, type Task, type Train } from "@nightcrew/core";
+import { formatTokens, nightIdFor, type Repo, type Task } from "@nightcrew/core";
 import { isAlwaysProtected, matchesAny } from "@nightcrew/core/guard";
 import {
   addCar,
@@ -16,6 +16,7 @@ import {
   getOpenTrain,
   getRepo,
   getTask,
+  getTrain,
   listNotes,
   listTrains,
   markShipped,
@@ -38,7 +39,16 @@ import {
   taskChangedFiles,
   untouchedSetupFiles,
 } from "./git";
-import { type Approved, boardTrain, canShip, setLandingHome, shipTask, trainBranch } from "./landing";
+import {
+  boardTrain,
+  buildsOnTakenOff,
+  canShip,
+  type Earlier,
+  setLandingHome,
+  shipTask,
+  type TakenOff,
+  trainBranch,
+} from "./landing";
 import {
   implementPrompt,
   type PromptContext,
@@ -67,6 +77,7 @@ import {
   updateLocalBranch,
   type Workspace,
   wipRef,
+  workspaceDir,
 } from "./workspace";
 
 export interface PipelineDeps {
@@ -250,7 +261,8 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     const report = join(artifactsDir, "REPORT.md");
     if (existsSync(report)) artifact("report", "REPORT.md", readFileSync(report, "utf8"));
     save();
-    updateTask(db, task.id, { status: "done" });
+    // Archived while it ran: it stays archived.
+    if (getTask(db, task.id)?.status !== "archived") updateTask(db, task.id, { status: "done" });
     emit(status === "complete" ? "result" : "error", reason ?? state.summary ?? "Done.");
     return {
       runId,
@@ -265,6 +277,36 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
   };
   /** Stopped or out of time: keep the work, run nothing more. */
   const halt = (when: string) => finish("timeout", stoppedReason(when));
+  const fresh = (clone: string) =>
+    `Start the task fresh: ${startFreshHint(task.id, { clone, branch: task.branch })}, then run it again.`;
+  /**
+   * Refuse to build on work you pulled or undid: a run on top of it could
+   * land only what's new, with the taken-off part left out. `base` is the
+   * gate's base for `tip`.
+   */
+  const buildsOnPulled = async (tip: string | null, base: string, clone: string) => {
+    if (!tip) return null;
+    const off = await buildsOnTakenOff(repo.path, await takenOffLandings(db, repo, task), [tip], base);
+    return off
+      ? `This task's earlier work was taken off ${off.branch} (pulled or undone), and this run would build on it. ${fresh(clone)}`
+      : null;
+  };
+  /**
+   * The repo's trust settings and the task's scope as they are now: you may
+   * change them (demote the repo, narrow the scope) while a task runs. Null
+   * when the task or repo was deleted or the task archived meanwhile.
+   */
+  const live = () => {
+    const r = getRepo(db, repo.id);
+    const t = getTask(db, task.id);
+    if (!r || !t || t.status === "archived") return null;
+    const { level, shipBranch, allowShip, alwaysAsk, protectedBranches } = r;
+    return {
+      repo: { ...repo, level, shipBranch, allowShip, alwaysAsk, protectedBranches },
+      task: { ...task, scope: t.scope, status: t.status },
+    };
+  };
+  const gone = "The task was archived or deleted while it ran, so nothing landed.";
 
   try {
     phase("setup", "Preparing the workspace");
@@ -276,6 +318,9 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       (await resolveSha(repo.path, taskRef(task.id))) ??
       (await resolveSha(repo.path, `refs/heads/${task.branch}`));
     const startBase = await gateBase(repo.path, repo.defaultBranch, before);
+    const clone = workspaceDir(deps.dataDir, repo.id, task.id);
+    const pulled = await buildsOnPulled(before, startBase, clone);
+    if (pulled) return await finish("failed", pulled);
     const ws = await ensureWorkspace({ dataDir: deps.dataDir, repo, task, base: startBase, signal: stop });
     workspace = ws;
     const worktree = ws.dir;
@@ -317,6 +362,9 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     const startSha = await fetchTask(ws, stop);
     // Worked out again from where this run starts: taking in origin's "Update branch" moves it forward.
     const forkSha = await gateBase(repo.path, repo.defaultBranch, startSha);
+    // Again from the clone's own tip, which may hold work your refs don't.
+    const pulledInClone = await buildsOnPulled(startSha, forkSha, ws.dir);
+    if (pulledInClone) return await finish("failed", pulledInClone);
     // The crew's own `git diff <default>...HEAD` then shows what the gate will check.
     await pointDefaultBranch(ws, repo.defaultBranch, forkSha, { signal: stop, warn });
     const ctx: PromptContext = {
@@ -552,7 +600,9 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       emit("info", "The crew rewrote the branch history this run. NightCrew checks the whole change either way.");
     // The task's whole change against the default branch, from a base worked out again from the fetched sha.
     const gateSha = await gateBase(repo.path, repo.defaultBranch, sha);
-    const gate = scopeCheck(await taskChangedFiles(repo.path, gateSha, sha), task);
+    const atGate = live();
+    if (!atGate) return await finish("failed", gone);
+    const gate = scopeCheck(await taskChangedFiles(repo.path, gateSha, sha), atGate.task);
     if (gate.noChanges) return await finish("failed", "The crew finished without changing anything.");
     if (!gate.ok) {
       state.log = gate.log;
@@ -574,30 +624,41 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       return p.ok ? null : lastLine(p.stderr) || "push failed";
     };
 
+    // Land at the level the repo is at now, with the task's scope as it is now.
+    const now = live();
+    if (!now) return await finish("failed", gone);
+    const { repo: landRepo, task: landTask } = now;
+    /** The scope check again, on the task's whole change and its scope at that moment. */
+    const scopeAgain = (whole: string[]) => {
+      const scope = scopeCheck(whole, live()?.task ?? landTask, { allowEmpty: true });
+      return scope.ok ? null : scope.reason;
+    };
+
     // Ship to dev: the crew merges it itself, when everything lines up.
-    if (repo.level === "ship") {
+    if (landRepo.level === "ship") {
       const gate = canShip({
-        repo,
+        repo: landRepo,
         files,
         verdict: state.verdict,
         evidenceMissing: evidence?.missing ?? [],
         confidence: state.confidence,
       });
       if (gate.ok) {
-        phase("publish", `Shipping to ${repo.shipBranch}`);
+        const shipBranch = landRepo.shipBranch as string;
+        phase("publish", `Shipping to ${shipBranch}`);
         const pushFailed = deps.publish && hasRemote ? await pushTask() : null;
         const shipped = pushFailed
           ? { ok: false as const, error: `Couldn't push ${task.branch}: ${pushFailed}` }
-          : await shipTask(repo, sha, task.title, deps.publish, {
+          : await shipTask(landRepo, sha, task.title, deps.publish, {
               base: gateSha,
               files,
-              ...(await earlierLandings(db, ws, task, { ship: repo.shipBranch as string })),
-              // Checked again, on the task's whole change, before the merge stays.
+              earlier: () => earlierLandings(db, landRepo, task, { ship: shipBranch }, fresh(ws.dir)),
+              // Checked again, on the task's whole change and the repo's settings at that moment, before the merge stays.
               recheck: (whole) => {
-                const scope = scopeCheck(whole, task, { allowEmpty: true });
-                if (!scope.ok) return scope.reason;
+                const scope = scopeAgain(whole);
+                if (scope) return scope;
                 const again = canShip({
-                  repo,
+                  repo: live()?.repo ?? { ...landRepo, level: "draft_pr" },
                   files: whole,
                   verdict: state.verdict,
                   evidenceMissing: evidence?.missing ?? [],
@@ -607,11 +668,8 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
               },
             });
         if (shipped.ok) {
-          markShipped(db, runId, shipped.sha, repo.shipBranch as string);
-          emit(
-            "info",
-            `Shipped to ${repo.shipBranch} (${shipped.sha.slice(0, 7)}). Undo is one key in the Morning Report.`,
-          );
+          markShipped(db, runId, shipped.sha, shipBranch);
+          emit("info", `Shipped to ${shipBranch} (${shipped.sha.slice(0, 7)}). Undo is one key in the Morning Report.`);
           return await finish("complete", null);
         }
         emit("info", `Didn't ship: ${shipped.error.split("\n")[0]} Opening a draft PR instead.`);
@@ -622,7 +680,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     }
 
     // Daily train: board today's integration branch; you merge one PR for the lot.
-    if (repo.level === "train" && state.verdict === "ready") {
+    if (landRepo.level === "train" && state.verdict === "ready") {
       phase("publish", "Boarding today's train");
       const nightId = nightIdFor(startedAt);
       const train =
@@ -631,14 +689,11 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       const pushFailed = deps.publish && hasRemote ? await pushTask() : null;
       const boarded = pushFailed
         ? { ok: false as const, error: `Couldn't push ${task.branch}: ${pushFailed}` }
-        : await boardTrain(repo, train, sha, task.title, deps.publish, {
+        : await boardTrain(landRepo, train, sha, task.title, deps.publish, {
             base: gateSha,
             files,
-            ...(await earlierLandings(db, ws, task, { train })),
-            recheck: (whole) => {
-              const scope = scopeCheck(whole, task, { allowEmpty: true });
-              return scope.ok ? null : scope.reason;
-            },
+            earlier: () => earlierLandings(db, landRepo, task, { trainId: train.id }, fresh(ws.dir)),
+            recheck: scopeAgain,
           });
       if (boarded.ok) {
         addCar(db, train.id, { runId, taskId: task.id, title: task.title, mergeSha: boarded.sha, state: "on" });
@@ -667,24 +722,29 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         phase("publish", "Pushing and opening a draft PR");
         const pushFailed = await pushTask();
         if (pushFailed) return await finish("failed", `Push failed: ${pushFailed}`);
-        const pr = await openOrUpdatePr(repo.path, {
-          branch: task.branch,
-          base: repo.defaultBranch,
-          title: task.title,
-          body: prBody({
-            task,
-            summary: state.summary,
-            verdict,
-            plan: ctx.plan ?? null,
-            evidence: ctx.evidence ?? null,
-            checks: check.log,
-            tokens: used(),
-            runId,
-          }),
-        });
+        const pr = await openOrUpdatePr(
+          repo.path,
+          {
+            branch: task.branch,
+            base: repo.defaultBranch,
+            title: task.title,
+            body: prBody({
+              task,
+              summary: state.summary,
+              verdict,
+              plan: ctx.plan ?? null,
+              evidence: ctx.evidence ?? null,
+              checks: check.log,
+              tokens: used(),
+              runId,
+            }),
+          },
+          { signal: stop },
+        );
         state.prUrl = pr.url;
         state.prNumber = pr.number;
         emit("info", `Opened draft PR #${pr.number}`);
+        if (pr.warning) emit("info", pr.warning);
       }
     }
     return await finish("complete", null);
@@ -825,36 +885,64 @@ function assertIntact(dir: string) {
   if (!cloneIntact(dir)) throw new Error(TAMPERED);
 }
 
+const taskRuns = (db: Db, taskId: string) =>
+  db.query.runs.findMany({ where: (r, { eq }) => eq(r.taskId, taskId) }).sync();
+
+/** The task's tip a landing merge brought in: NightCrew lands by --no-ff merge, the tip its second parent. */
+const landedTip = (repoPath: string, merge: string) => (SHA.test(merge) ? resolveSha(repoPath, `${merge}^2`) : null);
+
 /**
- * This task's earlier tips on a landing branch, from NightCrew's records:
- * still there (train cars on, ships not undone) or taken off (pulled,
- * undone). Each landed by a --no-ff merge whose second parent is the tip.
+ * This task's earlier tips that were landed and then taken off, from
+ * NightCrew's records: cars pulled from any of the repo's trains (earlier
+ * days too) and ships undone on any branch.
+ */
+async function takenOffLandings(db: Db, repo: Repo, task: Task): Promise<TakenOff[]> {
+  const merges = [
+    ...listTrains(db)
+      .filter((t) => t.repoId === repo.id)
+      .flatMap((t) =>
+        t.cars
+          .filter((c) => c.taskId === task.id && c.state === "pulled" && c.mergeSha)
+          .map((c) => ({ merge: c.mergeSha, branch: t.branch })),
+      ),
+    ...taskRuns(db, task.id)
+      .filter((r) => r.shipSha && r.undoneAt)
+      .map((r) => ({ merge: r.shipSha as string, branch: r.shipBranch ?? "the ship branch" })),
+  ];
+  const out: TakenOff[] = [];
+  for (const m of merges) {
+    const tip = await landedTip(repo.path, m.merge);
+    if (tip) out.push({ tip, ...m });
+  }
+  return out;
+}
+
+/**
+ * This task's earlier landings, read fresh from NightCrew's records (the
+ * landing code calls this inside the repo lock): tips still on this lane
+ * (train cars on, ships not undone) and every tip taken off since.
  */
 async function earlierLandings(
   db: Db,
-  ws: Workspace,
+  repo: Repo,
   task: Task,
-  lane: { train: Train } | { ship: string },
-): Promise<Pick<Approved, "landed" | "takenOff" | "restart">> {
-  const merges: { sha: string; on: boolean }[] =
-    "train" in lane
-      ? lane.train.cars
-          .filter((c) => c.taskId === task.id && c.mergeSha && c.state !== "broke")
-          .map((c) => ({ sha: c.mergeSha, on: c.state === "on" }))
-      : db.query.runs
-          .findMany({ where: (r, { eq }) => eq(r.taskId, task.id) })
-          .sync()
-          .filter((r) => r.shipBranch === lane.ship && r.shipSha)
-          .map((r) => ({ sha: r.shipSha as string, on: !r.undoneAt }));
+  lane: { trainId: string } | { ship: string },
+  restart: string,
+): Promise<Earlier> {
+  const merges =
+    "trainId" in lane
+      ? (getTrain(db, lane.trainId)?.cars ?? [])
+          .filter((c) => c.taskId === task.id && c.state === "on" && c.mergeSha)
+          .map((c) => c.mergeSha)
+      : taskRuns(db, task.id)
+          .filter((r) => r.shipBranch === lane.ship && r.shipSha && !r.undoneAt)
+          .map((r) => r.shipSha as string);
   const landed: string[] = [];
-  const takenOff: string[] = [];
   for (const m of merges) {
-    if (!SHA.test(m.sha)) continue;
-    const tip = await resolveSha(ws.repoPath, `${m.sha}^2`);
-    if (tip) (m.on ? landed : takenOff).push(tip);
+    const tip = await landedTip(repo.path, m);
+    if (tip) landed.push(tip);
   }
-  const fresh = startFreshHint(task.id, { clone: ws.dir, branch: task.branch });
-  return { landed, takenOff, restart: `Start the task fresh: ${fresh}, then run it again.` };
+  return { landed, takenOff: await takenOffLandings(db, repo, task), restart };
 }
 
 /** The repo's ship branch and its train branches: tasks may never move them. */

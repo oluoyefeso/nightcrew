@@ -46,15 +46,23 @@ export async function prInfo(url: string): Promise<PrInfo | null> {
   }
 }
 
-/** Mark a draft ready and squash-merge it. */
-export async function mergePr(url: string): Promise<{ ok: true } | { ok: false; error: string }> {
+/**
+ * The gh args for a squash merge. With `sha`, GitHub merges only if the PR's
+ * head is still that commit, so a branch pushed to after review isn't merged.
+ */
+export function mergeArgs(url: string, sha: string | null): string[] {
+  return ["pr", "merge", url, "--squash", ...(sha ? ["--match-head-commit", sha] : [])];
+}
+
+/** Mark a draft ready and squash-merge it, pinned to `sha` when given. */
+export async function mergePr(url: string, sha: string | null): Promise<{ ok: true } | { ok: false; error: string }> {
   const info = await prInfo(url);
   if (info?.state === "merged") return { ok: true };
   if (info?.state === "draft") {
     const ready = await gh(["pr", "ready", url]);
     if (!ready.ok) return { ok: false, error: ready.stderr || "Could not mark the PR ready." };
   }
-  const merged = await gh(["pr", "merge", url, "--squash"]);
+  const merged = await gh(mergeArgs(url, sha));
   return merged.ok ? { ok: true } : { ok: false, error: merged.stderr || "GitHub refused the merge." };
 }
 

@@ -196,6 +196,17 @@ function hydrate(db: Db, rows: (typeof schema.runs.$inferSelect)[]): Run[] {
     kinds.set(a.runId, [...(kinds.get(a.runId) ?? []), a.kind as ArtifactKind]);
   }
 
+  // A run counts as on its train only while its car is still on (not pulled or broken).
+  const trainIds = [...new Set(rows.map((r) => r.trainId).filter((x): x is string => Boolean(x)))];
+  const carOn = new Set<string>();
+  if (trainIds.length)
+    for (const t of db
+      .select({ cars: schema.trains.cars })
+      .from(schema.trains)
+      .where(inArray(schema.trains.id, trainIds))
+      .all())
+      for (const car of t.cars) if (car.state === "on") carOn.add(car.runId);
+
   return rows.map((r) => {
     const t = lastTriage.get(r.id);
     const triage = t && t.action !== "undo" ? t.action : null;
@@ -217,7 +228,7 @@ function hydrate(db: Db, rows: (typeof schema.runs.$inferSelect)[]): Run[] {
         verdict: r.verdict,
         type: r.type,
         shipped: Boolean(r.shipSha && !r.undoneAt),
-        onTrain: Boolean(r.trainId),
+        onTrain: Boolean(r.trainId) && carOn.has(r.id),
       }),
       source: r.source as RunSource,
       startedAt: r.startedAt,

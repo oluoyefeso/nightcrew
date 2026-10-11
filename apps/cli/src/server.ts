@@ -23,6 +23,7 @@ import { eq } from "drizzle-orm";
 import { type Context, Hono } from "hono";
 import { mergePr } from "./github";
 import { mountMissionRoutes } from "./mission-routes";
+import { mountOperationsRoutes } from "./operations-routes";
 import { mountTaskRoutes } from "./routes";
 import { syncClassic } from "./sync";
 import { mountTrustRoutes } from "./trust-routes";
@@ -148,8 +149,8 @@ export function createApp(opts: ServerOptions) {
     if (task && task.status !== "running") {
       if (action === "send_back") {
         if (note) addNote(db, task.id, "you", note, id);
-        updateTask(db, task.id, { status: "queued", runAt: null });
-      } else if (action === "again") updateTask(db, task.id, { status: "queued", runAt: null });
+        updateTask(db, task.id, { status: "queued", runAt: null, autoRetries: 0, recoveryMode: "rebuild" });
+      } else if (action === "again") updateTask(db, task.id, { status: "queued", runAt: null, autoRetries: 0 });
       else if (action === "close" || action === "merge") updateTask(db, task.id, { status: "archived" });
       else if (action === "undo") updateTask(db, task.id, { status: "done" });
     }
@@ -158,6 +159,7 @@ export function createApp(opts: ServerOptions) {
   });
 
   mountTaskRoutes(app, { db, crew: opts.crew, engine: opts.engine, dataDir: opts.dataDir });
+  mountOperationsRoutes(app, { db, crew: opts.crew, dataDir: opts.dataDir, publish: opts.publish });
   mountMissionRoutes(app, { db, crew: opts.crew });
   mountTrustRoutes(app, { db, publish: opts.publish });
 
@@ -228,7 +230,7 @@ function isLocalHost(host: string): boolean {
   return name !== undefined && LOCAL_HOSTS.has(name.toLowerCase());
 }
 
-export const VERSION = "1.0.0-alpha.5";
+export const VERSION = "1.0.0-alpha.6";
 
 // ── Static dashboard ────────────────────────────────────────────────────────
 // The compiled binary carries the built dashboard (see scripts/embed-web.ts).

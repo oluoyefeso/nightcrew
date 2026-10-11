@@ -19,18 +19,22 @@ import { isAlwaysProtected, matchesAny } from "@nightcrew/core/guard";
 import {
   addCar,
   addRunEvent,
+  auditEvent,
   countRunsForTask,
   createTrain,
   type Db,
+  getCheckpoint,
   getMission,
   getOpenTrain,
   getRepo,
+  getRun,
   getTask,
   getTrain,
   listNotes,
   listTrains,
   markShipped,
   type RunEvent,
+  saveCheckpoint,
   setRunTrain,
   updateTask,
   upsertRuns,
@@ -69,6 +73,7 @@ import {
   researchPrompt,
   reviewPrompt,
 } from "./prompts";
+import { recoveryFingerprint } from "./recovery";
 import { chooseWorkflow, NoReflexes, type Reflexes, scoreConfidence } from "./reflexes";
 import { runCheck } from "./sandbox";
 import { cloneIntact, TAMPERED } from "./sdk-engine";
@@ -132,6 +137,13 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
   const mission = task.missionId ? getMission(db, task.missionId) : null;
   const repo = getRepo(db, task.repoId);
   if (!repo) throw new Error(`Repo for task ${taskId} not found.`);
+  const previousRun = task.lastRunId ? getRun(db, task.lastRunId)?.run : null;
+  const previousCheckpoint =
+    task.recoveryMode === "rebuild" ||
+    (task.recoveryMode !== "verify" && previousRun?.status === "complete" && previousRun.verdict === "ready")
+      ? null
+      : getCheckpoint(db, taskId);
+  const intent = recoveryFingerprint(task, repo, mission, listNotes(db, taskId));
   const startingPolicy = resolvePolicy(repo, task.type);
   let policy = startingPolicy;
 
@@ -171,6 +183,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
           id: runId,
           nightId: nightIdFor(startedAt),
           sessionId: runId,
+          missionId: task.missionId ?? null,
           taskId: task.id,
           title: task.title,
           repo: repo.name,
@@ -250,6 +263,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
 
   updateTask(db, task.id, { status: "running", lastRunId: runId });
   save();
+  auditEvent(db, "crew", "run.started", task.id, runId);
   emit("info", `Started ${task.title} in ${repo.name}`);
   emit("info", `Route: ${policySummary(policy)}`);
 
@@ -290,6 +304,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     save();
     // Archived while it ran: it stays archived.
     if (getTask(db, task.id)?.status !== "archived") updateTask(db, task.id, { status: "done" });
+    auditEvent(db, "crew", `run.${status}`, task.id, runId);
     emit(status === "complete" ? "result" : "error", reason ?? state.summary ?? "Done.");
     return {
       runId,
@@ -419,6 +434,35 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       signal: stop,
     } satisfies Partial<PhaseRequest>;
 
+    const reusable = previousCheckpoint?.fingerprint === intent && previousCheckpoint.sha === startSha;
+    const resumeBuild = reusable && previousCheckpoint.stage === "build";
+    if (task.recoveryMode === "verify" && !resumeBuild)
+      return await finish(
+        "failed",
+        "The saved build no longer matches this task or branch. Choose Rebuild to continue.",
+      );
+    if (reusable && previousCheckpoint.plan) {
+      ctx.plan = previousCheckpoint.plan;
+      artifact("plan", "PLAN.md", ctx.plan);
+    }
+    const checkpoint = async (stage: "plan" | "build") => {
+      assertIntact(worktree);
+      await dropSetupFiles(worktree, setupFiles, { signal: stop, warn });
+      await commitInClone(worktree, `Checkpoint: ${task.title}`, { signal: stop, warn });
+      const sha = await fetchTask(ws, stop);
+      saveCheckpoint(db, {
+        taskId,
+        runId,
+        stage,
+        fingerprint: intent,
+        sha,
+        plan: ctx.plan ?? null,
+        summary: state.summary,
+        at: new Date().toISOString(),
+      });
+      emit("info", `Saved ${stage} checkpoint. Verification and landing rules will be checked again on recovery.`);
+    };
+
     // Research: one phase, a report, no code.
     if (task.type === "research") {
       phase("research", "Researching");
@@ -451,7 +495,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     const workflow = policy.authority === "propose" ? "planned" : await chooseWorkflow(reflexes, task);
     let session: string | undefined;
     let planError: string | null = null;
-    if (workflow === "planned") {
+    if (workflow === "planned" && !ctx.plan && !resumeBuild) {
       // Plan
       phase("plan", "Planning");
       const pp = planPrompt(ctx);
@@ -477,6 +521,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       if (plan.text.trim()) {
         ctx.plan = plan.text;
         artifact("plan", "PLAN.md", plan.text);
+        if (plan.ok) await checkpoint("plan");
         if (!plan.ok) emit("info", `Planning stopped early (${plan.error}), but wrote enough of a plan to build from.`);
       } else {
         // The classic runner learned this the hard way: a failed plan shouldn't sink the task.
@@ -502,33 +547,40 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     // Implement
     ctx.policy = policy;
     if (stop.aborted) return await halt("before building");
-    phase("implement", "Implementing");
-    const ip = implementPrompt(ctx);
-    const impl = await deps.engine.runPhase(
-      {
-        ...base,
-        phase: "implement",
-        prompt: session ? `${ip.prompt}\n\nYou wrote the plan above in this session. Now implement it.` : ip.prompt,
-        systemPrompt: ip.system,
-        model: task.model ?? deps.models.build,
-        maxTokens: buildTokens(),
-        maxTurns: 150,
-        resumeSession: session,
-      },
-      onEngine,
-    );
-    account(impl);
-    session = impl.sessionId ?? session;
-    if (stop.aborted) return await halt("while building");
-    if (!impl.ok) return await finish("failed", impl.error);
-    state.summary = firstSentence(impl.text);
+    if (resumeBuild) {
+      state.summary = previousCheckpoint.summary;
+      emit("info", "Recovered the saved build. Repeating checks, evidence and review without rebuilding.");
+    } else {
+      phase("implement", "Implementing");
+      const ip = implementPrompt(ctx);
+      const impl = await deps.engine.runPhase(
+        {
+          ...base,
+          phase: "implement",
+          prompt: session ? `${ip.prompt}\n\nYou wrote the plan above in this session. Now implement it.` : ip.prompt,
+          systemPrompt: ip.system,
+          model: task.model ?? deps.models.build,
+          maxTokens: buildTokens(),
+          maxTurns: 150,
+          resumeSession: session,
+        },
+        onEngine,
+      );
+      account(impl);
+      session = impl.sessionId ?? session;
+      if (stop.aborted) return await halt("while building");
+      if (!impl.ok) return await finish("failed", impl.error);
+      state.summary = firstSentence(impl.text);
+
+      await checkpoint("build");
+    }
 
     // Validate, with one repair attempt
     phase("validate", "Checking the work");
     let check = await validate(worktree, task, repo, setupFiles, stop, forkSha, warn);
     artifact("tests", "Checks", check.log);
     if (stop.aborted) return await halt("while checking the work");
-    if (!check.ok) {
+    if (!check.ok && task.recoveryMode !== "verify") {
       emit("info", `Checks failed: ${check.reason}. Trying one repair.`);
       phase("repair", "Repairing");
       const rp = repairPrompt(ctx, check.log);
@@ -546,6 +598,8 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         onEngine,
       );
       account(fix);
+      if (!fix.ok)
+        return await finish("failed", fix.error ?? "The repair failed; review the saved work before retrying.");
       if (stop.aborted) return await halt("while repairing");
       phase("validate", "Checking the repair");
       check = await validate(worktree, task, repo, setupFiles, stop, forkSha, warn);
@@ -597,6 +651,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         model: deps.models.review,
         maxTokens: remainingTokens(),
         maxTurns: 60,
+        guard: { ...base.guard, readOnly: task.recoveryMode === "verify" },
         outputSchema: REVIEW_SCHEMA as unknown as Record<string, unknown>,
       },
       onEngine,
@@ -616,6 +671,47 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       state.verdict = "needs_eyes";
       artifact("review", "REVIEW.md", review.text || `The review didn't finish: ${review.error ?? "unknown error"}`);
     }
+    let reviewsCompleted = 1;
+    let allReviewsReady = state.verdict === "ready";
+    while (reviewsCompleted < (policy.reviewers ?? 1)) {
+      if (stop.aborted) return await halt("during independent review");
+      if (used() >= task.tokenBudget)
+        return await finish(
+          "failed",
+          "The token limit was reached before all required reviews completed. Increase the task cap or retry verification.",
+        );
+      phase("review", `Independent review ${reviewsCompleted + 1} of ${policy.reviewers}`);
+      const extra = await deps.engine.runPhase(
+        {
+          ...base,
+          phase: "review",
+          prompt: `${rv.prompt}\n\nIndependent review ${reviewsCompleted + 1}: form your own judgement from the code and evidence. Do not edit files.`,
+          systemPrompt: rv.system,
+          model: deps.models.review,
+          maxTokens: remainingTokens(),
+          maxTurns: 60,
+          guard: { ...base.guard, readOnly: true },
+          outputSchema: REVIEW_SCHEMA as unknown as Record<string, unknown>,
+        },
+        onEngine,
+      );
+      account(extra);
+      const result = extra.ok ? normalizeReview(extra.structured) : null;
+      if (
+        result?.verdict !== "ready" ||
+        task.criteria.some((c) => !result.criteria.some((r) => r.criterion === c && r.met))
+      )
+        allReviewsReady = false;
+      const previous = artifacts.get("review")?.content ?? "";
+      artifact(
+        "review",
+        "REVIEW.md",
+        `${previous}\n\n---\n\n## Independent review ${reviewsCompleted + 1}\n${result ? renderReview(result) : extra.text || extra.error || "Review did not complete."}`,
+      );
+      reviewsCompleted++;
+      live();
+    }
+    if (!allReviewsReady) state.verdict = "needs_eyes";
     // The reviewer may have fixed small things; checks must still pass.
     const recheck = await validate(worktree, task, repo, setupFiles, stop, forkSha, warn);
     if (stop.aborted) return await halt("while rechecking after review");
@@ -691,6 +787,8 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       const current = live();
       if (!current) return gone;
       const reasons = missingPolicyEvidence(policy, evidence, Boolean((task.testCommand ?? repo.testCommand)?.trim()));
+      if (reviewsCompleted < (policy.reviewers ?? 1))
+        reasons.push("The route requires additional independent reviews. Retry verification before landing.");
       if (policy.authority === "propose")
         reasons.push("The route now stops at a plan; this run's work is held locally for your review.");
       const asks = whole.filter((file) => matchesAny(file, current.repo.alwaysAsk));

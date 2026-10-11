@@ -77,6 +77,7 @@ export function CommandBar() {
       { id: "agents", label: "Agents", group: "Go to", run: go("/agents") },
       { id: "missions", label: "Missions and objectives", group: "Go to", run: go("/missions") },
       { id: "later", label: "Later", group: "Go to", run: go("/later") },
+      { id: "operations", label: "Delivery, reliability and activity", group: "Go to", run: go("/operations") },
       { id: "settings", label: "Settings and repos", group: "Go to", run: go("/settings") },
       {
         id: "theme",

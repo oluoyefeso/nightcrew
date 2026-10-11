@@ -439,14 +439,14 @@ function Site() {
               rest="See what is moving, what is held and what needs your judgement."
             />
             <p className="max-w-[700px] text-[15px] text-muted leading-relaxed">
-              Missions connect work across repos. Pause new starts for a whole mission while active agents finish.
-              Departure checks and decision briefs keep the next action visible, from setup to review.
+              Missions connect work across repos with shared acceptance criteria, priorities and token limits. Recover
+              saved work, verify the combined result, and follow delivery under the authority you choose.
             </p>
           </Reveal>
           <StationExample />
           <p className="text-[13px] text-muted">
-            Available in the local open-source runner. Mission context does not expand a task's scope or its
-            repository's merge authority.
+            Available in the local open-source runner. Verification templates support up to three independent reviews.
+            Merge authority and delivery authority are configured separately; managed mode remains coming soon.
           </p>
         </section>
 

@@ -62,7 +62,7 @@ export async function draftTasks(
     repos: Repo[];
     defaultRepoId?: string;
     model: string;
-    mission?: Pick<Mission, "title" | "objective"> | null;
+    mission?: (Pick<Mission, "title" | "objective"> & Partial<Pick<Mission, "criteria">>) | null;
   },
 ): Promise<{ drafts: DraftTask[]; costUsd: number; fallback: boolean }> {
   const { repos } = input;
@@ -91,7 +91,7 @@ export async function draftTasks(
       model: input.model,
       systemPrompt:
         "You turn a developer's request into well-scoped tasks for a coding crew that works unattended. Split unrelated work into separate tasks; keep one coherent change as one task. Never invent requirements.",
-      prompt: `Repos and their files:\n\n${context}\n\n---\n\n${input.mission ? `Shared mission context (scope comes from the request):\n${input.mission.title}\n${input.mission.objective}\n\n` : ""}The request:\n\n${input.text}`,
+      prompt: `Repos and their files:\n\n${context}\n\n---\n\n${input.mission ? `Shared mission context (scope comes from the request):\n${input.mission.title}\n${input.mission.objective}\nMission acceptance criteria:\n${(input.mission.criteria ?? []).map((c) => `- ${c}`).join("\n")}\nPropose a complete task breakdown with prerequisites and a final integration check. Keep drafts reviewable before dispatch.\n\n` : ""}The request:\n\n${input.text}`,
       guard: { worktree: "/nonexistent", writableDirs: [], scope: [], protectedBranches: [], readOnly: true },
       maxTokens: 200_000,
       maxTurns: 3,

@@ -602,7 +602,7 @@ describe("stopping", () => {
     expect(engine.calls.map((c) => c.phase)).toEqual(["plan", "implement"]);
     // The work is kept as WIP on the branch, not committed as finished.
     const wt = workspaceDir(join(dir, "data"), task.repoId, task.id);
-    expect((await git(wt, "log", "-1", "--format=%s")).stdout).toContain("WIP: Add the feature");
+    expect((await git(wt, "log", "-1", "--format=%s")).stdout).toContain("Checkpoint: Add the feature");
   });
 
   test("a task past its time limit ends as out of time, with its work saved", async () => {
@@ -923,11 +923,11 @@ describe("task clones", () => {
     const halted = await runTask(deps(first), task.id, stop.signal);
     expect(halted.status).toBe("timeout");
     const wip = (await git(repoPath, "log", "-1", "--format=%s", `refs/nightcrew/wip/${task.id}`)).stdout;
-    expect(wip).toContain("WIP: Add the feature");
+    expect(wip).toContain("Checkpoint: Add the feature");
     // Unchecked work never becomes the task's result.
     expect((await git(repoPath, "rev-parse", "--verify", "--quiet", `refs/nightcrew/tasks/${task.id}`)).ok).toBe(false);
 
-    updateTask(db, task.id, { status: "queued", testCommand: "test -f src/feature.ts" });
+    updateTask(db, task.id, { status: "queued", testCommand: "test -f src/feature.ts", recoveryMode: "rebuild" });
     const again = new ScriptedEngine({
       implement: (req) => {
         expect(readFileSync(join(req.cwd, "src", "feature.ts"), "utf8")).toBe("half\n");
@@ -1210,4 +1210,95 @@ esac
       process.env.PATH = path;
     }
   }, 30_000);
+});
+
+describe("phase recovery", () => {
+  test("a failed build resumes a completed plan without another planner call", async () => {
+    const task = setupTask();
+    const first = new ScriptedEngine({
+      plan: () => ({ text: "Build the feature." }),
+      implement: () => ({ ok: false, error: "Temporary build failure." }),
+    });
+    expect((await runTask(deps(first), task.id, new AbortController().signal)).status).toBe("failed");
+    const second = new ScriptedEngine({
+      implement: (req) => {
+        expect(req.prompt).toContain("Build the feature.");
+        writeFileSync(join(req.cwd, "src/feature.ts"), "ready\n");
+        return { text: "Ready." };
+      },
+      review: () => ({ structured: READY }),
+    });
+    expect((await runTask(deps(second), task.id, new AbortController().signal)).status).toBe("complete");
+    expect(second.calls.map((c) => c.phase)).toEqual(["implement", "review"]);
+  });
+
+  test("verify mode reruns evidence and read-only review, without rebuilding or repairing", async () => {
+    const task = setupTask({ testCommand: "false" });
+    const first = new ScriptedEngine({
+      implement: (req) => {
+        writeFileSync(join(req.cwd, "src/feature.ts"), "ready\n");
+        return { text: "Ready." };
+      },
+    });
+    expect((await runTask(deps(first), task.id, new AbortController().signal)).status).toBe("failed");
+    updateTask(db, task.id, { recoveryMode: "verify", testCommand: "test -f src/feature.ts" });
+    const second = new ScriptedEngine({
+      review: (req) => {
+        expect(req.guard.readOnly).toBe(true);
+        return { structured: READY };
+      },
+    });
+    expect((await runTask(deps(second), task.id, new AbortController().signal)).status).toBe("complete");
+    expect(second.calls.map((c) => c.phase)).toEqual(["review"]);
+    updateTask(db, task.id, { testCommand: "false" });
+    const third = new ScriptedEngine({});
+    expect((await runTask(deps(third), task.id, new AbortController().signal)).status).toBe("failed");
+    expect(third.calls).toHaveLength(0);
+  });
+
+  test("changed intent cannot reuse a saved build for verification", async () => {
+    const task = setupTask({ testCommand: "false" });
+    await runTask(
+      deps(
+        new ScriptedEngine({
+          implement: (req) => {
+            writeFileSync(join(req.cwd, "src/feature.ts"), "ready\n");
+            return { text: "Ready." };
+          },
+        }),
+      ),
+      task.id,
+      new AbortController().signal,
+    );
+    updateTask(db, task.id, { recoveryMode: "verify", brief: "A different requested behavior." });
+    const second = new ScriptedEngine({});
+    const out = await runTask(deps(second), task.id, new AbortController().signal);
+    expect(out.reason).toContain("no longer matches");
+    expect(second.calls).toHaveLength(0);
+  });
+});
+
+test("every configured independent reviewer must approve before a train can board", async () => {
+  const task = setupTask();
+  updateRepo(db, task.repoId, {
+    level: "train",
+    policies: { implementation: { ...DEFAULT_TASK_POLICY, reviewers: 2 } },
+  });
+  let reviews = 0;
+  const engine = new ScriptedEngine({
+    implement: (req) => {
+      writeFileSync(join(req.cwd, "src/feature.ts"), "ready\n");
+      return { text: "Ready." };
+    },
+    review: (req) => {
+      reviews++;
+      if (reviews === 2) expect(req.guard.readOnly).toBe(true);
+      return { structured: { ...READY, verdict: reviews === 1 ? "ready" : "needs_eyes" } };
+    },
+  });
+  const out = await runTask(deps(engine), task.id, new AbortController().signal);
+  expect(out.status).toBe("complete");
+  expect(reviews).toBe(2);
+  expect(getRun(db, out.runId)?.run.verdict).toBe("needs_eyes");
+  expect(getRun(db, out.runId)?.run.trainId).toBeNull();
 });

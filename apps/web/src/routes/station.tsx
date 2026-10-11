@@ -83,6 +83,9 @@ export function StationPage({ runId }: { runId?: string }) {
               Set the direction, inspect the evidence, and decide how far your crew can go.
             </p>
             <CrewSummary />
+            <Link to="/operations" className="text-[13px] text-dawn">
+              Delivery, setup & activity →
+            </Link>
           </header>
 
           {station.error && (

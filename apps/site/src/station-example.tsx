@@ -1,7 +1,7 @@
 import { clsx } from "clsx";
 import { useState } from "react";
 
-const VIEWS = ["Mission", "Departure checks", "Decision brief"] as const;
+const VIEWS = ["Mission", "Departure checks", "Decision brief", "Recovery", "Acceptance", "Delivery"] as const;
 
 /** Synthetic product example. Controls change this illustration only. */
 export function StationExample() {
@@ -91,6 +91,9 @@ export function StationExample() {
                 </div>
               ))}
             </div>
+            <p className="text-[12px] text-muted">
+              Priority: High · Mission limit: 5M tokens · Acceptance: not yet verified
+            </p>
             <p className="text-[12px] text-muted" aria-live="polite">
               {paused
                 ? "New starts are held. The agent already working continues under its repository rules."
@@ -124,7 +127,7 @@ export function StationExample() {
               Checks inspect configuration. Scope overlap warnings are advisory; verification still runs with the task.
             </p>
           </>
-        ) : (
+        ) : view === "Decision brief" ? (
           <>
             <span className="font-mono text-[11px] text-dawn">WHEN THE CREW NEEDS YOU</span>
             <h3 className="text-[24px] font-medium tracking-[-0.025em]">A reason, evidence and a next step.</h3>
@@ -144,6 +147,69 @@ export function StationExample() {
             </div>
             <p className="text-[12px] text-muted">
               Retry uses saved work where available and reruns verification under current rules.
+            </p>
+          </>
+        ) : view === "Recovery" ? (
+          <>
+            <span className="font-mono text-[11px] text-dawn">PICK UP THE SAVED WORK</span>
+            <h3 className="text-[24px] font-medium tracking-[-0.025em]">Retry the check. Keep the build.</h3>
+            <div className="grid gap-3 rounded-xl bg-raised/60 p-5 text-[14px]">
+              <b className="font-medium">Build checkpoint saved</b>
+              <p className="text-muted">
+                The verification command timed out. Resume from compatible saved work, verify without agent edits, or
+                rebuild when the approach needs to change.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {["Resume", "Verify saved build", "Rebuild"].map((label) => (
+                  <span key={label} className="rounded-full px-3 py-1 text-[12px] ring-1 ring-line">
+                    {label}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <p className="text-[12px] text-muted">
+              Checkpoint reuse requires matching task intent and commit. Automatic retries are bounded; evidence and
+              authority are checked again.
+            </p>
+          </>
+        ) : view === "Acceptance" ? (
+          <>
+            <span className="font-mono text-[11px] text-dawn">VERIFY THE OBJECTIVE</span>
+            <h3 className="text-[24px] font-medium tracking-[-0.025em]">Finished tasks. A verified result.</h3>
+            <div className="grid gap-3 rounded-xl bg-raised/60 p-5 text-[14px]">
+              <b className="font-medium">Mission acceptance criteria</b>
+              <p>✓ A new user can create a workspace.</p>
+              <p>✓ Duplicate invitations give a clear response.</p>
+              <p className="text-dawn">Next: record your evidence and run combined tests on the pinned branches.</p>
+            </div>
+            <p className="text-[12px] text-muted">
+              Acceptance combines your criterion evidence with passing checks. Objective, task or branch changes make
+              the previous acceptance outdated.
+            </p>
+          </>
+        ) : (
+          <>
+            <span className="font-mono text-[11px] text-dawn">FOLLOW THE DELIVERY</span>
+            <h3 className="text-[24px] font-medium tracking-[-0.025em]">Check. Deploy. Release.</h3>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {[
+                ["Check", "Passed on the pinned commit"],
+                ["Deploy", "Waiting for your action"],
+                ["Release", "Requires successful deployment"],
+              ].map(([stage, state]) => (
+                <div key={stage} className="grid gap-2 rounded-xl bg-raised/60 p-4">
+                  <b className="text-[14px] font-medium">{stage}</b>
+                  <p className="text-[13px] text-muted">{state}</p>
+                </div>
+              ))}
+            </div>
+            <p className="text-[13px] text-muted">
+              Configure your own commands and choose how far the crew can proceed automatically. Manual control is the
+              default. Failed or interrupted delivery waits for you.
+            </p>
+            <p className="text-[12px] text-muted">
+              Operations keeps delivery records, recent reliability trends and the history of actions and policy
+              changes.
             </p>
           </>
         )}

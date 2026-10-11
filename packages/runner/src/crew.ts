@@ -28,6 +28,7 @@ import {
   type Task,
 } from "@nightcrew/core";
 import {
+  auditEvent,
   type Db,
   getMission,
   getRepo,
@@ -35,16 +36,20 @@ import {
   getSettings,
   getTask,
   getTrain,
+  interruptRun,
   listRepos,
   listTasks,
   listTrains,
+  missionTokens,
   type RunEvent,
+  recoverDeliveries,
   tokensOnDay,
   updateTask,
   updateTrain,
 } from "@nightcrew/db";
 import type { AgentEngine } from "./engine";
 import { publishTrain } from "./landing";
+import { automaticDelivery, stopOperations } from "./operations";
 import { runTask, type TaskOutcome } from "./pipeline";
 import { classifyFailure, NoReflexes, type Reflexes } from "./reflexes";
 import { materializeRoutines } from "./routines";
@@ -96,7 +101,6 @@ export class Crew {
   private timer: ReturnType<typeof setInterval> | null = null;
   private pausedUntil = 0;
   private rateLimitStrikes = 0;
-  private retriedToday = new Map<string, string>();
   private message: string | null = null;
   private pumping = false;
   private halted = false;
@@ -117,8 +121,21 @@ export class Crew {
    * would steal tasks a live dispatcher is running.
    */
   recover(): number {
+    recoverDeliveries(this.deps.db);
     const orphans = listTasks(this.deps.db, ["running"]);
-    for (const t of orphans) updateTask(this.deps.db, t.id, { status: "queued" });
+    for (const t of orphans) {
+      const retries = t.autoRetries ?? 0;
+      if (t.lastRunId)
+        interruptRun(
+          this.deps.db,
+          t.lastRunId,
+          retries < 2
+            ? "Runner interrupted. Recovery queued from the last compatible checkpoint."
+            : "Recovery limit reached after repeated interruptions. Review the saved work and resume explicitly.",
+        );
+      updateTask(this.deps.db, t.id, { status: retries < 2 ? "queued" : "done", autoRetries: retries + 1 });
+      auditEvent(this.deps.db, "crew", retries < 2 ? "recovery.queued" : "recovery.exhausted", t.id);
+    }
     return orphans.length;
   }
 
@@ -164,7 +181,7 @@ export class Crew {
     const byId = new Map(all.map((t) => [t.id, t]));
     const now = Date.now();
     const used = tokensOnDay(db, nightIdFor(new Date(now).toISOString())) + this.inFlightBudget();
-    return all
+    return this.prioritized(all)
       .filter((t) => t.status === "queued")
       .map((task): QueueEntry => {
         const entry = { taskId: task.id, title: task.title, repoName: task.repoName, runAt: task.runAt };
@@ -173,6 +190,8 @@ export class Crew {
         const mission = task.missionId ? getMission(db, task.missionId) : null;
         if (mission?.paused)
           return { ...entry, kind: "paused", reason: `Mission paused: ${mission.title}. Resume it from Missions.` };
+        const missionHold = this.missionHold(task);
+        if (missionHold) return { ...entry, kind: "budget", reason: missionHold };
         const waiting = task.dependsOn.filter((id) => !byId.has(id) || !this.satisfied(byId.get(id) as Task));
         if (waiting.length)
           return {
@@ -201,7 +220,11 @@ export class Crew {
           return { ...entry, kind: "capacity", reason: "Waiting for an agent slot in this repo." };
         if (this.running.size >= settings.maxAgents)
           return { ...entry, kind: "capacity", reason: "Waiting for an agent slot across the crew." };
-        return { ...entry, kind: "ready", reason: "Ready for dispatch, in queue order." };
+        return {
+          ...entry,
+          kind: "ready",
+          reason: `Ready by mission priority, start deadline, then queue order${mission ? ` (priority ${mission.priority})` : ""}.`,
+        };
       });
   }
 
@@ -252,6 +275,27 @@ export class Crew {
             target: "mission",
             missionId: mission.id,
           });
+        if (mission) {
+          const held = this.missionHold(task);
+          if (held)
+            check.signals.push({
+              code: "mission-limit",
+              kind: "wait",
+              message: held,
+              target: "mission",
+              missionId: mission.id,
+            });
+          const requested = candidates.filter((t) => t.missionId === mission.id).reduce((n, t) => n + t.tokenBudget, 0);
+          if (mission.tokenBudget !== null && requested > this.missionAvailable(mission.id, mission.tokenBudget))
+            check.signals.push({
+              code: "mission-batch-budget",
+              kind: "notice",
+              message:
+                "This batch's combined caps exceed the mission's available tokens. Later tasks may wait for budget.",
+              target: "mission",
+              missionId: mission.id,
+            });
+        }
         const add = (
           code: string,
           kind: "hold" | "wait" | "notice",
@@ -334,7 +378,13 @@ export class Crew {
 
   /** Start the dispatcher: check for work now and every few seconds. */
   startSchedule() {
-    this.timer ??= setInterval(() => void this.pump(), TICK_MS);
+    this.timer ??= setInterval(() => {
+      void this.pump();
+      if (this.deps.publish && getSettings(this.deps.db).dispatch && !this.halted)
+        for (const repo of listRepos(this.deps.db))
+          if (![...this.running.values()].some((r) => r.agent.repoId === repo.id))
+            void automaticDelivery(this.deps.db, repo.id, this.deps.dataDir).catch(() => {});
+    }, TICK_MS);
     void this.pump();
   }
 
@@ -373,7 +423,8 @@ export class Crew {
         const used = tokensOnDay(db, nightIdFor(new Date().toISOString())) + this.inFlightBudget();
         if (used + next.tokenBudget > s.dailyTokenBudget) {
           holdNote = `Holding "${next.title}": it could take today past the ${formatTokens(s.dailyTokenBudget)}-token budget.`;
-          break;
+          tooBig.add(next.id);
+          continue;
         }
         this.launch(next.id);
       }
@@ -392,10 +443,11 @@ export class Crew {
     const now = Date.now();
     const perRepo = new Map<string, number>();
     for (const r of this.running.values()) perRepo.set(r.agent.repoId, (perRepo.get(r.agent.repoId) ?? 0) + 1);
-    for (const id of planQueue(all).order) {
+    for (const id of planQueue(this.prioritized(all).map((task, position) => ({ ...task, position }))).order) {
       const t = byId.get(id);
       if (!t || this.running.has(id) || skip.has(id)) continue;
       if (t.missionId && getMission(db, t.missionId)?.paused) continue;
+      if (this.missionHold(t)) continue;
       if (departureChecks(t, getRepo(db, t.repoId)).signals.some((s) => s.kind === "hold")) continue;
       if (t.runAt && new Date(t.runAt).getTime() > now) continue;
       // Dependencies must have finished and succeeded, not just started or stopped.
@@ -426,6 +478,39 @@ export class Crew {
     if (run.prUrl || (run.shipSha && !run.undoneAt)) return true;
     if (!run.trainId) return false;
     return getTrain(db, run.trainId)?.cars.some((c) => c.runId === run.id && c.state === "on") ?? false;
+  }
+
+  private prioritized(tasks: Task[]): Task[] {
+    return [...tasks].sort((a, b) => {
+      const am = a.missionId ? getMission(this.deps.db, a.missionId) : null;
+      const bm = b.missionId ? getMission(this.deps.db, b.missionId) : null;
+      return (
+        (bm?.priority ?? 0) - (am?.priority ?? 0) ||
+        (am?.deadline ? Date.parse(am.deadline) : Infinity) - (bm?.deadline ? Date.parse(bm.deadline) : Infinity) ||
+        a.position - b.position
+      );
+    });
+  }
+
+  private missionAvailable(id: string, budget: number): number {
+    let reserved = 0;
+    for (const task of listTasks(this.deps.db, ["running"])) {
+      if (task.missionId !== id) continue;
+      const run = task.lastRunId ? getRun(this.deps.db, task.lastRunId)?.run : null;
+      const used = run?.status === "running" ? run.tokensIn + run.tokensOut : 0;
+      reserved += Math.max(0, task.tokenBudget - used);
+    }
+    return Math.max(0, budget - missionTokens(this.deps.db, id) - reserved);
+  }
+
+  private missionHold(task: DepartureTask): string | null {
+    const mission = task.missionId ? getMission(this.deps.db, task.missionId) : null;
+    if (!mission) return null;
+    if (mission.deadline && Date.parse(mission.deadline) <= Date.now())
+      return "The mission's start deadline has passed. Extend it to dispatch more work.";
+    if (mission.tokenBudget !== null && task.tokenBudget > this.missionAvailable(mission.id, mission.tokenBudget))
+      return "Mission budget has insufficient room after recorded usage and running reservations. Raise its limit or lower this task's cap.";
+    return null;
   }
 
   private inFlightBudget(): number {
@@ -475,11 +560,14 @@ export class Crew {
       .catch((e) => {
         // A crash must not strand the task in "running". It waits a while
         // before the next try so a task that always crashes can't spin.
-        const requeued = getTask(db, taskId)?.status === "running";
+        const current = getTask(db, taskId);
+        const requeued = current?.status === "running" && (current.autoRetries ?? 0) < 2;
         if (requeued) {
           const runAt = new Date(Date.now() + CRASH_RETRY_MS).toISOString();
-          updateTask(db, taskId, { status: "queued", runAt });
+          updateTask(db, taskId, { status: "queued", runAt, autoRetries: (current?.autoRetries ?? 0) + 1 });
         }
+        if (!requeued && current?.status === "running") updateTask(db, taskId, { status: "done" });
+        auditEvent(db, "crew", requeued ? "recovery.queued" : "recovery.exhausted", taskId);
         // Only the dashboard keeps a schedule running; `nightcrew run` exits once drained.
         const next = !requeued
           ? ""
@@ -514,10 +602,12 @@ export class Crew {
 
     this.emit({ type: "report", outcome: { ...outcome, title, taskId } });
 
-    if (outcome.rateLimited) {
+    const retries = getTask(db, taskId)?.autoRetries ?? 0;
+    if (outcome.rateLimited && retries < 2) {
       // Rate limited: put it back and pause dispatch for a while.
       const wait = RATE_LIMIT_WAITS_MS[Math.min(this.rateLimitStrikes++, RATE_LIMIT_WAITS_MS.length - 1)] as number;
-      updateTask(db, taskId, { status: "queued" });
+      updateTask(db, taskId, { status: "queued", autoRetries: retries + 1 });
+      auditEvent(db, "crew", "recovery.rate_limit", taskId);
       this.pausedUntil = Date.now() + wait;
       this.message = `Rate limited. Agents resume in ${wait / 60_000} minutes.`;
       setTimeout(() => void this.pump(), wait + 500);
@@ -526,16 +616,15 @@ export class Crew {
     this.rateLimitStrikes = 0;
 
     if (outcome.status === "failed" && outcome.reason) {
-      const today = nightIdFor(new Date().toISOString());
-      if (this.retriedToday.get(taskId) !== today) {
+      if (retries < 1) {
         const kind = await classifyFailure(
           this.deps.reflexes ?? new NoReflexes(),
           outcome.reason,
           outcome.log ?? outcome.reason,
         );
         if (kind === "flaky") {
-          this.retriedToday.set(taskId, today);
-          updateTask(db, taskId, { status: "queued" });
+          updateTask(db, taskId, { status: "queued", autoRetries: retries + 1 });
+          auditEvent(db, "crew", "recovery.flaky", taskId);
           this.message = `"${title}" looked like a flaky failure, so it gets one more try.`;
         }
       }
@@ -585,6 +674,7 @@ export class Crew {
     this.halted = true;
     this.stopSchedule();
     this.stopAll();
+    stopOperations(this.deps.db);
   }
 
   /** Resolves when no agent is working and nothing runnable is left (for `nightcrew run` and tests). */
@@ -594,6 +684,10 @@ export class Crew {
       await Promise.race([...this.running.values()].map((r) => r.done));
       await this.pump();
     }
+    if (this.deps.publish && getSettings(this.deps.db).dispatch && !this.halted)
+      for (const repo of listRepos(this.deps.db))
+        for (let stage = 0; stage < 3 && !this.halted; stage++)
+          await automaticDelivery(this.deps.db, repo.id, this.deps.dataDir).catch(() => {});
   }
 
   private emitStatus() {

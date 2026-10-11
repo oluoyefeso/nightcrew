@@ -1,6 +1,7 @@
 import { type Mission, type MissionSummary, needsDecision } from "@nightcrew/core";
-import { asc, eq, sql } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { type Db, getRunSummaries } from "./index";
+import { missionTokens } from "./operations";
 import * as schema from "./schema";
 import { listTasks } from "./tasks";
 
@@ -15,6 +16,10 @@ export function createMission(db: Db, input: Pick<Mission, "title" | "objective"
     title: input.title.trim(),
     objective: input.objective.trim(),
     paused: false,
+    criteria: [],
+    tokenBudget: null,
+    priority: 0,
+    deadline: null,
     createdAt: at,
     updatedAt: at,
   };
@@ -22,7 +27,13 @@ export function createMission(db: Db, input: Pick<Mission, "title" | "objective"
   return mission;
 }
 
-export function updateMission(db: Db, id: string, patch: Partial<Pick<Mission, "title" | "objective" | "paused">>) {
+export function updateMission(
+  db: Db,
+  id: string,
+  patch: Partial<
+    Pick<Mission, "title" | "objective" | "paused" | "criteria" | "tokenBudget" | "priority" | "deadline">
+  >,
+) {
   db.update(schema.missions)
     .set({ ...patch, updatedAt: new Date().toISOString() })
     .where(eq(schema.missions.id, id))
@@ -41,19 +52,6 @@ export function listMissions(db: Db): MissionSummary[] {
     tasks
       .filter((task) => task.missionId && task.status === "done")
       .flatMap((task) => (task.lastRunId ? [task.lastRunId] : [])),
-  );
-  const totals = new Map(
-    db
-      .select({
-        missionId: schema.tasks.missionId,
-        tokens: sql<number>`coalesce(sum(${schema.runs.tokensIn} + ${schema.runs.tokensOut}), 0)`,
-      })
-      .from(schema.tasks)
-      .innerJoin(schema.runs, eq(schema.tasks.id, schema.runs.taskId))
-      .where(eq(schema.runs.source, "local"))
-      .groupBy(schema.tasks.missionId)
-      .all()
-      .map((row) => [row.missionId, row.tokens]),
   );
   return db
     .select()
@@ -83,7 +81,7 @@ export function listMissions(db: Db): MissionSummary[] {
       return {
         ...mission,
         counts,
-        tokensUsed: totals.get(mission.id) ?? 0,
+        tokensUsed: missionTokens(db, mission.id),
         taskCaps: members
           .filter((task) => task.status === "queued" || task.status === "running")
           .reduce((sum, task) => sum + task.tokenBudget, 0),

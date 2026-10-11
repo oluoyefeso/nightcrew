@@ -51,6 +51,7 @@ export interface Repo {
   alwaysAsk: string[];
   /** Per-type limits and extra verification. Missing on older integrations means inherit. */
   policies?: TaskPolicies;
+  delivery?: import("./operations").DeliveryPolicy;
 }
 
 export type Workflow = "auto" | "quick" | "planned";
@@ -94,6 +95,8 @@ export interface Routine {
 export interface Task {
   id: string;
   missionId?: string | null;
+  recoveryMode?: "auto" | "verify" | "rebuild";
+  autoRetries?: number;
   repoId: string;
   repoName: string;
   title: string;

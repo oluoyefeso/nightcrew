@@ -2,6 +2,7 @@ export * from "./departure";
 export * from "./intervention";
 export * from "./missions";
 export * from "./model";
+export * from "./operations";
 export * from "./policy";
 export * from "./report";
 export * from "./station";

@@ -1,6 +1,7 @@
 import {
   type AutonomyLevel,
   branchFor,
+  DEFAULT_DELIVERY,
   DEFAULT_SETTINGS,
   DEFAULT_TASK_MINUTES,
   DEFAULT_TASK_TOKENS,
@@ -13,6 +14,7 @@ import {
 } from "@nightcrew/core";
 import { and, asc, eq, gt, inArray, max, sql } from "drizzle-orm";
 import type { Db } from "./index";
+import { auditEvent } from "./operations";
 import * as schema from "./schema";
 
 const now = () => new Date().toISOString();
@@ -66,6 +68,7 @@ export function addRepo(
     allowShip: [],
     alwaysAsk: [],
     policies: {},
+    delivery: DEFAULT_DELIVERY,
   };
   db.insert(schema.repos).values(row).run();
   return toRepo(row);
@@ -90,12 +93,14 @@ export function updateRepo(
       | "allowShip"
       | "alwaysAsk"
       | "policies"
+      | "delivery"
     >
   >,
 ): Repo | null {
   // Drizzle refuses an update with nothing to set.
   if (Object.values(patch).some((v) => v !== undefined))
     db.update(schema.repos).set(patch).where(eq(schema.repos.id, id)).run();
+  auditEvent(db, "you", "repo.updated", id, Object.keys(patch).join(", "));
   return getRepo(db, id);
 }
 
@@ -168,6 +173,8 @@ export function createTask(db: Db, input: NewTask): Task {
 export type TaskPatch = Partial<
   Pick<
     Task,
+    | "recoveryMode"
+    | "autoRetries"
     | "title"
     | "missionId"
     | "brief"
@@ -242,6 +249,7 @@ function toTask(r: { task: typeof schema.tasks.$inferSelect; repoName: string })
     status: r.task.status as TaskStatus,
     source: r.task.source as Task["source"],
     workflow: r.task.workflow as Task["workflow"],
+    recoveryMode: r.task.recoveryMode as Task["recoveryMode"],
   };
 }
 

@@ -322,6 +322,8 @@ export function useInvalidateTasks() {
   return () => {
     qc.invalidateQueries({ queryKey: ["tasks"] });
     qc.invalidateQueries({ queryKey: ["missions"] });
+    qc.invalidateQueries({ queryKey: ["acceptance"] });
+    qc.invalidateQueries({ queryKey: ["operations"] });
     qc.invalidateQueries({ queryKey: ["task"] });
     qc.invalidateQueries({ queryKey: ["queue"] });
     qc.invalidateQueries({ queryKey: ["preflight"] });

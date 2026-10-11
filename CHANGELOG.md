@@ -2,6 +2,28 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.6] - 2026-10-11
+
+Recover saved work, verify mission outcomes, and supervise delivery from the conductor's station.
+
+### Added
+- **Phase recovery.** Saved plan/build checkpoints, Resume, Verify saved build, and Rebuild controls. Compatible recovery avoids repeated agent work while rerunning checks, evidence and authority gates. Automatic retry limits survive restarts.
+- **Mission acceptance.** Objective-level criteria, evidence notes and combined tests on pinned local branches. Acceptance expires when the objective, member work, branch heads or verification configuration changes.
+- **Mission dispatch controls.** Optional token limits, priorities and start deadlines. Spent tokens stay charged to their dispatch mission when tasks move or are deleted.
+- **Verification templates.** Save and preview reusable task routes, with one to three independent review sessions. Every reviewer must approve; repository autonomy remains the ceiling.
+- **Delivery supervision.** Configure check, deploy and release commands, with manual defaults and explicit automatic stage authority. Commands run against an isolated, pinned commit. Changed settings or commits hold later stages; failed/interrupted actions require inspection.
+- **Operations.** Repository setup guidance, delivery records, bounded reliability trends, and local action/policy history that excludes credential values.
+- **Landing walkthrough.** Synthetic recovery, acceptance and delivery examples alongside Missions, departure checks and decision briefs.
+
+### Upgrade and limits
+- Existing tasks and repositories retain their routes. Delivery starts manual and unconfigured. SQLite migrations are embedded in the binary.
+- Historical local spend is attributed to task membership at upgrade; future spend is charged at dispatch. Classic attempts remain excluded.
+- Mission acceptance combines your criterion evidence with machine-run combined tests. It is not autonomous semantic certification; research-only acceptance relies on your evidence.
+- Additional reviews use separate sessions of the configured model. They consume the task allowance and do not imply independent model providers.
+- Delivery scripts must deploy the supplied commit and wait for the provider's outcome. NightCrew does not infer production environments, fetch delivery branches, or implement provider-specific rollback. Command success alone is only as strong as the configured script.
+- Credential values belong in the runner environment, never commands or committed configuration. Selected values and known credential patterns are redacted from delivery logs; scripts must not print encoded secrets.
+- Managed mode remains **Coming soon**. The local open-source runner remains the supported experience.
+
 ## [1.0.0-alpha.5] - 2026-10-11
 
 Give related tasks a shared objective with Missions, and follow their progress across repositories.

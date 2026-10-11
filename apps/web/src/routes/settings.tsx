@@ -4,6 +4,7 @@ import { Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api, crewQuery, infoQuery, reposQuery, settingsQuery } from "../api";
 import { AddRepo } from "../components/add-repo";
+import { DeliveryEditor } from "../components/delivery-editor";
 import { ChipsEditor, Field, Select, TextInput } from "../components/form";
 import { PolicyEditor } from "../components/policy-editor";
 
@@ -285,6 +286,7 @@ function RepoCard({ repo }: { repo: Repo }) {
         </Field>
       </div>
       {update.error && <p className="text-[12.5px] text-bad">{update.error.message}</p>}
+      <DeliveryEditor key={`${repo.id}:${JSON.stringify(repo.delivery)}`} repo={repo} />
       <PolicyEditor key={`${repo.id}:${JSON.stringify(repo.policies ?? {})}`} repo={repo} />
       {(level === "ship" || level === "train") && (
         <div className="grid gap-4 rounded-xl bg-raised/50 p-4">

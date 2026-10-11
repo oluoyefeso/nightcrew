@@ -8,13 +8,17 @@ export interface Mission {
   title: string;
   objective: string;
   paused: boolean;
+  criteria: string[];
+  tokenBudget: number | null;
+  priority: number;
+  deadline: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface MissionSummary extends Mission {
   counts: { total: number; running: number; queued: number; parked: number; needsYou: number; resolved: number };
-  /** All local attempts of the tasks currently in this mission, including retries. */
+  /** All local attempts charged to this mission at dispatch, including detached or deleted tasks. */
   tokensUsed: number;
   taskCaps: number;
   repos: string[];

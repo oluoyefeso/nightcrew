@@ -16,6 +16,7 @@ import {
 } from "../api";
 import { DepartureChecks } from "../components/departure-checks";
 import { ChipsEditor, Field, inlineEdit, ListEditor, Select, TextArea, TextInput } from "../components/form";
+import { MissionCriteriaLinks } from "../components/mission-criteria-links";
 import { RecoveryPanel } from "../components/recovery";
 import { TaskRoute } from "../components/task-route";
 import { Button, Pill } from "../components/ui";
@@ -45,6 +46,7 @@ const CONTENT_FIELDS = [
   "repoId",
   "dependsOn",
   "missionId",
+  "missionCriteria",
 ] as const satisfies readonly (keyof Task)[];
 
 type Edits = Partial<Task>;
@@ -464,7 +466,7 @@ function TaskEditor({
             <Select
               aria-label="Mission"
               value={t.missionId ?? ""}
-              onChange={(e) => edit({ missionId: e.target.value || null })}
+              onChange={(e) => edit({ missionId: e.target.value || null, missionCriteria: [] })}
             >
               <option value="">No mission</option>
               {missions.data?.map((mission) => (
@@ -479,6 +481,13 @@ function TaskEditor({
             <Link to="/missions/$missionId" params={{ missionId: t.missionId }} className="text-[13px] text-dawn">
               Open mission →
             </Link>
+          )}
+          {t.missionId && (
+            <MissionCriteriaLinks
+              criteria={missions.data?.find((m) => m.id === t.missionId)?.criteria}
+              selected={t.missionCriteria ?? []}
+              onChange={(missionCriteria) => edit({ missionCriteria })}
+            />
           )}
           <h2 className="text-[13px] font-medium">Wait for tasks</h2>
           {t.dependsOn.map((id) => (

@@ -133,6 +133,7 @@ export const tasks = sqliteTable(
     brief: text("brief").notNull().default(""),
     type: text("type").notNull().default("implementation"),
     scope: text("scope", { mode: "json" }).$type<string[]>().notNull().default([]),
+    missionCriteria: text("mission_criteria", { mode: "json" }).$type<string[]>().notNull().default([]),
     criteria: text("criteria", { mode: "json" }).$type<string[]>().notNull().default([]),
     status: text("status").notNull().default("draft"),
     position: integer("position").notNull().default(0),

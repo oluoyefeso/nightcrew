@@ -1,0 +1,1 @@
+ALTER TABLE `tasks` ADD `mission_criteria` text DEFAULT '[]' NOT NULL;

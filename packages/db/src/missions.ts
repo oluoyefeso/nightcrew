@@ -9,17 +9,20 @@ export function getMission(db: Db, id: string): Mission | null {
   return db.select().from(schema.missions).where(eq(schema.missions.id, id)).get() ?? null;
 }
 
-export function createMission(db: Db, input: Pick<Mission, "title" | "objective">): Mission {
+export type NewMission = Pick<Mission, "title" | "objective"> &
+  Partial<Pick<Mission, "criteria" | "paused" | "tokenBudget" | "priority" | "deadline">>;
+
+export function createMission(db: Db, input: NewMission): Mission {
   const at = new Date().toISOString();
   const mission = {
     id: `mission_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`,
     title: input.title.trim(),
     objective: input.objective.trim(),
-    paused: false,
-    criteria: [],
-    tokenBudget: null,
-    priority: 0,
-    deadline: null,
+    paused: input.paused ?? false,
+    criteria: input.criteria ?? [],
+    tokenBudget: input.tokenBudget ?? null,
+    priority: input.priority ?? 0,
+    deadline: input.deadline ? new Date(input.deadline).toISOString() : null,
     createdAt: at,
     updatedAt: at,
   };

@@ -80,9 +80,9 @@ Each repo earns autonomy from its track record:
 
 ## Missions
 
-Group related tasks around an objective, even across repositories. Create a mission from the Station or **Missions**, then draft work for it or attach existing tasks. Agents receive the objective alongside their task; their scope and repository rules still apply. Edit prerequisites on individual tasks to control ordering.
+Group related tasks around an objective, even across repositories. Create a mission from the Station or **Missions**, set its acceptance criteria, budget, priority and start deadline, then draft work for it or attach existing tasks. New missions in the dashboard start paused so you can review the plan before resuming. Agents receive the objective alongside their task; their scope and repository rules still apply. Edit prerequisites on individual tasks to control ordering.
 
-Each mission shows queued and active work, setup holds, questions, decisions and token usage charged at dispatch. Moving or deleting tasks does not erase spent tokens. Set mission acceptance criteria, then record evidence and run combined repository checks before accepting the objective. Resolved task counts include dismissed work; dismissed tasks do not satisfy mission acceptance.
+Each mission shows queued and active work, setup holds, questions, decisions and token usage charged at dispatch. Moving or deleting tasks does not erase spent tokens. Link tasks to mission criteria to see planned coverage and missing outcomes. Changed criteria flag outdated links for repair. These links describe intent; record evidence and run combined repository checks before accepting the objective. Resolved task counts include dismissed work; dismissed tasks do not satisfy mission acceptance.
 
 **Pause mission** holds new starts while active agents finish, including landing allowed by their repository rules. Resume allows queued tasks to start when the crew's other limits permit. Objective edits apply to future attempts. An optional mission token limit includes recorded usage and running reservations, alongside the daily budget. Mission priority and start deadlines govern the order and eligibility of new starts.
 

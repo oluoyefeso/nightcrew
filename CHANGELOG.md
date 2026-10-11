@@ -2,6 +2,24 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.9] - 2026-10-12
+
+Plan a complete mission before the crew starts, and inspect how its tasks support the intended outcomes.
+
+### Added
+- **Complete mission creation.** Set acceptance criteria, token limits, priority and a start deadline in one action. Dashboard missions start paused by default while you plan; existing API defaults remain compatible.
+- **Planned criterion coverage.** Link drafts and saved tasks to mission criteria. The composer proposes links, the draft batch highlights gaps, and the mission page shows supporting tasks for each outcome.
+- **Outdated-link repair.** Changed criteria remain visible as outdated links in task editing. Moving a task to another mission clears the old links.
+
+### Fixed
+- Mission deadlines use the browser’s local timezone and round-trip through UTC storage without shifting on edit.
+- Mission spend copy reflects all attempts charged at dispatch, including work subsequently moved or deleted.
+
+### Upgrade and limits
+- The embedded SQLite migration adds empty planning links to existing tasks and preserves mission controls and delivery authority.
+- Criterion links describe the plan. They are not completion evidence or an additional dispatch gate; mission acceptance still requires your evidence and passing combined checks.
+- Managed mode remains **Coming soon**. These features run in the open-source local edition.
+
 ## [1.0.0-alpha.8] - 2026-10-12
 
 Rehearse repository setup before dispatching agents, and maintain a portable library of verification workflows.

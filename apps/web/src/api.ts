@@ -249,6 +249,7 @@ export interface AgentReport {
 
 export interface DraftTask {
   missionId?: string | null;
+  missionCriteria?: string[];
   repoId: string;
   title: string;
   type: Task["type"];

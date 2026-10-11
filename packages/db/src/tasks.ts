@@ -117,6 +117,7 @@ function toRepo(r: typeof schema.repos.$inferSelect): Repo {
 
 export interface NewTask {
   missionId?: string | null;
+  missionCriteria?: string[];
   repoId: string;
   title: string;
   brief?: string;
@@ -142,6 +143,7 @@ export function createTask(db: Db, input: NewTask): Task {
   const row = {
     id: newId("task"),
     missionId: input.missionId ?? null,
+    missionCriteria: input.missionId ? (input.missionCriteria ?? []) : [],
     repoId: input.repoId,
     title: input.title.trim(),
     brief: input.brief?.trim() ?? "",
@@ -177,6 +179,7 @@ export type TaskPatch = Partial<
     | "autoRetries"
     | "title"
     | "missionId"
+    | "missionCriteria"
     | "brief"
     | "type"
     | "scope"
@@ -199,6 +202,8 @@ export function updateTask(db: Db, id: string, patch: TaskPatch): Task | null {
   const current = getTask(db, id);
   if (!current) return null;
   const set: Partial<typeof schema.tasks.$inferInsert> = { ...patch, updatedAt: now() };
+  if (patch.missionId !== undefined && patch.missionId !== current.missionId && patch.missionCriteria === undefined)
+    set.missionCriteria = [];
   // Moving between lists puts the task at the end of its new list.
   if (patch.status && patch.status !== current.status) set.position = nextPosition(db, patch.status);
   db.update(schema.tasks).set(set).where(eq(schema.tasks.id, id)).run();

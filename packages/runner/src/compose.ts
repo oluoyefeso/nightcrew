@@ -13,6 +13,7 @@ export interface DraftTask {
   brief: string;
   scope: string[];
   criteria: string[];
+  missionCriteria?: string[];
   /** One question the crew needs answered before it can work unattended. */
   question: string | null;
   /** Indexes of other drafts in this batch that must run first. */
@@ -38,6 +39,12 @@ const SCHEMA = {
               "Glob patterns of files the task may change, based on the file tree. Include test files. Empty if unsure.",
           },
           criteria: { type: "array", items: { type: "string" }, description: "2-5 checkable acceptance criteria." },
+          missionCriteria: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Exact mission acceptance criteria this task supports. Empty when unrelated or no mission is provided.",
+          },
           question: {
             type: ["string", "null"],
             description: "Only if the task can't be done well without an answer. Otherwise null.",
@@ -48,7 +55,7 @@ const SCHEMA = {
             description: "Indexes of earlier tasks in this list that must finish first.",
           },
         },
-        required: ["repo", "title", "type", "brief", "scope", "criteria", "question", "dependsOn"],
+        required: ["repo", "title", "type", "brief", "scope", "criteria", "missionCriteria", "question", "dependsOn"],
       },
     },
   },
@@ -91,7 +98,7 @@ export async function draftTasks(
       model: input.model,
       systemPrompt:
         "You turn a developer's request into well-scoped tasks for a coding crew that works unattended. Split unrelated work into separate tasks; keep one coherent change as one task. Never invent requirements.",
-      prompt: `Repos and their files:\n\n${context}\n\n---\n\n${input.mission ? `Shared mission context (scope comes from the request):\n${input.mission.title}\n${input.mission.objective}\nMission acceptance criteria:\n${(input.mission.criteria ?? []).map((c) => `- ${c}`).join("\n")}\nPropose a complete task breakdown with prerequisites and a final integration check. Keep drafts reviewable before dispatch.\n\n` : ""}The request:\n\n${input.text}`,
+      prompt: `Repos and their files:\n\n${context}\n\n---\n\n${input.mission ? `Shared mission context (scope comes from the request):\n${input.mission.title}\n${input.mission.objective}\nMission acceptance criteria:\n${(input.mission.criteria ?? []).map((c) => `- ${c}`).join("\n")}\nPropose a complete task breakdown with prerequisites and a final integration check. Link each task to the exact mission criteria it supports; leave unrelated work unlinked. Keep drafts reviewable before dispatch.\n\n` : ""}The request:\n\n${input.text}`,
       guard: { worktree: "/nonexistent", writableDirs: [], scope: [], protectedBranches: [], readOnly: true },
       maxTokens: 200_000,
       maxTurns: 3,
@@ -112,6 +119,17 @@ export async function draftTasks(
     brief: String(t.brief ?? ""),
     scope: (t.scope ?? []).map(String).slice(0, 20),
     criteria: (t.criteria ?? []).map(String).slice(0, 8),
+    ...(input.mission
+      ? {
+          missionCriteria: [
+            ...new Set(
+              (Array.isArray(t.missionCriteria) ? t.missionCriteria : []).filter(
+                (c) => typeof c === "string" && input.mission?.criteria?.includes(c),
+              ),
+            ),
+          ],
+        }
+      : {}),
     question: t.question ? String(t.question) : null,
     dependsOn: (t.dependsOn ?? []).filter((d) => Number.isInteger(d) && d >= 0 && d < i),
   }));

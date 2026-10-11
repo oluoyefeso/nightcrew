@@ -81,7 +81,7 @@ The demo crew narrates believable steps and writes a small file inside each task
 
 ## Conducting an objective
 
-Create a Mission, edit its acceptance criteria and limits, then draft work for it. Inspect departure checks and approve the proposed task breakdown. If a run fails, its task's Recovery panel offers Resume, Verify saved build, and Rebuild. After tasks succeed, record criterion evidence and verify the combined result in Mission acceptance.
+Create a Mission with acceptance criteria, limits, priority and an optional start deadline in your local timezone. Leave “Start paused while I plan” checked while drafting work. Review which criteria each task supports and fill gaps before resuming the mission. Inspect departure checks and approve the proposed task breakdown. If a run fails, its task's Recovery panel offers Resume, Verify saved build, and Rebuild. After tasks succeed, record criterion evidence and verify the combined result in Mission acceptance.
 
 Open **Operations** from the navigation or command bar for delivery, repository setup, reliability and activity. Configure delivery commands in repository settings before using them. See [Conductor operations](operations.md) for the complete workflow and limits.
 

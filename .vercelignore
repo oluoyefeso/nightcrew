@@ -1,0 +1,31 @@
+# The Vercel CLI uploads the working tree and ignores .gitignore, so mirror it here.
+# Git-triggered deploys only see tracked files; this covers manual `vercel deploy`.
+
+# Runtime artifacts
+logs/
+state/
+classic/state/
+classic/logs/
+.nightcrew/
+*.db
+*.db-*
+
+# Build
+node_modules/
+dist/
+*.tsbuildinfo
+
+design/
+
+# OS
+.DS_Store
+
+# User-specific config and local tooling
+config.yaml
+tasks.yaml
+classic/docs/sample-data/tasks.yaml
+.gstack/
+.claude/
+apps/cli/src/web-assets.gen.ts
+.vercel
+.env*

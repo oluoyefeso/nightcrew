@@ -1,5 +1,6 @@
 import type { Repo, RepositoryReadiness } from "@nightcrew/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { api } from "../api";
 import { OperationProgress, operationActive } from "./operation-progress";
 import { Button } from "./ui";
@@ -64,6 +65,13 @@ export function RepositoryReadinessPanel({ repo }: { repo: Repo }) {
           <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-bg p-3">
             {r.latest.detail}
           </pre>
+          <Link
+            to="/results/$kind/$resultId"
+            params={{ kind: "repository", resultId: r.latest.id }}
+            className="mt-3 inline-block text-[12px] text-dawn"
+          >
+            Open this saved result →
+          </Link>
         </details>
       )}
       {(state.error || run.error) && (

@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
-import { DEFAULT_DELIVERY, type Delivery, type MissionAcceptance, type Repo } from "@nightcrew/core";
+import type { Delivery, MissionAcceptance, Repo } from "@nightcrew/core";
 import {
   auditEvent,
   type Db,
   deliveriesForCommit,
-  getDelivery,
   getMission,
   getRepo,
   getRun,
@@ -15,6 +14,7 @@ import {
   saveAcceptance,
   saveDelivery,
 } from "@nightcrew/db";
+import { deliveryContext, deliverySnapshot, deliveryStageBlockers } from "./delivery-readiness";
 import { git, resolveSha } from "./git";
 import {
   type OnOperationStarted,
@@ -31,8 +31,6 @@ import { taskRef } from "./workspace";
 
 export { stopOperation, stopOperations } from "./operation-progress";
 
-const deliverySnapshot = (repo: Repo | null) =>
-  repo ? { ...(repo.delivery ?? DEFAULT_DELIVERY), setupCommand: repo.setupCommand } : null;
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export async function missionReadiness(db: Db, id: string) {
   const mission = getMission(db, id);
@@ -195,6 +193,7 @@ export async function advanceDelivery(
   previousId?: string,
   automatic = false,
   onStarted?: OnOperationStarted,
+  fingerprint?: string,
 ): Promise<Delivery> {
   let busy = delivering.get(db);
   if (!busy) {
@@ -206,34 +205,16 @@ export async function advanceDelivery(
   const op = operation(db, "delivery", repoId, stage, onStarted);
   let record: Delivery | null = null;
   try {
-    const repo = getRepo(db, repoId);
-    if (!repo) throw new OperationInputError("Repository not found.");
-    const policy = deliverySnapshot(repo)!;
+    const context = await deliveryContext(db, repoId);
+    const { repo, policy, sha } = context;
+    if (fingerprint !== undefined && fingerprint !== context.fingerprint)
+      throw new OperationInputError("Delivery settings or branch changed. Refresh the preview before starting.");
     const stages = ["check", "deploy", "release"];
     if (automatic && stages.indexOf(stage) > stages.indexOf(policy.automatic))
       throw new OperationInputError("This delivery stage needs your approval.");
-    if (!policy.branch || !policy[stage]?.trim() || !policy.check.trim())
-      throw new OperationInputError("Configure the delivery branch and stage commands first.");
-    const sha = await resolveSha(repo.path, `refs/heads/${policy.branch}`);
+    const blockers = deliveryStageBlockers(context, stage, previousId);
+    if (blockers.length) throw new OperationInputError(blockers.join(" "));
     if (!sha) throw new OperationInputError("The configured local delivery branch does not exist.");
-    const previous = previousId ? getDelivery(db, previousId) : null;
-    if (
-      stage !== "check" &&
-      (!previous ||
-        previous.repoId !== repoId ||
-        previous.status !== "passed" ||
-        previous.stage !== stages[stages.indexOf(stage) - 1] ||
-        previous.sha !== sha ||
-        hash(previous.policy) !== hash(policy))
-    )
-      throw new OperationInputError("Pass the preceding delivery stage on this commit with these settings first.");
-    if (
-      stage !== "check" &&
-      deliveriesForCommit(db, repoId, sha).some((d) => d.stage === stage && d.status !== "failed")
-    )
-      throw new OperationInputError(
-        "This stage was already attempted for this commit. Inspect its outcome before starting a new release.",
-      );
     const env: Record<string, string> = { NC_STAGE: stage, NC_BRANCH: policy.branch };
     for (const name of policy.environment) env[name] = "";
     if (stage !== "check")
@@ -297,6 +278,7 @@ async function checkedDeliveryCommand(
   // checkedCommand takes the same repo lock; validate inside its callback through the command guard.
   const current = getRepo(db, repo.id);
   if (
+    current?.path !== repo.path ||
     hash(deliverySnapshot(current)) !== hash(policy) ||
     (await resolveSha(repo.path, `refs/heads/${policy.branch}`)) !== sha
   )
@@ -308,12 +290,14 @@ async function checkedDeliveryCommand(
     dataDir,
     env,
     async () =>
+      getRepo(db, repo.id)?.path === repo.path &&
       hash(deliverySnapshot(getRepo(db, repo.id))) === hash(policy) &&
       (await resolveSha(repo.path, `refs/heads/${policy.branch}`)) === sha,
     op,
   );
   if (!result.ok) return result;
   if (
+    getRepo(db, repo.id)?.path !== repo.path ||
     hash(deliverySnapshot(getRepo(db, repo.id))) !== hash(policy) ||
     (await resolveSha(repo.path, `refs/heads/${policy.branch}`)) !== sha
   )
@@ -348,6 +332,15 @@ export function startMissionAcceptance(
 ) {
   return startInBackground((started) => acceptMission(db, id, fingerprint, evidence, dataDir, started));
 }
-export function startDelivery(db: Db, repoId: string, stage: Delivery["stage"], dataDir: string, previousId?: string) {
-  return startInBackground((started) => advanceDelivery(db, repoId, stage, dataDir, previousId, false, started));
+export function startDelivery(
+  db: Db,
+  repoId: string,
+  stage: Delivery["stage"],
+  dataDir: string,
+  previousId?: string,
+  fingerprint?: string,
+) {
+  return startInBackground((started) =>
+    advanceDelivery(db, repoId, stage, dataDir, previousId, false, started, fingerprint),
+  );
 }

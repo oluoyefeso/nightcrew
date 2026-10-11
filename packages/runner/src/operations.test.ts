@@ -338,3 +338,100 @@ test("stopping a research-only acceptance cannot record a pass", async () => {
   expect((await waitForJob(job.id, (j) => j.phase === "finished")).status).toBe("interrupted");
   expect((await missionReadiness(db, mission.id)).accepted).toBe(false);
 });
+
+test("delivery readiness follows the current commit and policy, and stale previews cannot start a command", async () => {
+  const { deliveryReadiness } = await import("./delivery-readiness");
+  updateRepo(db, repo.id, { delivery: policy() });
+  const initial = await deliveryReadiness(db, repo.id);
+  expect(initial.stages[0]!.blockers).toEqual([]);
+  expect(initial.stages[1]!.blockers.join(" ")).toContain("preceding");
+  expect(initial.automatic.blockers.join(" ")).toContain("manually");
+  const checked = await advanceDelivery(db, repo.id, "check", dir, undefined, false, undefined, initial.fingerprint);
+  const ready = await deliveryReadiness(db, repo.id);
+  expect(ready.stages[1]).toMatchObject({ previousId: checked.id, blockers: [] });
+  expect(ready.stages[2]!.blockers.join(" ")).toContain("preceding");
+  updateRepo(db, repo.id, { setupCommand: "true" });
+  const changed = await deliveryReadiness(db, repo.id);
+  expect(changed.fingerprint).not.toBe(ready.fingerprint);
+  expect(changed.stages[1]!.previousId).toBeNull();
+  await expect(
+    advanceDelivery(db, repo.id, "check", dir, undefined, false, undefined, initial.fingerprint),
+  ).rejects.toThrow("Refresh the preview");
+  expect(listDeliveries(db)).toHaveLength(1);
+  updateRepo(db, repo.id, { setupCommand: null });
+  await git(
+    repo.path,
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "--allow-empty",
+    "-qm",
+    "new commit",
+  );
+  const moved = await deliveryReadiness(db, repo.id);
+  expect(moved.sha).not.toBe(initial.sha);
+  expect(moved.stages.every((stage) => stage.latest === null)).toBe(true);
+  expect(moved.stages[1]!.blockers.join(" ")).toContain("preceding");
+});
+
+test("readiness explains manual, automatic and interrupted holds without revealing environment values or writing records", async () => {
+  const { deliveryReadiness } = await import("./delivery-readiness");
+  const { updateSettings } = await import("@nightcrew/db");
+  updateSettings(db, { dispatch: true });
+  process.env.DEMO_PREVIEW_CREDENTIAL = "synthetic-preview-value";
+  try {
+    updateRepo(db, repo.id, {
+      delivery: { ...policy(), automatic: "release", environment: ["DEMO_PREVIEW_CREDENTIAL"] },
+    });
+    const initial = await deliveryReadiness(db, repo.id);
+    expect(initial.automatic.next).toBe("check");
+    expect(JSON.stringify(initial)).not.toContain(process.env.DEMO_PREVIEW_CREDENTIAL);
+    expect(listOperationJobs(db)).toHaveLength(0);
+    const checked = await advanceDelivery(db, repo.id, "check", dir);
+    const readiness = await deliveryReadiness(db, repo.id);
+    expect(readiness.automatic.next).toBe("deploy");
+    delete process.env.DEMO_PREVIEW_CREDENTIAL;
+    expect((await deliveryReadiness(db, repo.id)).stages[1]!.blockers.join(" ")).toContain("DEMO_PREVIEW_CREDENTIAL");
+    process.env.DEMO_PREVIEW_CREDENTIAL = "synthetic-preview-value";
+    const offline = await deliveryReadiness(db, repo.id, false);
+    expect(offline.stages[0]!.blockers).toEqual([]);
+    expect(offline.stages[1]!.blockers.join(" ")).toContain("Publishing is disabled");
+    expect(offline.automatic.next).toBeNull();
+    updateSettings(db, { dispatch: false });
+    expect((await deliveryReadiness(db, repo.id)).automatic.blockers.join(" ")).toContain("Dispatch is paused");
+    updateSettings(db, { dispatch: true });
+    saveDelivery(db, { ...checked, id: "interrupted_fixture", stage: "deploy", status: "interrupted" });
+    for (let i = 0; i < 105; i++)
+      saveDelivery(db, { ...checked, id: `other_${i}`, sha: "other", createdAt: "2099-01-01T00:00:00Z" });
+    const held = await deliveryReadiness(db, repo.id);
+    expect(held.stages[1]!.blockers.join(" ")).toContain("already attempted");
+    expect(held.automatic.blockers.join(" ")).toContain("interrupted");
+    saveDelivery(db, { ...checked, id: "interrupted_fixture", stage: "deploy", status: "failed" });
+    const retry = await deliveryReadiness(db, repo.id);
+    expect(retry.stages[1]!.blockers).toEqual([]);
+    expect(retry.automatic.next).toBeNull();
+    const deployed = await advanceDelivery(db, repo.id, "deploy", dir, checked.id);
+    const after = await deliveryReadiness(db, repo.id);
+    expect(after.stages[1]!.blockers.join(" ")).toContain("already attempted");
+    expect(after.stages[2]).toMatchObject({ previousId: deployed.id, blockers: [] });
+  } finally {
+    delete process.env.DEMO_PREVIEW_CREDENTIAL;
+  }
+});
+
+test("delivery readiness holds during a background command and uses its exact saved result", async () => {
+  const { deliveryReadiness } = await import("./delivery-readiness");
+  updateRepo(db, repo.id, { delivery: { ...policy(), check: "sleep 30" } });
+  const job = await startDelivery(db, repo.id, "check", dir);
+  await waitForJob(job.id, (row) => row.phase === "command");
+  expect(
+    (await deliveryReadiness(db, repo.id)).stages.every((stage) =>
+      stage.blockers.some((message) => message.includes("already running")),
+    ),
+  ).toBe(true);
+  stopOperation(db, job.id);
+  const finished = await waitForJob(job.id, (row) => row.phase === "finished");
+  expect((await deliveryReadiness(db, repo.id)).stages[0]!.latest?.id).toBe(finished.resultId!);
+});

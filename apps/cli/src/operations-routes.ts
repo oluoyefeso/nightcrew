@@ -3,10 +3,12 @@ import {
   auditEvent,
   type Db,
   deleteTemplate,
+  getAcceptance,
   getCheckpoint,
   getDelivery,
   getOperationJob,
   getRepo,
+  getRepositoryCheck,
   getRun,
   getTask,
   getTemplate,
@@ -26,6 +28,7 @@ import {
   acceptMission,
   advanceDelivery,
   type Crew,
+  deliveryReadiness,
   missionReadiness,
   repositoryReadiness,
   startDelivery,
@@ -82,6 +85,25 @@ export function mountOperationsRoutes(app: Hono, deps: { db: Db; crew: Crew; dat
         ],
       })),
     });
+  });
+  app.get("/api/results/:kind/:id", (c) => {
+    const { kind, id } = c.req.param();
+    const result =
+      kind === "delivery"
+        ? getDelivery(db, id)
+        : kind === "mission"
+          ? getAcceptance(db, id)
+          : kind === "repository"
+            ? getRepositoryCheck(db, id)
+            : null;
+    c.header("cache-control", "no-store");
+    return result ? c.json({ kind, result }) : c.json({ error: "Saved result not found." }, 404);
+  });
+  app.get("/api/repos/:id/delivery-readiness", async (c) => {
+    const id = c.req.param("id");
+    if (!getRepo(db, id)) return c.json({ error: "Repository not found." }, 404);
+    c.header("cache-control", "no-store");
+    return c.json(await deliveryReadiness(db, id, deps.publish));
   });
   app.post("/api/operations/stop", (c) => {
     stopOperations(db);
@@ -200,15 +222,31 @@ export function mountOperationsRoutes(app: Hono, deps: { db: Db; crew: Crew; dat
     if (
       !value ||
       !["check", "deploy", "release"].includes(value.stage) ||
-      (value.previousId !== undefined && typeof value.previousId !== "string")
+      (value.previousId !== undefined && typeof value.previousId !== "string") ||
+      (value.fingerprint !== undefined &&
+        (typeof value.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(value.fingerprint)))
     )
       return c.json({ error: "Choose check, deploy or release." }, 400);
     if (!deps.publish && value.stage !== "check")
       return c.json({ error: "Publishing is disabled for this runner." }, 409);
     try {
       if (c.req.query("background") === "1")
-        return c.json(await startDelivery(db, c.req.param("id"), value.stage, dataDir, value.previousId), 202);
-      return c.json(await advanceDelivery(db, c.req.param("id"), value.stage, dataDir, value.previousId));
+        return c.json(
+          await startDelivery(db, c.req.param("id"), value.stage, dataDir, value.previousId, value.fingerprint),
+          202,
+        );
+      return c.json(
+        await advanceDelivery(
+          db,
+          c.req.param("id"),
+          value.stage,
+          dataDir,
+          value.previousId,
+          false,
+          undefined,
+          value.fingerprint,
+        ),
+      );
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : "Delivery failed." }, 409);
     }

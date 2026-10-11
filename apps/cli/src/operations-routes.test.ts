@@ -200,3 +200,68 @@ test("repository verification validates its snapshot and uses the authenticated 
     404,
   );
 });
+
+test("readiness and saved results are authenticated, uncached and resolve the requested historical record", async () => {
+  const { saveAcceptance, saveDelivery, saveRepositoryCheck } = await import("@nightcrew/db");
+  const repo = addRepo(db, { name: "Demo", path: "/demo/repo", defaultBranch: "main" });
+  const mission = createMission(db, { title: "Fixture", objective: "Review history." });
+  const at = "2026-10-12T00:00:00Z";
+  for (const id of ["older", "newer"]) {
+    saveDelivery(db, {
+      id: `delivery_${id}`,
+      repoId: repo.id,
+      sha: id,
+      branch: "main",
+      policy: DEFAULT_DELIVERY,
+      stage: "check",
+      status: "passed",
+      log: `Delivery ${id}`,
+      createdAt: at,
+      updatedAt: at,
+    });
+    saveAcceptance(db, {
+      id: `acceptance_${id}`,
+      missionId: mission.id,
+      at,
+      fingerprint: id,
+      status: "passed",
+      checks: [],
+      evidence: [{ criterion: "Works", evidence: `Evidence ${id}` }],
+    });
+    saveRepositoryCheck(db, {
+      id: `setup_${id}`,
+      repoId: repo.id,
+      fingerprint: id,
+      branch: "main",
+      sha: id,
+      status: "passed",
+      detail: `Setup ${id}`,
+      at,
+    });
+  }
+  for (const [kind, id] of [
+    ["delivery", "delivery_older"],
+    ["mission", "acceptance_older"],
+    ["repository", "setup_older"],
+  ]) {
+    const path = `/api/results/${kind}/${id}`;
+    expect((await app.request(path)).status).toBe(401);
+    const response = await send("GET", path);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toMatchObject({ kind, result: { id } });
+  }
+  expect((await send("GET", "/api/results/unknown/delivery_older")).status).toBe(404);
+  expect((await send("GET", "/api/results/delivery/missing")).status).toBe(404);
+  expect((await send("GET", "/api/results/mission/delivery_older")).status).toBe(404);
+  const path = `/api/repos/${repo.id}/delivery-readiness`;
+  expect((await app.request(path)).status).toBe(401);
+  const response = await send("GET", path);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  const ready = await response.json();
+  expect(ready.stages[1].blockers.join(" ")).toContain("Publishing is disabled");
+  expect((await send("GET", "/api/repos/missing/delivery-readiness")).status).toBe(404);
+  expect((await send("POST", `/api/repos/${repo.id}/deliver`, { stage: "check", fingerprint: "invalid" })).status).toBe(
+    400,
+  );
+});

@@ -90,6 +90,23 @@ export interface Delivery {
   createdAt: string;
   updatedAt: string;
 }
+export interface DeliveryReadiness {
+  fingerprint: string;
+  branch: string;
+  sha: string | null;
+  stages: {
+    stage: Delivery["stage"];
+    blockers: string[];
+    previousId: string | null;
+    latest: Pick<Delivery, "id" | "status" | "createdAt"> | null;
+  }[];
+  automatic: { through: DeliveryPolicy["automatic"]; next: Delivery["stage"] | null; blockers: string[] };
+  operation: OperationJob | null;
+}
+export type OperationResult =
+  | { kind: "delivery"; result: Delivery }
+  | { kind: "mission"; result: MissionAcceptance }
+  | { kind: "repository"; result: RepositoryCheck };
 export const DEFAULT_DELIVERY: DeliveryPolicy = {
   branch: "",
   check: "",

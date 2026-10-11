@@ -101,7 +101,7 @@ export function listAcceptances(db: Db, missionId: string): MissionAcceptance[] 
     .select()
     .from(schema.missionAcceptances)
     .where(eq(schema.missionAcceptances.missionId, missionId))
-    .orderBy(desc(schema.missionAcceptances.at))
+    .orderBy(desc(schema.missionAcceptances.at), desc(sql`rowid`))
     .limit(20)
     .all() as MissionAcceptance[];
 }
@@ -114,7 +114,7 @@ export function listDeliveries(db: Db, repoId?: string): Delivery[] {
     .select()
     .from(schema.deliveries)
     .where(repoId ? eq(schema.deliveries.repoId, repoId) : undefined)
-    .orderBy(desc(schema.deliveries.createdAt))
+    .orderBy(desc(schema.deliveries.createdAt), desc(sql`rowid`))
     .limit(100)
     .all() as Delivery[];
 }
@@ -148,7 +148,7 @@ export function deliveriesForCommit(db: Db, repoId: string, sha: string): Delive
     .select()
     .from(schema.deliveries)
     .where(and(eq(schema.deliveries.repoId, repoId), eq(schema.deliveries.sha, sha)))
-    .orderBy(desc(schema.deliveries.createdAt))
+    .orderBy(desc(schema.deliveries.createdAt), desc(sql`rowid`))
     .all() as Delivery[];
 }
 
@@ -209,5 +209,21 @@ export function latestRepositoryCheck(db: Db, repoId: string): RepositoryCheck |
       .where(eq(schema.repositoryChecks.repoId, repoId))
       .orderBy(desc(schema.repositoryChecks.at), desc(sql`rowid`))
       .get() as RepositoryCheck) ?? null
+  );
+}
+
+export function getAcceptance(db: Db, id: string): MissionAcceptance | null {
+  return (
+    (db
+      .select()
+      .from(schema.missionAcceptances)
+      .where(eq(schema.missionAcceptances.id, id))
+      .get() as MissionAcceptance) ?? null
+  );
+}
+export function getRepositoryCheck(db: Db, id: string): RepositoryCheck | null {
+  return (
+    (db.select().from(schema.repositoryChecks).where(eq(schema.repositoryChecks.id, id)).get() as RepositoryCheck) ??
+    null
   );
 }

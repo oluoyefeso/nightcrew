@@ -183,11 +183,10 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
     if (current.status === "running" && patch.status && patch.status !== "running") {
       return c.json({ error: "An agent is working on this task right now. Stop it first." }, 409);
     }
-    // Answering the composer's question: keep it as a note and clear the flag.
-    if (patch.answer?.trim() && current.question) {
-      addNote(db, id, "you", `Q: ${current.question}\nA: ${patch.answer.trim()}`);
-      patch.question = null;
-    }
+    // Answering the composer's question: validate the whole edit before saving
+    // the answer, so a rejected edit leaves the question and notes untouched.
+    const answer = patch.answer?.trim();
+    if (answer && current.question) patch.question = null;
     const clean = pick(patch, [
       "title",
       "brief",
@@ -226,6 +225,7 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
           400,
         );
     }
+    if (answer && current.question) addNote(db, id, "you", `Q: ${current.question}\nA: ${answer}`);
     const updated = updateTask(db, id, clean);
     void crew.pump();
     return c.json(updated);

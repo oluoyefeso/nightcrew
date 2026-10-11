@@ -283,6 +283,46 @@ describe("send back takes the task off its train", () => {
   });
 });
 
+describe("morning triage feeds back into the task", () => {
+  // Value: protects=Run again requeues now, Close archives, Undo marks done, and a task an agent is running is left alone; bad actions and runs are refused; fails_when=an action maps to the wrong status, runAt isn't cleared (a scheduled task waits), or triage re-statuses a running task under its agent; why_new=only merge and send_back had route tests; seam=none; no_claim=merge's GitHub call (not exercised; no gh)
+  beforeEach(() => updateSettings(db, { dispatch: false })); // a requeued task must not start in a test
+
+  test.each([
+    ["again", "done", "queued"],
+    ["close", "done", "archived"],
+    ["undo", "archived", "done"],
+    ["again", "running", "running"],
+    ["close", "running", "running"],
+  ] as const)("%s on a %s task → %s", async (action, from, to) => {
+    const repo = addRepo(db, { name: "acme", path: "/code/acme", defaultBranch: "main" });
+    const task = createTask(db, { repoId: repo.id, title: "A" });
+    updateTask(db, task.id, { status: from, runAt: new Date(Date.now() + 3_600_000).toISOString() });
+    upsertRuns(db, [{ run: runRow(task.id), artifacts: [] }]);
+    const res = await triage("run_a", { action });
+    expect(res.status).toBe(200);
+    // Undo takes the earlier decision back rather than recording one.
+    expect(getRun(db, "run_a")?.run.triage).toBe(action === "undo" ? null : action);
+    expect(getTask(db, task.id)?.status).toBe(to);
+    if (action === "again" && from !== "running") expect(getTask(db, task.id)?.runAt).toBeNull();
+  });
+
+  test("an unknown action is a 400 and an unknown run a 404, and neither records anything", async () => {
+    const repo = addRepo(db, { name: "acme", path: "/code/acme", defaultBranch: "main" });
+    const task = createTask(db, { repoId: repo.id, title: "A" });
+    updateTask(db, task.id, { status: "done" });
+    upsertRuns(db, [{ run: runRow(task.id), artifacts: [] }]);
+    const bad = await triage("run_a", { action: "ship_it" });
+    expect(bad.status).toBe(400);
+    expect(await error(bad)).toContain("Unknown action");
+    expect((await triage("run_missing", { action: "close" })).status).toBe(404);
+    const noPr = await triage("run_a", { action: "merge" });
+    expect(noPr.status).toBe(400);
+    expect(await error(noPr)).toContain("no pull request");
+    expect(getRun(db, "run_a")?.run.triage).toBeNull();
+    expect(getTask(db, task.id)?.status).toBe("done");
+  });
+});
+
 function runRow(taskId: string, over: Partial<RunRow> = {}): RunRow {
   return {
     id: "run_a",

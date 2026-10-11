@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -248,6 +249,62 @@ describe("runTask", () => {
     expect(out.status).toBe("complete");
     expect(getRun(db, out.runId)?.artifacts.map((a) => a.kind)).toEqual(["report"]);
   });
+
+  test("a plan that fails with nothing written builds from the brief, in a fresh session", async () => {
+    // Value: protects=a failed plan doesn't sink the task, and the builder doesn't resume the dead planning session; a plan that did write resumes it; fails_when=an empty failed plan fails the run, or its sessionId is still handed to implement; why_new=pipeline tests cover a stopped plan only; seam=none; no_claim=real SDK session resume (scripted engine)
+    const task = setupTask({ model: "p" }); // same model as the planner, so a good plan's session is reused
+    const engine = (planText: string) =>
+      new ScriptedEngine({
+        plan: () => ({
+          ok: !!planText,
+          text: planText,
+          error: planText ? null : "Hit the turn limit.",
+          sessionId: "sess_plan",
+        }),
+        implement: (req) => {
+          writeFileSync(join(req.cwd, "src", "feature.ts"), "export const feature = true;\n");
+          return { text: "Done." };
+        },
+        review: () => ({ structured: READY }),
+      });
+    const failed = engine("");
+    const out = await runTask(deps(failed), task.id, new AbortController().signal);
+    expect(out.status).toBe("complete");
+    const impl = failed.calls.find((c) => c.phase === "implement");
+    expect(impl?.resumeSession).toBeUndefined();
+    expect(
+      listRunEvents(db, out.runId).some((e) => e.text.includes("Planning didn't finish (Hit the turn limit.)")),
+    ).toBe(true);
+    expect(getRun(db, out.runId)?.artifacts.map((a) => a.kind)).not.toContain("plan");
+
+    updateTask(db, task.id, { status: "queued" });
+    const planned = engine("Add src/feature.ts.");
+    await runTask(deps(planned), task.id, new AbortController().signal);
+    expect(planned.calls.find((c) => c.phase === "implement")?.resumeSession).toBe("sess_plan");
+  });
+
+  test("checks the reviewer broke fail the run, and nothing is accepted or boards the train", async () => {
+    // Value: protects=work the reviewer changed must pass the checks again before it lands; fails_when=the post-review recheck is dropped or ignored and broken work is accepted, boards the train or opens a PR; why_new=no test lets the review phase change files; seam=none; no_claim=the real reviewer's edits (scripted engine; train level, publish off)
+    const task = setupTask();
+    updateRepo(db, task.repoId, { level: "train" });
+    const engine = new ScriptedEngine({
+      implement: (req) => {
+        writeFileSync(join(req.cwd, "src", "feature.ts"), "export const feature = true;\n");
+        return { text: "Done." };
+      },
+      review: (req) => {
+        unlinkSync(join(req.cwd, "src", "feature.ts"));
+        writeFileSync(join(req.cwd, "src", "renamed.ts"), "export const feature = true;\n");
+        return { structured: READY };
+      },
+    });
+    const out = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(out.status).toBe("failed");
+    expect(out.reason).toBe("Checks failed after review: `test -f src/feature.ts` failed (exit 1).");
+    expect(out.log).toContain("src/renamed.ts");
+    expect(listTrains(db)).toHaveLength(0);
+    expect((await git(repoPath, "rev-parse", "--verify", "--quiet", `refs/nightcrew/tasks/${task.id}`)).ok).toBe(false);
+  });
 });
 
 test("files written by NightCrew's dependency install don't count against scope or get committed", async () => {
@@ -391,6 +448,39 @@ describe("stopping", () => {
     const wt = workspaceDir(join(dir, "data"), task.repoId, task.id);
     expect((await git(wt, "log", "-1", "--format=%s")).stdout).toContain("WIP: Add the feature");
   });
+
+  test("a task past its time limit ends as out of time, with its work saved", async () => {
+    // Value: protects=a task that runs past maxMinutes is cut off as timeout with "Ran out of time", and its work is saved as WIP for the next attempt;
+    // fails_when=the time limit isn't joined into the stop signal (the agent runs on), or the reason says Stopped as if you pressed Stop; why_new=only manual stops were tested;
+    // seam=none; no_claim=minute-scale limits (a 3-second maxMinutes stands in; the agent waits on its stop signal like a real engine)
+    const task = setupTask({ maxMinutes: 0.05 });
+    let cutOff = false;
+    const engine = new ScriptedEngine({
+      implement: async (req) => {
+        writeFileSync(join(req.cwd, "src", "feature.ts"), "half\n");
+        await new Promise<void>((done) => {
+          const giveUp = setTimeout(done, 12_000);
+          req.signal.addEventListener("abort", () => {
+            cutOff = true;
+            clearTimeout(giveUp);
+            done();
+          });
+        });
+        return cutOff ? { ok: false, text: "", error: "Stopped." } : { text: "Done." };
+      },
+      review: () => ({ structured: READY }),
+    });
+    const started = Date.now();
+    const out = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(cutOff).toBe(true);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(out.status).toBe("timeout");
+    expect(out.reason).toBe("Ran out of time while building.");
+    expect(engine.calls.map((c) => c.phase)).not.toContain("review");
+    const wip = (await git(repoPath, "log", "-1", "--format=%s", `refs/nightcrew/wip/${task.id}`)).stdout;
+    expect(wip).toContain("WIP: Add the feature");
+    expect((await git(repoPath, "show", `refs/nightcrew/wip/${task.id}:src/feature.ts`)).stdout).toBe("half\n");
+  }, 20_000);
 });
 
 describe("review output", () => {
@@ -564,6 +654,18 @@ describe("trust changed while a task runs", () => {
     const out = await runTask(deps(engine), task.id, new AbortController().signal);
     expect(out.status).toBe("failed");
     expect(out.reason).toContain("Changed files outside scope: src/feature.ts");
+  });
+
+  test("a task archived mid-run lands nothing and stays archived", async () => {
+    // Value: protects=archiving a task while its agent works keeps the run off the train and leaves the task archived; fails_when=runTask drops its live() re-read and lands with the task it read at the start, or finish() overwrites archived with done; why_new=Z3 tests cover a demoted repo and narrowed scope, not an archived task; seam=none; no_claim=ship and PR levels (same live() check, train level only here)
+    const task = setupTask();
+    updateRepo(db, task.repoId, { level: "train" });
+    const engine = building(() => updateTask(db, task.id, { status: "archived" }));
+    const out = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(out.status).toBe("failed");
+    expect(out.reason).toContain("archived or deleted while it ran");
+    expect(listTrains(db)).toHaveLength(0);
+    expect(getTask(db, task.id)?.status).toBe("archived");
   });
 });
 
@@ -870,4 +972,86 @@ describe("the task branch outside NightCrew", () => {
     expect(third.reason).toBeNull();
     expect(third.status).toBe("complete");
   });
+});
+
+describe("the draft PR", () => {
+  test("pushes the task branch and opens a draft PR with the evidence and Closes #N; a failed push fails the run", async () => {
+    // Value: protects=at the draft-PR level the task branch is pushed, then one draft PR opens with criteria, checks and Closes #N for issue tasks; a failed push fails the run with no PR;
+    // fails_when=the push result is ignored (a PR for a branch origin lacks), or the Closes line is dropped from issue tasks' PRs; why_new=every runTask test ran with publish off;
+    // seam=none; no_claim=GitHub acceptance or issue closing (fake gh first on PATH records the create call; bare local origin stands in for GitHub)
+    const origin = join(dir, "origin.git");
+    await git(dir, "init", "-q", "--bare", "-b", "main", origin);
+    await git(repoPath, "remote", "add", "origin", origin);
+    await git(repoPath, "push", "-q", "origin", "main");
+    const out = join(dir, "gh-out");
+    const bin = join(dir, "bin");
+    mkdirSync(out);
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "gh"),
+      `#!/bin/sh
+echo "$*" >> '${out}/calls'
+case "$2" in
+  list) echo '[]' ;;
+  create)
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --body-file) cp "$2" '${out}/body.md' ;;
+        --head) printf '%s' "$2" > '${out}/head' ;;
+      esac
+      shift
+    done
+    echo https://github.com/o/acme/pull/42 ;;
+  *) exit 2 ;;
+esac
+`,
+    );
+    chmodSync(join(bin, "gh"), 0o755);
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    const engine = () =>
+      new ScriptedEngine({
+        implement: (req) => {
+          writeFileSync(join(req.cwd, "src", "feature.ts"), "export const feature = true;\n");
+          return { text: "Added the feature." };
+        },
+        review: () => ({ structured: READY }),
+      });
+    try {
+      const task = setupTask({ source: "github", sourceRef: "https://github.com/o/acme/issues/12" });
+      const done = await runTask({ ...deps(engine()), publish: true }, task.id, new AbortController().signal);
+      expect(done.reason).toBeNull();
+      expect(done.status).toBe("complete");
+      expect(done.prUrl).toBe("https://github.com/o/acme/pull/42");
+      expect(getRun(db, done.runId)?.run.prUrl).toBe("https://github.com/o/acme/pull/42");
+      // The branch is on origin before the PR names it.
+      expect(readFileSync(join(out, "head"), "utf8")).toBe(task.branch);
+      expect((await git(origin, "show", `${task.branch}:src/feature.ts`)).stdout).toBe(
+        "export const feature = true;\n",
+      );
+      const body = readFileSync(join(out, "body.md"), "utf8");
+      expect(body).toContain("- [x] Feature file exists: src/feature.ts");
+      expect(body).toContain("<summary>Checks</summary>");
+      expect(body).toContain("Closes #12");
+
+      // A push that fails: the run fails with why, and no PR is opened.
+      await git(repoPath, "config", "remote.origin.pushurl", join(dir, "closed.git"));
+      const calls = readFileSync(join(out, "calls"), "utf8");
+      const second = createTask(db, {
+        repoId: task.repoId,
+        workflow: "planned",
+        title: "Add another feature",
+        scope: ["src/**"],
+        criteria: ["Feature file exists"],
+        status: "queued",
+      });
+      const failed = await runTask({ ...deps(engine()), publish: true }, second.id, new AbortController().signal);
+      expect(failed.status).toBe("failed");
+      expect(failed.reason).toStartWith("Push failed:");
+      expect(failed.prUrl).toBeNull();
+      expect(readFileSync(join(out, "calls"), "utf8")).toBe(calls);
+    } finally {
+      process.env.PATH = path;
+    }
+  }, 30_000);
 });

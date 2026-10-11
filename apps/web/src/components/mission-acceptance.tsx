@@ -1,5 +1,6 @@
 import type { Mission, MissionAcceptance, OperationJob } from "@nightcrew/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { api } from "../api";
 import { Field, TextArea } from "./form";
@@ -105,6 +106,13 @@ export function MissionAcceptancePanel({ mission }: { mission: Mission }) {
               {c.ok ? "Passed" : "Failed"} · {c.detail}
             </pre>
           ))}
+          <Link
+            to="/results/$kind/$resultId"
+            params={{ kind: "mission", resultId: r.latest.id }}
+            className="mt-3 inline-block text-[12px] text-dawn"
+          >
+            Open this saved result →
+          </Link>
         </details>
       )}
       {(accept.error || readiness.error) && (

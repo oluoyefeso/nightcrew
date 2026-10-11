@@ -20,6 +20,8 @@ export function OperationProgress({ job }: { job: OperationJob }) {
     mutationFn: () => api.post(`/api/operations/${job.id}/stop`),
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: ["operations"] });
+      void qc.invalidateQueries({ queryKey: ["operation", job.id] });
+      void qc.invalidateQueries({ queryKey: ["delivery-readiness"] });
       void qc.invalidateQueries({ queryKey: ["acceptance"] });
       void qc.invalidateQueries({ queryKey: ["repository-readiness"] });
     },

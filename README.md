@@ -92,7 +92,7 @@ Task recovery offers **Resume**, **Verify saved build**, and **Rebuild**. Compat
 
 Save verification routes as reusable templates, including one to three independent reviewers. The repository autonomy ceiling still applies. **Operations** shows repository setup, recent reliability, action history, and delivery from check to deploy to release. Delivery commands use a pinned local branch commit in an isolated checkout; automatic stages require explicit repository configuration. Failed or interrupted external actions wait for inspection.
 
-Mission checks and delivery run in the background. Follow saved progress in **Operations**, leave the page and return, or stop an individual operation. Restarting the local runner marks unfinished work interrupted; it does not replay the action.
+Mission checks and delivery run in the background. Follow saved progress in **Operations**, leave the page and return, or stop an individual operation. Delivery shows why each stage is ready or held for the current local commit and settings; saved-result links retain the exact evidence from earlier operations. Restarting the local runner marks unfinished work interrupted; it does not replay the action.
 
 Before dispatch, **Verify repository setup** rehearses installation and tests on an isolated checkout of the local default branch. Results become outdated when the commit or commands change. Verification templates can be edited, exported and imported for preview; repository authority remains the ceiling. See the [open-source conductor roadmap](docs/roadmap.md) for ongoing work.
 

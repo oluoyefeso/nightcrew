@@ -10,6 +10,7 @@ import { resumeReturnPath } from "./pending";
 import { AgentsPage } from "./routes/agents";
 import { LaterPage } from "./routes/later";
 import { MissionPage, MissionsPage } from "./routes/missions";
+import { OperationPage, ResultPage } from "./routes/operation-result";
 import { OperationsPage } from "./routes/operations";
 import { ReportPage } from "./routes/report";
 import { RunPage } from "./routes/run";
@@ -84,6 +85,20 @@ const operationsRoute = createRoute({
   path: "/operations",
   component: OperationsPage,
 });
+const operationRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/operations/$operationId",
+  component: function Operation() {
+    return <OperationPage operationId={operationRoute.useParams().operationId} />;
+  },
+});
+const resultRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/results/$kind/$resultId",
+  component: function Result() {
+    return <ResultPage {...resultRoute.useParams()} />;
+  },
+});
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage });
 const taskRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -120,6 +135,8 @@ const router = createRouter({
     laterRoute,
     settingsRoute,
     operationsRoute,
+    operationRoute,
+    resultRoute,
     taskRoute,
     runRoute,
   ]),

@@ -2,6 +2,26 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.10] - 2026-10-12
+
+See why delivery may proceed on the current commit, and return to the exact evidence from any saved operation.
+
+### Added
+- **Delivery eligibility.** Operations explains each stage against the current local commit, settings, preceding results, required environment names and prior attempts. Manual actions and automatic holds are shown separately.
+- **Preview freshness.** Dashboard delivery actions include the reviewed snapshot. Changed branch heads, repository paths or settings reject stale requests before commands start.
+- **Exact saved results.** Open persistent operation and result pages for delivery, mission acceptance and repository setup. Historical links retain their recorded commit, evidence and diagnostics when later operations run.
+- **Interrupted-result review.** Inspect an interrupted delivery on its result page and explicitly acknowledge a manual retry. Automatic progression remains held after failed or interrupted attempts.
+
+### Fixed
+- Suggested delivery actions no longer rely on the latest record from an unrelated commit or outdated settings.
+- Delivery guards also detect a repository path change while waiting for access or running commands.
+- Results with the same timestamp sort consistently by insertion order.
+
+### Upgrade and limits
+- Existing data and authority are preserved; no database migration is required. The delivery fingerprint is optional for existing API clients, while execution gates remain mandatory.
+- Readiness uses local commits and recorded command outcomes. It does not check deployment-provider health, fetch remote branches or undo external actions.
+- Managed mode remains **Coming soon**; the open-source local runner remains the supported edition.
+
 ## [1.0.0-alpha.9] - 2026-10-12
 
 Plan a complete mission before the crew starts, and inspect how its tasks support the intended outcomes.

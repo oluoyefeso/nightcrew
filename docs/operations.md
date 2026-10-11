@@ -12,7 +12,7 @@ This is an optional rehearsal, not a new dispatch gate or an authority promotion
 
 ## Live operation progress
 
-Mission acceptance and delivery start as background operations owned by your local runner. You can navigate away, reload, or close the browser while the runner keeps working. **Operations** shows all active jobs and the latest 30 finished jobs, with the three most recent shown initially. The mission page also shows its latest verification operation.
+Mission acceptance and delivery start as background operations owned by your local runner. You can navigate away, reload, or close the browser while the runner keeps working. **Operations** shows all active jobs and the latest 30 finished jobs, with the three most recent shown initially. The mission page also shows its latest verification operation. Open an operation to inspect its exact saved result, even after later checks have run. Direct result links also work for older delivery, mission and repository checks; saved outcomes are historical evidence, not a claim of current readiness.
 
 Progress distinguishes requirement checks, waiting for repository access, checkout preparation, repository setup, command execution and cleanup. Elapsed time includes waiting and cleanup. Command output is available in the completed verification/delivery result; progress is not a live terminal stream.
 
@@ -80,6 +80,14 @@ Commands must wait for the external outcome and exit nonzero on failure. A comma
 Credentials are opt-in environment **names**, such as `DEPLOY_TOKEN`, configured on the runner process. Do not paste secret values into commands or settings. Only deploy/release receive the selected variables. Setup and checks run without them. Known credential patterns and configured credential values are redacted from saved command output; keep scripts from printing secrets or transformed/encoded credentials. Logs stay in the authenticated local dashboard. Commands retain the runner's sandbox restrictions, including blocked Git pushes; use your deployment/provider API rather than Git push in these scripts.
 
 A failed or interrupted external action is never automatically replayed. Inspect the provider first: an action may have succeeded before output or acknowledgement was lost. For an interrupted action, acknowledge that inspection in Operations to allow a manual retry. Run checks again and explicitly continue. Successful deployment/release stages cannot be repeated for the same commit. The stop control aborts running verification/delivery commands; an external side effect already performed is not undone.
+
+### Delivery eligibility and saved results
+
+Operations evaluates each stage against the current local branch head, saved delivery/setup settings, required environment names, and complete attempt history for that commit. A stage needs its preceding passing result with matching settings. Deploy/release attempts that passed or were interrupted remain held to prevent duplication; inspect an interrupted result before acknowledging a manual retry. Failed attempts also hold automatic progression. The preview explains manual-only authority, paused dispatch, disabled publishing, changed settings and exhausted stages separately from manual eligibility.
+
+Dashboard requests include the preview fingerprint. A changed branch, repository path or configuration rejects the stale request before starting a command. Integrations may supply the same optional `fingerprint` from authenticated `GET /api/repos/:id/delivery-readiness`; older clients retain their existing behavior and all execution checks. Environment values never appear in readiness responses. Eligibility does not confirm provider health or external deployment state, and the runner does not fetch remote changes for you.
+
+`GET /api/results/:kind/:id` returns the requested saved result for `delivery`, `mission` or `repository`. These launch-key-protected responses are uncached. Operation pages use their saved `resultId`; they never substitute the latest result. A missing result is reported explicitly. Delivery history in Operations is bounded to the latest 100 records across repositories; a known result link remains accessible beyond that window while its record exists.
 
 ## History and reliability
 

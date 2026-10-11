@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { api, missionsQuery, reposQuery } from "../api";
+import { DeliveryReadinessPanel } from "../components/delivery-readiness";
 import { OperationProgress, operationActive } from "../components/operation-progress";
 import { RepositoryReadinessPanel } from "../components/repository-readiness";
 import { Button } from "../components/ui";
@@ -35,22 +36,9 @@ export function OperationsPage() {
     mutationFn: (before: number) => api.get<AuditEntry[]>(`/api/audit?before=${before}`),
     onSuccess: (rows) => setOlder((prev) => [...prev, ...rows]),
   });
-  const action = useMutation({
-    mutationFn: ({ repoId, stage, previousId }: { repoId: string; stage: string; previousId?: string }) =>
-      api.post(`/api/repos/${repoId}/deliver?background=1`, { stage, previousId }),
-    onSettled: () => {
-      void info.refetch();
-    },
-  });
   const stop = useMutation({
     mutationFn: () => api.post("/api/operations/stop"),
     onSettled: () => {
-      void info.refetch();
-    },
-  });
-  const allowRetry = useMutation({
-    mutationFn: (id: string) => api.post(`/api/deliveries/${id}/allow-retry`, { inspected: true }),
-    onSuccess: () => {
       void info.refetch();
     },
   });
@@ -100,16 +88,9 @@ export function OperationsPage() {
                   View mission →
                 </Link>
               )}
-              {job.kind === "delivery" && data?.deliveries.some((d) => d.id === job.resultId) && (
-                <a href={`#${job.resultId}`} className="text-[13px] text-dawn">
-                  View delivery result →
-                </a>
-              )}
-              {job.kind === "repository" && (
-                <a href={`#setup-${job.subjectId}`} className="text-[13px] text-dawn">
-                  View setup result →
-                </a>
-              )}
+              <Link to="/operations/$operationId" params={{ operationId: job.id }} className="text-[13px] text-dawn">
+                View operation and saved result →
+              </Link>
             </div>
             <p className="text-[12px] text-muted">
               Started {new Date(job.createdAt).toLocaleString()}
@@ -153,82 +134,16 @@ export function OperationsPage() {
           Each stage applies to a pinned commit on a local branch. Update that branch before starting checks when you
           need newer remote changes. Automatic delivery follows the authority you saved in Settings.
         </p>
-        {repos.data?.map((repo) => {
-          const records = data?.deliveries.filter((d) => d.repoId === repo.id) ?? [];
-          const latest = records[0];
-          const busy = data?.jobs.some(
-            (job) => job.kind === "delivery" && job.subjectId === repo.id && operationActive(job),
-          );
-          const configured = Boolean(repo.delivery?.branch && repo.delivery.check);
-          const next =
-            latest?.status === "passed"
-              ? latest.stage === "check"
-                ? "deploy"
-                : latest.stage === "deploy"
-                  ? "release"
-                  : null
-              : null;
-          return (
-            <article key={repo.id} className="grid gap-3 rounded-2xl bg-surface p-5 ring-1 ring-line">
-              <div className="flex flex-wrap justify-between gap-2">
-                <h3 className="font-medium">{repo.name}</h3>
-                <Link to="/settings" className="text-[13px] text-dawn">
-                  Configure delivery →
-                </Link>
-              </div>
-              <p className="text-[13px] text-muted">
-                {configured
-                  ? `${repo.delivery?.branch} · ${repo.delivery?.automatic === "off" ? "You start each stage" : `Automatic through ${repo.delivery?.automatic}`}`
-                  : "Set a branch and verification command to begin."}
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  disabled={!configured || action.isPending || busy || latest?.status === "running"}
-                  onClick={() => action.mutate({ repoId: repo.id, stage: "check" })}
-                >
-                  Check current commit
-                </Button>
-                {next && (
-                  <Button
-                    disabled={action.isPending || busy || !repo.delivery?.[next]}
-                    onClick={() => action.mutate({ repoId: repo.id, stage: next, previousId: latest?.id })}
-                  >
-                    {next === "deploy" ? "Deploy verified commit" : "Release deployed commit"}
-                  </Button>
-                )}
-              </div>
-              {records.map((d) => (
-                <details key={d.id} id={d.id} className="scroll-mt-20 text-[13px]">
-                  <summary className="cursor-pointer break-words">
-                    {d.stage} · {d.status} · {d.sha.slice(0, 8)} · {new Date(d.createdAt).toLocaleString()}
-                  </summary>
-                  {(d.status === "failed" || d.status === "interrupted") && (
-                    <p className="mt-2 text-dawn">
-                      Inspect the external outcome first. To continue, rerun checks, then explicitly start the next
-                      stage. Interrupted actions are held to avoid duplication.
-                    </p>
-                  )}
-                  {d.status === "interrupted" && (
-                    <Button disabled={allowRetry.isPending} onClick={() => allowRetry.mutate(d.id)}>
-                      I inspected the external outcome; allow manual retry
-                    </Button>
-                  )}
-                  <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-bg p-3 text-[12px]">
-                    {d.log || "Command running…"}
-                  </pre>
-                </details>
-              ))}
-            </article>
-          );
-        })}
-        {(stop.error || allowRetry.error) && (
+        {repos.data?.map((repo) => (
+          <DeliveryReadinessPanel
+            key={repo.id}
+            repo={repo}
+            records={data?.deliveries.filter((row) => row.repoId === repo.id) ?? []}
+          />
+        ))}
+        {stop.error && (
           <p role="alert" className="text-bad">
-            {(stop.error ?? allowRetry.error)?.message}
-          </p>
-        )}
-        {action.error && (
-          <p role="alert" className="text-bad">
-            {action.error.message}
+            {stop.error.message}
           </p>
         )}
       </section>

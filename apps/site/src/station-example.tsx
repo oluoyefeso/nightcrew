@@ -213,8 +213,9 @@ export function StationExample() {
               default. Failed or interrupted delivery waits for you.
             </p>
             <p className="text-[12px] text-muted">
-              Leave the page and return to saved progress. Stop one operation without stopping the others. A runner
-              restart marks unfinished actions interrupted for inspection.
+              See why each stage is ready or held for the current commit and settings. Open the exact saved result from
+              an earlier operation, even after later checks run. A runner restart marks unfinished actions interrupted
+              for inspection.
             </p>
           </>
         )}

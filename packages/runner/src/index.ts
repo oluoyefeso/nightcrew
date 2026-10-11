@@ -1,5 +1,6 @@
 export * from "./compose";
 export * from "./crew";
+export { deliveryReadiness } from "./delivery-readiness";
 export { DemoEngine } from "./demo-engine";
 export * from "./engine";
 export { type Evidence, type Shot, summarizeEvidence } from "./evidence";

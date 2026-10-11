@@ -43,12 +43,14 @@ import {
   missionTokens,
   type RunEvent,
   recoverDeliveries,
+  recoverOperationJobs,
   tokensOnDay,
   updateTask,
   updateTrain,
 } from "@nightcrew/db";
 import type { AgentEngine } from "./engine";
 import { publishTrain } from "./landing";
+import { waitForOperations } from "./operation-progress";
 import { automaticDelivery, stopOperations } from "./operations";
 import { runTask, type TaskOutcome } from "./pipeline";
 import { classifyFailure, NoReflexes, type Reflexes } from "./reflexes";
@@ -122,6 +124,7 @@ export class Crew {
    */
   recover(): number {
     recoverDeliveries(this.deps.db);
+    recoverOperationJobs(this.deps.db);
     const orphans = listTasks(this.deps.db, ["running"]);
     for (const t of orphans) {
       const retries = t.autoRetries ?? 0;
@@ -688,6 +691,7 @@ export class Crew {
       for (const repo of listRepos(this.deps.db))
         for (let stage = 0; stage < 3 && !this.halted; stage++)
           await automaticDelivery(this.deps.db, repo.id, this.deps.dataDir).catch(() => {});
+    await waitForOperations(this.deps.db);
   }
 
   private emitStatus() {

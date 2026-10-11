@@ -29,6 +29,7 @@ import {
   getSettings,
   getTask,
   listNotes,
+  listOperationJobs,
   listRepos,
   listRunEvents,
   listTasks,
@@ -184,7 +185,22 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
   });
 
   app.delete("/api/repos/:id", (c) => {
-    removeRepo(db, c.req.param("id"));
+    const id = c.req.param("id");
+    const tasks = listTasks(db);
+    if (
+      listOperationJobs(db).some(
+        (job) =>
+          ["running", "stopping"].includes(job.status) &&
+          (job.repoId === id ||
+            (job.kind === "delivery" && job.subjectId === id) ||
+            (job.kind === "mission" && tasks.some((task) => task.repoId === id && task.missionId === job.subjectId))),
+      )
+    )
+      return c.json(
+        { error: "Stop this repository's verification or delivery and wait for cleanup before removing it." },
+        409,
+      );
+    removeRepo(db, id);
     return c.json({ ok: true });
   });
 

@@ -194,7 +194,7 @@ export function StationExample() {
             <div className="grid gap-3 sm:grid-cols-3">
               {[
                 ["Check", "Passed on the pinned commit"],
-                ["Deploy", "Waiting for your action"],
+                ["Deploy", "Running command · 2m 14s"],
                 ["Release", "Requires successful deployment"],
               ].map(([stage, state]) => (
                 <div key={stage} className="grid gap-2 rounded-xl bg-raised/60 p-4">
@@ -208,8 +208,8 @@ export function StationExample() {
               default. Failed or interrupted delivery waits for you.
             </p>
             <p className="text-[12px] text-muted">
-              Operations keeps delivery records, recent reliability trends and the history of actions and policy
-              changes.
+              Leave the page and return to saved progress. Stop one operation without stopping the others. A runner
+              restart marks unfinished actions interrupted for inspection.
             </p>
           </>
         )}

@@ -2,6 +2,28 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.7] - 2026-10-12
+
+Follow long-running mission verification and delivery from anywhere in the local dashboard.
+
+### Added
+- **Background operations.** Mission acceptance and manual delivery return control immediately. The runner continues when you navigate away or close the browser, and saved progress appears when you return.
+- **Visible progress.** Operations shows active and recent jobs, elapsed time, repository waits, checkout preparation, setup, command execution and cleanup. Mission pages show their latest verification job; completed jobs link to their results.
+- **Individual stop controls.** Stop one verification or delivery operation without stopping unrelated work. Waiting operations can be cancelled before they acquire repository access.
+- **Persistent interruption records.** A runner restart marks unfinished operations interrupted for inspection, without replaying them. Operation metadata excludes command output and credentials.
+- **Background API.** Opt-in HTTP 202 responses, authenticated job polling and scoped cancellation. Existing synchronous clients keep their result response.
+
+### Fixed
+- Cancelled research-only acceptance can no longer record a passing result.
+- Unexpected delivery exceptions are treated as interrupted outcomes requiring inspection before retry.
+- Graceful shutdown stops and drains operations even when no agents are active. Repositories and missions cannot be removed while their operations are running.
+
+### Upgrade and limits
+- An embedded SQLite migration adds operation history without changing repository authority or delivery configuration.
+- Progress shows phases rather than streaming terminal output. Closing the runner interrupts work; closing only the browser does not.
+- Stopping cannot undo a deployment or release already performed. Inspect external outcomes before retrying.
+- Managed mode remains **Coming soon**; these features run in the open-source local edition.
+
 ## [1.0.0-alpha.6] - 2026-10-11
 
 Recover saved work, verify mission outcomes, and supervise delivery from the conductor's station.

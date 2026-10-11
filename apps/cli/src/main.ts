@@ -163,11 +163,11 @@ function quitOnSignals(release: () => void) {
       process.exit(code);
     };
     process.on(signal, () => {
-      if (stopping || !crew.getStatus().active.length) quit();
+      if (stopping) quit();
       stopping = true;
       crew.shutdown();
       console.log(
-        `\n  Stopping agents and putting their tasks back in the queue...${signal === "SIGINT" ? " press Ctrl-C again to quit now." : ""}`,
+        `\n  Stopping local work and saving its outcome...${signal === "SIGINT" ? " press Ctrl-C again to quit now." : ""}`,
       );
       void crew.drain().then(quit);
       setTimeout(quit, 20_000).unref();

@@ -1,5 +1,20 @@
 import type { TaskPolicies } from "./policy";
 
+/** Durable progress metadata; command output remains on the verification/delivery result. */
+export interface OperationJob {
+  id: string;
+  kind: "mission" | "delivery";
+  subjectId: string;
+  stage: Delivery["stage"] | null;
+  status: "running" | "stopping" | "passed" | "failed" | "interrupted";
+  phase: "validating" | "waiting" | "preparing" | "setup" | "command" | "finalizing" | "finished";
+  repoId: string | null;
+  resultId: string | null;
+  detail: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Checkpoint {
   taskId: string;
   runId: string;

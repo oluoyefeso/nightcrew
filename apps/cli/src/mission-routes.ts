@@ -6,6 +6,7 @@ import {
   deleteMission,
   getMission,
   getRunSummaries,
+  latestOperationJob,
   listMissions,
   listTasks,
   updateMission,
@@ -72,6 +73,8 @@ export function mountMissionRoutes(app: Hono, { db, crew }: { db: Db; crew: Crew
   app.delete("/api/missions/:id", (c) => {
     const id = c.req.param("id");
     if (!getMission(db, id)) return c.json({ error: "Mission not found." }, 404);
+    if (["running", "stopping"].includes(latestOperationJob(db, "mission", id)?.status ?? ""))
+      return c.json({ error: "Stop mission verification and wait for cleanup before deleting it." }, 409);
     if (listTasks(db).some((task) => task.missionId === id))
       return c.json({ error: "Move or remove its tasks before deleting this mission." }, 409);
     deleteMission(db, id);

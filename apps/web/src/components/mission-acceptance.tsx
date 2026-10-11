@@ -1,8 +1,9 @@
-import type { Mission, MissionAcceptance } from "@nightcrew/core";
+import type { Mission, MissionAcceptance, OperationJob } from "@nightcrew/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../api";
 import { Field, TextArea } from "./form";
+import { OperationProgress, operationActive } from "./operation-progress";
 import { Button } from "./ui";
 
 interface Readiness {
@@ -11,17 +12,18 @@ interface Readiness {
   blockers: string[];
   targets: { repoId: string; name: string; branch: string; sha: string }[];
   latest: MissionAcceptance | null;
+  operation: OperationJob | null;
 }
 export function MissionAcceptancePanel({ mission }: { mission: Mission }) {
   const [notes, setNotes] = useState<Record<string, string>>({});
   const readiness = useQuery({
     queryKey: ["acceptance", mission.id, mission.updatedAt],
     queryFn: () => api.get<Readiness>(`/api/missions/${mission.id}/acceptance`),
-    refetchInterval: 10000,
+    refetchInterval: (q) => (operationActive(q.state.data?.operation) ? 2000 : 10000),
   });
   const accept = useMutation({
     mutationFn: () =>
-      api.post(`/api/missions/${mission.id}/acceptance`, {
+      api.post(`/api/missions/${mission.id}/acceptance?background=1`, {
         fingerprint: readiness.data?.fingerprint,
         evidence: mission.criteria.map((criterion) => ({ criterion, evidence: notes[criterion] ?? "" })),
       }),
@@ -44,6 +46,7 @@ export function MissionAcceptancePanel({ mission }: { mission: Mission }) {
           {t.name} · {t.branch} · {t.sha.slice(0, 8)}
         </p>
       ))}
+      {r?.operation && <OperationProgress job={r.operation} />}
       {!!r?.blockers.length && (
         <ul className="list-disc pl-5 text-[13px] text-dawn">
           {r.blockers.map((b) => (
@@ -69,12 +72,17 @@ export function MissionAcceptancePanel({ mission }: { mission: Mission }) {
             !r ||
             !!r.blockers.length ||
             accept.isPending ||
+            operationActive(r.operation) ||
             !mission.criteria.length ||
             mission.criteria.some((c) => !notes[c]?.trim())
           }
           onClick={() => accept.mutate()}
         >
-          {accept.isPending ? "Verifying combined result…" : "Verify and accept mission"}
+          {accept.isPending
+            ? "Starting verification…"
+            : operationActive(r?.operation)
+              ? "Verification in progress…"
+              : "Verify and accept mission"}
         </Button>
       </div>
       {r?.latest && (

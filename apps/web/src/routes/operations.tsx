@@ -1,13 +1,15 @@
-import { type AuditEntry, type Delivery, formatTokens } from "@nightcrew/core";
+import { type AuditEntry, type Delivery, formatTokens, type OperationJob } from "@nightcrew/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
-import { api, reposQuery } from "../api";
+import { api, missionsQuery, reposQuery } from "../api";
+import { OperationProgress, operationActive } from "../components/operation-progress";
 import { Button } from "../components/ui";
 
 interface Operations {
   audit: AuditEntry[];
   deliveries: Delivery[];
+  jobs: OperationJob[];
   reliability: {
     sample: number;
     ready: number;
@@ -22,17 +24,19 @@ export function OperationsPage() {
   const info = useQuery({
     queryKey: ["operations"],
     queryFn: () => api.get<Operations>("/api/operations"),
-    refetchInterval: 5000,
+    refetchInterval: (q) => (q.state.data?.jobs.some(operationActive) ? 2000 : 5000),
   });
   const repos = useQuery(reposQuery);
+  const missions = useQuery(missionsQuery);
   const [older, setOlder] = useState<AuditEntry[]>([]);
+  const [showRecent, setShowRecent] = useState(false);
   const history = useMutation({
     mutationFn: (before: number) => api.get<AuditEntry[]>(`/api/audit?before=${before}`),
     onSuccess: (rows) => setOlder((prev) => [...prev, ...rows]),
   });
   const action = useMutation({
     mutationFn: ({ repoId, stage, previousId }: { repoId: string; stage: string; previousId?: string }) =>
-      api.post(`/api/repos/${repoId}/deliver`, { stage, previousId }),
+      api.post(`/api/repos/${repoId}/deliver?background=1`, { stage, previousId }),
     onSettled: () => {
       void info.refetch();
     },
@@ -50,6 +54,9 @@ export function OperationsPage() {
     },
   });
   const data = info.data;
+  const activeJobs = data?.jobs.filter(operationActive) ?? [];
+  const finishedJobs = data?.jobs.filter((job) => !operationActive(job)) ?? [];
+  const visibleJobs = [...activeJobs, ...finishedJobs.slice(0, showRecent ? 30 : 3)];
   const audit = [...(data?.audit ?? []), ...older].filter(
     (row, i, all) => all.findIndex((other) => other.id === row.id) === i,
   );
@@ -70,6 +77,51 @@ export function OperationsPage() {
           {info.error.message}
         </p>
       )}
+      <section className="grid gap-3">
+        <h2 className="text-[18px] font-medium">Running and recent operations</h2>
+        <p className="text-[13px] text-muted">
+          Follow mission verification and delivery here, including work started automatically. Progress survives a page
+          reload; a runner restart marks unfinished work interrupted.
+        </p>
+        {!data?.jobs.length && (
+          <p className="text-[13px] text-muted">Start mission verification or delivery to see its progress here.</p>
+        )}
+        {visibleJobs.map((job) => (
+          <article key={job.id} className="grid gap-3 rounded-2xl bg-surface p-5 ring-1 ring-line">
+            <div className="flex flex-wrap justify-between gap-2">
+              <h3 className="font-medium break-words">
+                {job.kind === "mission"
+                  ? `${missions.data?.find((m) => m.id === job.subjectId)?.title ?? "Mission"} · acceptance`
+                  : `${repos.data?.find((r) => r.id === job.subjectId)?.name ?? "Repository"} · ${job.stage}`}
+              </h3>
+              {job.kind === "mission" && missions.data?.some((m) => m.id === job.subjectId) && (
+                <Link to="/missions/$missionId" params={{ missionId: job.subjectId }} className="text-[13px] text-dawn">
+                  View mission →
+                </Link>
+              )}
+              {job.kind === "delivery" && data?.deliveries.some((d) => d.id === job.resultId) && (
+                <a href={`#${job.resultId}`} className="text-[13px] text-dawn">
+                  View delivery result →
+                </a>
+              )}
+            </div>
+            <p className="text-[12px] text-muted">
+              Started {new Date(job.createdAt).toLocaleString()}
+              {job.kind === "mission" && job.repoId
+                ? ` · ${repos.data?.find((r) => r.id === job.repoId)?.name ?? "Repository"}`
+                : ""}
+            </p>
+            <OperationProgress job={job} />
+          </article>
+        ))}
+        {finishedJobs.length > 3 && (
+          <div>
+            <Button variant="ghost" onClick={() => setShowRecent(!showRecent)}>
+              {showRecent ? "Show fewer operations" : `Show ${finishedJobs.length} recent operations`}
+            </Button>
+          </div>
+        )}
+      </section>
       <section className="grid gap-3 rounded-2xl bg-surface p-5 ring-1 ring-line">
         <h2 className="font-medium">Reliability · last {data?.reliability.sample ?? 0} finished local attempts</h2>
         <p className="text-[13px] text-muted">
@@ -98,6 +150,9 @@ export function OperationsPage() {
         {repos.data?.map((repo) => {
           const records = data?.deliveries.filter((d) => d.repoId === repo.id) ?? [];
           const latest = records[0];
+          const busy = data?.jobs.some(
+            (job) => job.kind === "delivery" && job.subjectId === repo.id && operationActive(job),
+          );
           const configured = Boolean(repo.delivery?.branch && repo.delivery.check);
           const next =
             latest?.status === "passed"
@@ -122,22 +177,22 @@ export function OperationsPage() {
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button
-                  disabled={!configured || action.isPending || latest?.status === "running"}
+                  disabled={!configured || action.isPending || busy || latest?.status === "running"}
                   onClick={() => action.mutate({ repoId: repo.id, stage: "check" })}
                 >
                   Check current commit
                 </Button>
                 {next && (
                   <Button
-                    disabled={action.isPending || !repo.delivery?.[next]}
+                    disabled={action.isPending || busy || !repo.delivery?.[next]}
                     onClick={() => action.mutate({ repoId: repo.id, stage: next, previousId: latest?.id })}
                   >
                     {next === "deploy" ? "Deploy verified commit" : "Release deployed commit"}
                   </Button>
                 )}
               </div>
-              {records.slice(0, 6).map((d) => (
-                <details key={d.id} className="text-[13px]">
+              {records.map((d) => (
+                <details key={d.id} id={d.id} className="scroll-mt-20 text-[13px]">
                   <summary className="cursor-pointer break-words">
                     {d.stage} · {d.status} · {d.sha.slice(0, 8)} · {new Date(d.createdAt).toLocaleString()}
                   </summary>

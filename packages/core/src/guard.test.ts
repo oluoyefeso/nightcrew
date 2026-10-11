@@ -6,7 +6,7 @@ import { browserProfileDirs, type GuardContext, globToRegExp, guardToolCall, isA
 
 const ctx: GuardContext = {
   worktree: "/repo/.worktrees/t",
-  writableDirs: ["/home/u/.nightcrew/runs/r1"],
+  writableDirs: ["/nc-fixture/u/.nightcrew/runs/r1"],
   scope: ["src/auth/**", "tests/**"],
   protectedBranches: ["main", "production"],
   readOnly: false,
@@ -29,7 +29,7 @@ describe("writes", () => {
     expect(allowed("Write", { file_path: "../../etc/passwd" })).toBe(false);
   });
   test("the artifacts folder is always writable", () => {
-    expect(allowed("Write", { file_path: "/home/u/.nightcrew/runs/r1/DECISIONS.md" })).toBe(true);
+    expect(allowed("Write", { file_path: "/nc-fixture/u/.nightcrew/runs/r1/DECISIONS.md" })).toBe(true);
   });
   test("workflows, secrets and .git are protected even with open scope", () => {
     const open = { ...ctx, scope: [] };
@@ -101,9 +101,9 @@ describe("writes", () => {
   });
   test("research tasks can't edit code", () => {
     expect(allowed("Edit", { file_path: "src/auth/a.ts" }, { ...ctx, readOnly: true })).toBe(false);
-    expect(allowed("Write", { file_path: "/home/u/.nightcrew/runs/r1/REPORT.md" }, { ...ctx, readOnly: true })).toBe(
-      true,
-    );
+    expect(
+      allowed("Write", { file_path: "/nc-fixture/u/.nightcrew/runs/r1/REPORT.md" }, { ...ctx, readOnly: true }),
+    ).toBe(true);
   });
 });
 
@@ -300,7 +300,7 @@ test.each([
   ["Grep", { pattern: "KEY", glob: "**/.env*" }, false],
   ["Grep", { pattern: "BEGIN", glob: "*.pem" }, false],
   ["Glob", { pattern: "**/.env.*" }, false],
-  ["Glob", { pattern: "**/id_rsa*", path: "/home/u/.ssh" }, false],
+  ["Glob", { pattern: "**/id_rsa*", path: "/nc-fixture/u/.ssh" }, false],
   ["Grep", { pattern: "\\.env", path: "src" }, true],
   ["Grep", { pattern: "foo", glob: "*.ts" }, true],
   ["Glob", { pattern: "**/*.ts" }, true],
@@ -414,6 +414,14 @@ describe("writes through symlinks", () => {
       guardToolCall(tool, tool === "NotebookEdit" ? { notebook_path: file_path } : { file_path }, c),
     );
 
+  test("a path outside the worktree is refused without touching the disk", () => {
+    // Value: protects=an agent can't stall the crew's event loop with a write to a slow mount (/net, /home autofs); fails_when=guardWrite resolves the path on disk before the spelled-path check (it then reports the dangling link); why_new=a guard test hung 91s on a cold /home lookup; seam=none
+    symlinkSync(join(root, "nowhere"), join(root, "loose"));
+    for (const d of writes(join(root, "loose", "x.ts"))) {
+      expect(d.allow).toBe(false);
+      if (!d.allow) expect(d.reason).toBe("Writes must stay inside the task's worktree.");
+    }
+  });
   test("a symlinked folder that stays inside is allowed", () => {
     // Value: protects=normal repos with in-repo symlinked folders keep working; fails_when=landing() stops resolving to the real path or rejects every symlinked parent; why_new=Y1 symlink fix; seam=none
     for (const d of writes(join(wt, "src", "inner", "new.ts"))) expect(d.allow).toBe(true);

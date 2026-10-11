@@ -283,15 +283,15 @@ function deletesOutside(words: string[], ctx: GuardContext): boolean {
 function guardWrite(path: string, ctx: GuardContext): GuardDecision {
   if (!path) return deny("A write needs a file path.");
   const abs = isAbsolute(path) ? normalize(path) : resolve(ctx.worktree, path);
+  // Refuse by spelling first: only paths inside our own folders touch the
+  // disk, so an agent can't stall the crew on a slow mount (/net, /home).
+  const writable = ctx.writableDirs.find((dir) => isInside(abs, dir));
+  if (!writable && !isInside(abs, ctx.worktree)) return deny("Writes must stay inside the task's worktree.");
   // The file tools follow symlinks in the path and don't run in the OS
   // sandbox, so judge where the write really lands, not just how it's spelled.
   const lands = landing(abs, false);
   if (!lands) return deny("Writes can't go through a symlink.");
-
-  for (const dir of ctx.writableDirs) {
-    if (isInside(abs, dir)) return isInside(lands, landing(dir, true) ?? dir) ? { allow: true } : deny(ESCAPES);
-  }
-  if (!isInside(abs, ctx.worktree)) return deny("Writes must stay inside the task's worktree.");
+  if (writable) return isInside(lands, landing(writable, true) ?? writable) ? { allow: true } : deny(ESCAPES);
   const root = landing(ctx.worktree, true) ?? ctx.worktree;
   if (!isInside(lands, root)) return deny(ESCAPES);
   if (ctx.readOnly) return deny("Research tasks don't change the code. Write the report to the artifacts folder.");

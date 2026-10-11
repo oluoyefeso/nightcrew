@@ -12,6 +12,7 @@ import {
   getOperationJob,
   getRepo,
   getTask,
+  getTemplate,
   listAudit,
   openDb,
   updateRepo,
@@ -144,4 +145,58 @@ test("background API returns an authenticated pollable job and stopping it is sc
   expect((await send("POST", "/api/operations/missing/stop")).status).toBe(404);
   // Background execution must retain the runner's no-publish ceiling.
   expect((await send("POST", `/api/repos/${repo.id}/deliver?background=1`, { stage: "deploy" })).status).toBe(409);
+});
+
+test("template lifecycle rejects stale edits and deletes without changing copied repository rules", async () => {
+  const repo = addRepo(db, { name: "Fixture", path: "/demo/repo", defaultBranch: "main" });
+  const policies = { implementation: { ...DEFAULT_TASK_POLICY, requireTests: true, reviewers: 2 } };
+  const created = (await (await send("POST", "/api/policy-templates", { name: "Initial", policies })).json()) as {
+    id: string;
+    updatedAt: string;
+  };
+  await send("POST", `/api/repos/${repo.id}/policy-template`, { templateId: created.id });
+  const exported = await send("GET", `/api/policy-templates/${created.id}/export`);
+  expect(exported.headers.get("content-disposition")).toContain("nightcrew-verification.json");
+  expect(await exported.json()).toEqual({
+    format: "nightcrew.verification-template",
+    version: 1,
+    name: "Initial",
+    policies,
+  });
+  const patch = { name: "Revised", policies: {}, expectedUpdatedAt: created.updatedAt };
+  expect((await send("PATCH", `/api/policy-templates/${created.id}`, patch)).status).toBe(200);
+  expect(getTemplate(db, created.id)?.name).toBe("Revised");
+  expect((await send("PATCH", `/api/policy-templates/${created.id}`, { ...patch, name: "Stale" })).status).toBe(409);
+  expect(
+    (await send("DELETE", `/api/policy-templates/${created.id}`, { expectedUpdatedAt: created.updatedAt })).status,
+  ).toBe(409);
+  const latest = getTemplate(db, created.id)!;
+  expect(
+    (await send("DELETE", `/api/policy-templates/${created.id}`, { expectedUpdatedAt: latest.updatedAt })).status,
+  ).toBe(200);
+  expect(getTemplate(db, created.id)).toBeNull();
+  expect(getRepo(db, repo.id)?.policies).toEqual(policies);
+  expect(getRepo(db, repo.id)?.level).toBe("draft_pr");
+  expect(listAudit(db).some((a) => a.action === "policy.template.deleted")).toBe(true);
+  expect((await send("GET", `/api/policy-templates/${created.id}/export`)).status).toBe(404);
+  expect((await app.request(`/api/policy-templates/${created.id}/export`)).status).toBe(401);
+});
+
+test("repository verification validates its snapshot and uses the authenticated operation service", async () => {
+  const repo = addRepo(db, { name: "Fixture", path: "/demo/missing", defaultBranch: "main" });
+  expect((await app.request(`/api/repos/${repo.id}/readiness`)).status).toBe(401);
+  expect((await send("POST", `/api/repos/${repo.id}/verify-setup`, { fingerprint: "invalid" })).status).toBe(400);
+  const readiness = (await (await send("GET", `/api/repos/${repo.id}/readiness`)).json()) as {
+    fingerprint: string;
+    blockers: string[];
+  };
+  expect(readiness.blockers.length).toBeGreaterThan(0);
+  const response = await send("POST", `/api/repos/${repo.id}/verify-setup`, { fingerprint: readiness.fingerprint });
+  expect(response.status).toBe(202);
+  const job = (await response.json()) as { id: string };
+  for (let i = 0; i < 100 && getOperationJob(db, job.id)?.phase !== "finished"; i++) await Bun.sleep(10);
+  expect(getOperationJob(db, job.id)).toMatchObject({ status: "failed", kind: "repository" });
+  expect((await send("POST", "/api/repos/missing/verify-setup", { fingerprint: readiness.fingerprint })).status).toBe(
+    404,
+  );
 });

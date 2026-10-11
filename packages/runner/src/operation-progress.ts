@@ -27,7 +27,7 @@ export function operation(
     stage,
     status: "running",
     phase: "validating",
-    repoId: kind === "delivery" ? subjectId : null,
+    repoId: kind === "mission" ? null : subjectId,
     resultId: null,
     detail: "Checking the requested action.",
     createdAt: at,

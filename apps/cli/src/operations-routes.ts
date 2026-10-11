@@ -1,13 +1,15 @@
-import { validateDelivery, validatePolicies } from "@nightcrew/core";
+import { portableTemplate, validateDelivery, validatePolicies, validateTemplateName } from "@nightcrew/core";
 import {
   auditEvent,
   type Db,
+  deleteTemplate,
   getCheckpoint,
   getDelivery,
   getOperationJob,
   getRepo,
   getRun,
   getTask,
+  getTemplate,
   listAudit,
   listDeliveries,
   listOperationJobs,
@@ -18,14 +20,17 @@ import {
   schema,
   updateRepo,
   updateTask,
+  updateTemplate,
 } from "@nightcrew/db";
 import {
   acceptMission,
   advanceDelivery,
   type Crew,
   missionReadiness,
+  repositoryReadiness,
   startDelivery,
   startMissionAcceptance,
+  startRepositoryVerification,
   stopOperation,
   stopOperations,
 } from "@nightcrew/runner";
@@ -111,14 +116,63 @@ export function mountOperationsRoutes(app: Hono, deps: { db: Db; crew: Crew; dat
     return c.json({ ok: true });
   });
   app.get("/api/audit", (c) => c.json(listAudit(db, Number(c.req.query("before")) || undefined)));
+  app.get("/api/repos/:id/readiness", async (c) => {
+    const id = c.req.param("id");
+    if (!getRepo(db, id)) return c.json({ error: "Repository not found." }, 404);
+    c.header("cache-control", "no-store");
+    return c.json(await repositoryReadiness(db, id));
+  });
+  app.post("/api/repos/:id/verify-setup", async (c) => {
+    const id = c.req.param("id");
+    if (!getRepo(db, id)) return c.json({ error: "Repository not found." }, 404);
+    const value = await c.req.json().catch(() => null);
+    if (!value || typeof value.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(value.fingerprint))
+      return c.json({ error: "Provide the current repository setup snapshot." }, 400);
+    try {
+      return c.json(await startRepositoryVerification(db, id, value.fingerprint, dataDir), 202);
+    } catch (error) {
+      return c.json(
+        { error: error instanceof Error ? error.message : "Repository verification could not start." },
+        409,
+      );
+    }
+  });
   app.get("/api/policy-templates", (c) => c.json(listTemplates(db)));
   app.post("/api/policy-templates", async (c) => {
     const value = await c.req.json().catch(() => null);
-    if (!value || typeof value.name !== "string" || !value.name.trim() || value.name.length > 100)
-      return c.json({ error: "Name the template (up to 100 characters)." }, 400);
-    const error = validatePolicies(value.policies);
+    const error = validateTemplateName(value?.name) ?? validatePolicies(value?.policies);
     if (error) return c.json({ error }, 400);
     return c.json(saveTemplate(db, { name: value.name.trim(), policies: value.policies }), 201);
+  });
+  app.get("/api/policy-templates/:id/export", (c) => {
+    const row = getTemplate(db, c.req.param("id"));
+    if (!row) return c.json({ error: "Template not found." }, 404);
+    c.header("cache-control", "no-store");
+    c.header("content-disposition", 'attachment; filename="nightcrew-verification.json"');
+    return c.json(portableTemplate(row.name, row.policies));
+  });
+  app.patch("/api/policy-templates/:id", async (c) => {
+    const id = c.req.param("id");
+    if (!getTemplate(db, id)) return c.json({ error: "Template not found." }, 404);
+    const value = await c.req.json().catch(() => null);
+    const error = validateTemplateName(value?.name) ?? validatePolicies(value?.policies);
+    if (error) return c.json({ error }, 400);
+    if (typeof value.expectedUpdatedAt !== "string" || !Number.isFinite(Date.parse(value.expectedUpdatedAt)))
+      return c.json({ error: "Provide the template version you previewed." }, 400);
+    const row = updateTemplate(db, id, value.expectedUpdatedAt, { name: value.name.trim(), policies: value.policies });
+    return row
+      ? c.json(row)
+      : c.json({ error: "The template changed in another window. Preview its current version before saving." }, 409);
+  });
+  app.delete("/api/policy-templates/:id", async (c) => {
+    const id = c.req.param("id");
+    if (!getTemplate(db, id)) return c.json({ error: "Template not found." }, 404);
+    const value = await c.req.json().catch(() => null);
+    if (typeof value?.expectedUpdatedAt !== "string")
+      return c.json({ error: "Provide the template version you previewed." }, 400);
+    return deleteTemplate(db, id, value.expectedUpdatedAt)
+      ? c.json({ ok: true })
+      : c.json({ error: "The template changed in another window. Preview it again before deleting." }, 409);
   });
   app.post("/api/repos/:id/policy-template", async (c) => {
     const repo = getRepo(db, c.req.param("id"));

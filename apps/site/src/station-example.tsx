@@ -124,7 +124,8 @@ export function StationExample() {
               <p className="text-muted">Queued without starting an agent. Fix the setup and dispatch can pick it up.</p>
             </div>
             <p className="text-[12px] text-muted">
-              Checks inspect configuration. Scope overlap warnings are advisory; verification still runs with the task.
+              Departure checks inspect configuration. Rehearse repository setup and tests separately before spending
+              agent tokens; task verification still runs on each change.
             </p>
           </>
         ) : view === "Decision brief" ? (

@@ -84,3 +84,5 @@ The demo crew narrates believable steps and writes a small file inside each task
 Create a Mission, edit its acceptance criteria and limits, then draft work for it. Inspect departure checks and approve the proposed task breakdown. If a run fails, its task's Recovery panel offers Resume, Verify saved build, and Rebuild. After tasks succeed, record criterion evidence and verify the combined result in Mission acceptance.
 
 Open **Operations** from the navigation or command bar for delivery, repository setup, reliability and activity. Configure delivery commands in repository settings before using them. See [Conductor operations](operations.md) for the complete workflow and limits.
+
+Before your first agent run, use **Verify repository setup** in Settings to rehearse installation and tests against the local default branch without spending agent tokens. Save verification routes as named templates, or import a template to preview its rules before applying them. The [conductor roadmap](roadmap.md) tracks the next product batches.

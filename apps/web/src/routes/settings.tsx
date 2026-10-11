@@ -7,6 +7,7 @@ import { AddRepo } from "../components/add-repo";
 import { DeliveryEditor } from "../components/delivery-editor";
 import { ChipsEditor, Field, Select, TextInput } from "../components/form";
 import { PolicyEditor } from "../components/policy-editor";
+import { RepositoryReadinessPanel } from "../components/repository-readiness";
 
 const LEVEL_HINT: Record<AutonomyLevel, string> = {
   propose: "Plans only. No code changes.",
@@ -232,9 +233,9 @@ function RepoCard({ repo }: { repo: Repo }) {
   return (
     <article className="grid gap-4 rounded-2xl bg-surface p-5 ring-1 ring-line">
       <div className="flex items-start justify-between gap-3">
-        <div className="grid gap-0.5">
+        <div className="grid min-w-0 gap-0.5">
           <h3 className="font-medium text-[16px] tracking-[-0.02em]">{repo.name}</h3>
-          <span className="font-mono text-[11.5px] text-faint">{repo.path}</span>
+          <span className="font-mono text-[11.5px] text-faint break-all">{repo.path}</span>
         </div>
         <button
           type="button"
@@ -394,6 +395,12 @@ function RepoCard({ repo }: { repo: Repo }) {
           placeholder="production, release/*"
         />
       </Field>
+      <RepositoryReadinessPanel repo={repo} />
+      {remove.error && (
+        <p role="alert" className="text-[12px] text-bad">
+          {remove.error.message}
+        </p>
+      )}
     </article>
   );
 }

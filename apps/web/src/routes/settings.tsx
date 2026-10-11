@@ -25,6 +25,9 @@ export function SettingsPage() {
     onSuccess: (s) => {
       qc.setQueryData(settingsQuery.queryKey, s);
       qc.invalidateQueries({ queryKey: ["crew"] });
+      qc.invalidateQueries({ queryKey: ["preflight"] });
+      qc.invalidateQueries({ queryKey: ["queue"] });
+      qc.invalidateQueries({ queryKey: ["station"] });
     },
   });
   const s = settings.data;
@@ -208,6 +211,9 @@ function RepoCard({ repo }: { repo: Repo }) {
       if (!patch.level && picked === "ship" && saved.level !== "ship" && shipReady(saved))
         update.mutate({ level: "ship" });
       await qc.invalidateQueries({ queryKey: ["repos"] });
+      qc.invalidateQueries({ queryKey: ["preflight"] });
+      qc.invalidateQueries({ queryKey: ["queue"] });
+      qc.invalidateQueries({ queryKey: ["station"] });
       // Only once the list shows the saved level, so the select and ship fields don't flick back.
       if (patch.level) setPicked((p) => (p === patch.level ? null : p));
     },

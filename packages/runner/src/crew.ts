@@ -16,7 +16,17 @@ import {
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
-import { formatTokens, nightIdFor, planQueue, type QueueEntry, type Task } from "@nightcrew/core";
+import {
+  type DepartureReport,
+  type DepartureTask,
+  departureChecks,
+  formatTokens,
+  nightIdFor,
+  planQueue,
+  type QueueEntry,
+  scopesMayOverlap,
+  type Task,
+} from "@nightcrew/core";
 import {
   type Db,
   getRepo,
@@ -24,6 +34,7 @@ import {
   getSettings,
   getTask,
   getTrain,
+  listRepos,
   listTasks,
   listTrains,
   type RunEvent,
@@ -156,6 +167,8 @@ export class Crew {
       .filter((t) => t.status === "queued")
       .map((task): QueueEntry => {
         const entry = { taskId: task.id, title: task.title, repoName: task.repoName, runAt: task.runAt };
+        const holds = departureChecks(task, getRepo(db, task.repoId)).signals.filter((s) => s.kind === "hold");
+        if (holds.length) return { ...entry, kind: "setup", reason: holds.map((s) => s.message).join(" ") };
         const waiting = task.dependsOn.filter((id) => !byId.has(id) || !this.satisfied(byId.get(id) as Task));
         if (waiting.length)
           return {
@@ -186,6 +199,117 @@ export class Crew {
           return { ...entry, kind: "capacity", reason: "Waiting for an agent slot across the crew." };
         return { ...entry, kind: "ready", reason: "Ready for dispatch, in queue order." };
       });
+  }
+
+  /** Read-only preview of unsaved drafts or saved tasks, against current reservations and dependencies. */
+  preflight(candidates: DepartureTask[]): DepartureReport {
+    const { db } = this.deps;
+    const settings = getSettings(db);
+    const existing = listTasks(db);
+    const repos = new Map(listRepos(db).map((repo) => [repo.id, repo]));
+    const byId = new Map(existing.map((t) => [t.id, t]));
+    const proposed = new Map(candidates.map((t) => [t.id, t]));
+    const all = new Map<string, DepartureTask>([...byId, ...proposed]);
+    const used = tokensOnDay(db, nightIdFor(new Date().toISOString()));
+    const reserved = this.inFlightBudget();
+    const available = Math.max(0, settings.dailyTokenBudget - used - reserved);
+    const peers = [...all.values()].filter(
+      (t) => proposed.has(t.id) || ["queued", "running"].includes(byId.get(t.id)?.status ?? ""),
+    );
+    const reaches = (from: string, target: string, seen = new Set<string>()): boolean => {
+      if (from === target) return true;
+      if (seen.has(from)) return false;
+      seen.add(from);
+      return (all.get(from)?.dependsOn ?? []).some((id) => reaches(id, target, seen));
+    };
+    return {
+      budget: {
+        daily: settings.dailyTokenBudget,
+        used,
+        reserved,
+        available,
+        requested: candidates.reduce((sum, t) => sum + t.tokenBudget, 0),
+      },
+      tasks: candidates.map((task) => {
+        const check = departureChecks(task, repos.get(task.repoId) ?? null);
+        const add = (
+          code: string,
+          kind: "hold" | "wait" | "notice",
+          message: string,
+          target: "settings" | "task",
+          taskId?: string,
+        ) => check.signals.push({ code, kind, message, target, taskId });
+        for (const id of task.dependsOn) {
+          const dep = all.get(id);
+          if (!dep) add("dependency-missing", "hold", "A prerequisite no longer exists. Remove or replace it.", "task");
+          else if (reaches(id, task.id))
+            add(
+              "dependency-cycle",
+              "hold",
+              `A dependency cycle includes ${dep.title}. Remove the circular dependency.`,
+              "task",
+            );
+          else if (proposed.has(id) || !byId.has(id) || !this.satisfied(byId.get(id)!))
+            add(
+              "dependency",
+              "wait",
+              `Waiting for ${dep.title} to finish successfully.`,
+              "task",
+              byId.has(id) ? id : undefined,
+            );
+        }
+        if (!settings.dispatch)
+          add("paused", "wait", "Dispatch is paused. Resume it from the crew controls.", "settings");
+        if (task.runAt && Date.parse(task.runAt) > Date.now())
+          add("scheduled", "wait", "Waiting for its scheduled departure.", "task");
+        if (this.pausedUntil > Date.now())
+          add("backoff", "wait", this.message ?? "Waiting for the provider's rate limit to clear.", "task");
+        if (task.tokenBudget > settings.dailyTokenBudget)
+          add(
+            "budget-limit",
+            "hold",
+            "This task's token cap exceeds the daily budget. Lower the cap or raise the daily budget.",
+            "settings",
+          );
+        else if (task.tokenBudget > available)
+          add(
+            "budget",
+            "wait",
+            "The daily budget has insufficient room after usage and running reservations.",
+            "settings",
+          );
+        const inRepo = [...this.running.values()].filter((r) => r.agent.repoId === task.repoId).length;
+        if (this.running.size >= settings.maxAgents || inRepo >= settings.maxPerRepo)
+          add("capacity", "wait", "Waiting for an agent slot within the crew and repository limits.", "settings");
+        if (check.route?.authority !== "propose") {
+          const overlaps = peers.filter(
+            (other) =>
+              other.id !== task.id &&
+              other.repoId === task.repoId &&
+              !reaches(task.id, other.id) &&
+              !reaches(other.id, task.id) &&
+              departureChecks(other, repos.get(other.repoId) ?? null).route?.authority !== "propose" &&
+              scopesMayOverlap(task.scope, other.scope),
+          );
+          if (overlaps.length)
+            add(
+              "overlap",
+              "notice",
+              `Scope may overlap with ${overlaps.map((t) => t.title).join(", ")}. Consider a dependency or narrower scope; separate clones do not prevent merge conflicts.`,
+              "task",
+              byId.has(overlaps[0]!.id) ? overlaps[0]!.id : undefined,
+            );
+        }
+        check.signals = check.signals.filter(
+          (signal, index, signals) =>
+            signals.findIndex(
+              (other) =>
+                other.code === signal.code && other.taskId === signal.taskId && other.message === signal.message,
+            ) === index,
+        );
+        return check;
+      }),
+    };
   }
 
   /** Start the dispatcher: check for work now and every few seconds. */
@@ -251,6 +375,7 @@ export class Crew {
     for (const id of planQueue(all).order) {
       const t = byId.get(id);
       if (!t || this.running.has(id) || skip.has(id)) continue;
+      if (departureChecks(t, getRepo(db, t.repoId)).signals.some((s) => s.kind === "hold")) continue;
       if (t.runAt && new Date(t.runAt).getTime() > now) continue;
       // Dependencies must have finished and succeeded, not just started or stopped.
       if (t.dependsOn.some((d) => byId.has(d) && !this.satisfied(byId.get(d) as Task))) continue;

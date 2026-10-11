@@ -26,6 +26,8 @@ export function PolicyEditor({ repo }: { repo: Repo }) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["repos"] });
       qc.invalidateQueries({ queryKey: ["station"] });
+      qc.invalidateQueries({ queryKey: ["preflight"] });
+      qc.invalidateQueries({ queryKey: ["queue"] });
       toast(`Saved task routes for ${repo.name}.`);
     },
   });

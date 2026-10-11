@@ -111,6 +111,23 @@ describe("local API guard", () => {
 });
 
 describe("GET /api/info", () => {
+  test("departure checks require the launch key and do not create work", async () => {
+    const request = {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tasks: [{ repoId: "repo_missing", title: "Check setup" }] }),
+    };
+    expect((await locked.request("/api/preflight", request)).status).toBe(401);
+    const result = await locked.request("/api/preflight", {
+      ...request,
+      headers: { ...request.headers, "x-nightcrew-token": KEY },
+    });
+    expect(result.status).toBe(200);
+    expect(result.headers.get("cache-control")).toBe("no-store");
+    expect(listTasks(db)).toHaveLength(0);
+    expect((await locked.request("/api/crew/queue")).status).toBe(401);
+  });
+
   test("the Station requires the launch key and returns an empty usable snapshot", async () => {
     expect((await locked.request("/api/station")).status).toBe(401);
     const result = await locked.request("/api/station", { headers: { "x-nightcrew-token": KEY } });

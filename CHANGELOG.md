@@ -2,6 +2,25 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.4] - 2026-10-11
+
+See what will hold work before dispatch, then resolve completed runs with a clearer decision brief.
+
+### Added
+- **Departure checks.** Draft batches and saved tasks show the effective route, required setup, prerequisites, scope overlap warnings, and available token budget after usage and running reservations.
+- **Setup holds.** The dispatcher leaves tasks queued without starting an agent when required test or preview commands are missing. Holds appear in the Station and Agents queue; fixing the settings lets dispatch resume automatically.
+- **Editable prerequisites.** Add or remove task dependencies, with checks for missing prerequisites and circular dependencies before dispatch.
+- **Decision briefs.** Runs explain their stop reason, missing evidence and next steps, with shortcuts to available artifacts, task editing and repository settings.
+
+### Fixed
+- Invalid batch dependency references are rejected before any tasks are created, instead of being silently dropped.
+- Artifact tabs wrap on small screens.
+
+### Notes
+- Departure checks inspect configuration; they do not execute commands or prove that file scopes are conflict-free. Scope warnings are advisory, and proposed token caps are not usage estimates or reservations.
+- Retry keeps saved work where available and reruns verification. This release does not add phase checkpoint recovery.
+- The local open-source runner remains the supported experience. Managed mode is Coming soon.
+
 ## [1.0.0-alpha.3] - 2026-10-11
 
 NightCrew becomes the conductor's station: dispatch work, configure each task's

@@ -1,0 +1,390 @@
+// The guardrail every tool call passes through while the crew works unattended.
+// Pure: given a tool call and the task's limits, allow it or say why not.
+
+import { lstatSync, realpathSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
+
+export interface GuardContext {
+  /** The task's worktree. Writes outside it are refused. */
+  worktree: string;
+  /** Extra directories the agent may write to (NightCrew's artifact folder). */
+  writableDirs: string[];
+  /** Globs relative to the worktree. Empty means anything in the worktree. */
+  scope: string[];
+  protectedBranches: string[];
+  /** Research tasks read and write reports only. */
+  readOnly: boolean;
+  /** More directories a recursive rm may clear inside (besides the worktree, writableDirs and the temp dir). */
+  extraRoots?: string[];
+}
+
+export type GuardDecision = { allow: true } | { allow: false; reason: string };
+
+const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+
+/** Paths no task may touch, whatever its scope says. */
+export const ALWAYS_PROTECTED = [
+  ".github/workflows/**",
+  // Composite actions run inside CI jobs, with their secrets.
+  ".github/actions/**",
+  ".env",
+  ".env.*",
+  "**/.env",
+  "**/.env.*",
+  ".git",
+  ".git/**",
+  "**/.git",
+  "**/*.pem",
+  "**/id_rsa*",
+  // Host git acts on these after landing: filters, LFS endpoints, submodule URLs.
+  ".gitattributes",
+  "**/.gitattributes",
+  ".lfsconfig",
+  ".gitmodules",
+  // Legacy in-repo worktrees; nothing under it belongs in a task.
+  ".worktrees/**",
+];
+
+/**
+ * A repo-relative path NightCrew never lets a task change. Case-insensitive:
+ * on macOS's default file system git reads .GITATTRIBUTES as .gitattributes.
+ */
+export function isAlwaysProtected(path: string): boolean {
+  return matchesAny(path.replace(/^(\.\/)+/, ""), ALWAYS_PROTECTED, true);
+}
+
+/**
+ * Browser profile folders, relative to home. The dashboard's API token lives
+ * in the browser's localStorage, on disk in these. No agent or check reads them.
+ */
+const BROWSER_PROFILES = [
+  "Library/Application Support/Google/Chrome",
+  "Library/Application Support/Chromium",
+  "Library/Application Support/BraveSoftware",
+  "Library/Application Support/Microsoft Edge",
+  "Library/Application Support/Arc",
+  "Library/Application Support/Firefox",
+  "Library/Safari",
+  "Library/Containers/com.apple.Safari",
+  ".config/google-chrome",
+  ".config/chromium",
+  ".config/BraveSoftware",
+  ".config/microsoft-edge",
+  ".mozilla",
+];
+
+export function browserProfileDirs(home = homedir()): string[] {
+  return BROWSER_PROFILES.map((d) => join(home, d));
+}
+
+/** Inside a browser profile, as written or where it leads. Case-insensitive, like macOS. */
+function inBrowserProfile(abs: string): boolean {
+  const dirs = browserProfileDirs().map((d) => d.toLowerCase());
+  return [abs, realPath(abs)].some((p) => dirs.some((d) => isInside(p.toLowerCase(), d)));
+}
+
+/** Secret file names: .env, .env.local, key.pem, id_rsa. Not .envrc, environment or a template like .env.example. */
+const SECRET_NAMES = [".env", ".env.*", "*.pem", "id_rsa*"];
+// Case-insensitive throughout: .ENV and KEY.PEM open the same files on macOS.
+const ENV_TEMPLATE = /^\.env\.(example|sample|template|dist)$/i;
+const SECRET_WORD =
+  /(^|[\s/=<>:;&|(`])(\.env(?!\.(example|sample|template|dist)(?=$|[\s;&|)<>`]))(\.[\w.-]+)?|[\w.-]*\.pem|id_rsa[\w.-]*)(?=$|[\s;&|)<>`])/i;
+
+// Git global options (-C dir, -c k=v, --git-dir x, --no-pager) may sit before the subcommand.
+const GIT_OPT = String.raw`(?:-[cC]\s+\S+|--(?:git-dir|work-tree|namespace|config-env)\s+\S+|-[\w-]+(?:=\S+)?)`;
+const git = (sub: string) => new RegExp(String.raw`\bgit(?:\s+${GIT_OPT})*\s+(?:${sub})`);
+
+const BASH_RULES: { test: RegExp; reason: string }[] = [
+  {
+    test: new RegExp(`${git(String.raw`(push|send-pack|receive-pack)\b`).source}|\\bgit-(send|receive)-pack\\b`),
+    reason: "NightCrew pushes the branch itself after checks pass.",
+  },
+  {
+    test: git(String.raw`reset\b[^;&|]*--hard|clean\b[^;&|]*(\s-[a-zA-Z]*f|--force)`),
+    reason: "Destructive git commands are blocked.",
+  },
+  { test: git(String.raw`(remote|config)\b`), reason: "Changing git remotes or config is blocked." },
+  { test: git(String.raw`rebase\b`), reason: "Rewriting history is blocked." },
+  {
+    test: git(String.raw`branch\b[^;&|]*\s(-[a-zA-Z]*[dD](?=\s|$)|--delete)|tag\b`),
+    reason: "Deleting branches and tagging are blocked.",
+  },
+  { test: /\bgh\s+(pr|release|repo|api|secret|workflow)\b/, reason: "NightCrew opens the pull request itself." },
+  {
+    test: /\bgh\s+auth\s+(token|login|logout|refresh|setup-git|switch)\b|\bgh\s+auth\s+status\b[^;&|]*(--show-token|\s-t\b)/,
+    reason: "GitHub credentials are off limits.",
+  },
+  {
+    test: /\b(npm|pnpm|yarn|bun)\s+publish\b|\bcargo\s+publish\b|\btwine\s+upload\b/,
+    reason: "Publishing packages is blocked.",
+  },
+  { test: /\bsudo\b|\bsu\s+-/, reason: "Elevated privileges are blocked." },
+  {
+    test: /\b(curl|wget|http)\b[^|]*\s(-X\s*(POST|PUT|PATCH|DELETE)|--data|-d\s|--upload-file|-T\s)/i,
+    reason: "Network writes are blocked. Read-only requests are fine.",
+  },
+  { test: /\b(npm|pnpm|yarn|bun)\s+(i|install|add)\s+(-g|--global)\b/, reason: "Global installs are blocked." },
+  {
+    test: /\b(brew|apt(-get)?|yum|dnf|pacman)\s+(install|remove|upgrade)\b/,
+    reason: "System package changes are blocked.",
+  },
+  { test: /\b(shutdown|reboot|mkfs|dd\s+if=)/, reason: "System commands are blocked." },
+  { test: SECRET_WORD, reason: "Reading secrets files is blocked." },
+];
+
+export function guardToolCall(tool: string, input: Record<string, unknown>, ctx: GuardContext): GuardDecision {
+  if (WRITE_TOOLS.has(tool)) {
+    const path = String(input.file_path ?? input.notebook_path ?? "");
+    return guardWrite(path, ctx);
+  }
+
+  if (tool === "Bash") {
+    // Quotes and backslashes only hide words from the rules: gi''t push, "git" push, g\it push.
+    const cmd = String(input.command ?? "").replace(/["'\\]/g, "");
+    for (const rule of BASH_RULES) if (rule.test.test(cmd)) return deny(rule.reason);
+    for (const words of segments(cmd)) {
+      const branch = protectedBranchIn(words, ctx.protectedBranches);
+      if (branch) return deny(`Branch "${branch}" is protected. Stay on the task branch.`);
+      if (deletesOutside(words, ctx)) return deny("Deleting outside the worktree is blocked.");
+    }
+    if (
+      ctx.readOnly &&
+      (/(^|[;&|]\s*)(rm|mv|cp|touch|mkdir|tee|sed\s+-i)\b|>\s*[^&\s]/.test(cmd) ||
+        git(String.raw`(add|commit|mv|rm)\b`).test(cmd))
+    ) {
+      return deny("Research tasks don't change files. Write findings to the report instead.");
+    }
+    return { allow: true };
+  }
+
+  if (tool === "Read") {
+    const path = String(input.file_path ?? "");
+    const abs = isAbsolute(path) ? path : resolve(ctx.worktree, path);
+    if (isSecret(path) || isSecret(realPath(abs))) return deny("Reading secrets files is blocked.");
+    if (inBrowserProfile(abs)) return deny(BROWSER_DENIED);
+  }
+
+  if (tool === "Grep" || tool === "Glob") {
+    const targets = [input.path, input.glob, tool === "Glob" ? input.pattern : undefined];
+    if (targets.some((t) => typeof t === "string" && isSecret(t))) return deny("Reading secrets files is blocked.");
+    const dir = typeof input.path === "string" && input.path ? input.path : ctx.worktree;
+    const abs = isAbsolute(dir) ? normalize(dir) : resolve(ctx.worktree, dir);
+    if (inBrowserProfile(abs)) return deny(BROWSER_DENIED);
+  }
+
+  return { allow: true };
+}
+
+const BROWSER_DENIED = "Reading browser profiles is blocked.";
+
+/** A path or glob whose last part names a secret file (.env*, *.pem, id_rsa*). */
+function isSecret(target: string): boolean {
+  const last = baseName(target.replace(/\/+$/, ""));
+  if (ENV_TEMPLATE.test(last)) return false;
+  if (matchesAny(last, SECRET_NAMES, true)) return true;
+  // A glob like **/.env* or *.{pem,key}: does it reach a secret name?
+  if (!/[*?{]/.test(last) || !/\.env|pem|id_rsa/i.test(last)) return false;
+  const re = globToRegExp(last, true);
+  return [".env", ".env.local", "key.pem", "id_rsa"].some((name) => re.test(name));
+}
+
+function realPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+/** Split a command into simple commands, each a list of words. */
+function segments(cmd: string): string[][] {
+  return cmd
+    .split(/\$\(|[;&|\n()`]+/)
+    .map((s) => s.trim().split(/\s+/).filter(Boolean))
+    .filter((w) => w.length);
+}
+
+const isCmd = (word: string, name: string) => word === name || word.endsWith(`/${name}`);
+const GIT_VALUE_OPTS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"]);
+const CREATE_OPTS = new Set(["-b", "-B", "-c", "-C", "--create", "--force-create", "--orphan"]);
+
+/** The protected branch a checkout, switch, branch -f/-m or update-ref would land on, if any. */
+function protectedBranchIn(words: string[], protectedBranches: string[]): string | undefined {
+  let i = words.findIndex((w) => isCmd(w, "git"));
+  if (i < 0) return undefined;
+  for (i++; i < words.length && (words[i] as string).startsWith("-"); i++) {
+    if (GIT_VALUE_OPTS.has(words[i] as string)) i++;
+  }
+  const sub = words[i];
+  const args = words.slice(i + 1);
+  const isProtected = (w: string) => protectedBranches.includes(w.replace(/^(refs\/)?heads\//, ""));
+
+  if (sub === "checkout" || sub === "switch") {
+    // Creating a branch: only the new name matters, the start point may be main.
+    const create = args.findIndex((a) => CREATE_OPTS.has(a));
+    if (create >= 0) return [args[create + 1] ?? ""].find(isProtected);
+    // --track origin/main makes and checks out a local main.
+    const track = args.some((a) => a === "-t" || a.startsWith("--track"));
+    return args
+      .filter((a) => !a.startsWith("-"))
+      .map((a) => (track ? a.replace(/^[^/]+\//, "") : a))
+      .find(isProtected);
+  }
+  if (sub === "branch") {
+    const forced = args.some((a) => /^-[a-zA-Z]*[fmMcC]/.test(a) || ["--force", "--move", "--copy"].includes(a));
+    return forced ? args.filter((a) => !a.startsWith("-")).find(isProtected) : undefined;
+  }
+  if (sub === "update-ref" || sub === "symbolic-ref") {
+    return args.filter((a) => a.startsWith("refs/heads/")).find(isProtected);
+  }
+  if (sub === "fetch" || sub === "pull") {
+    // A refspec's destination is written: git fetch origin +HEAD:refs/heads/main.
+    return args
+      .filter((a) => !a.startsWith("-") && a.includes(":"))
+      .map((a) => a.slice(a.lastIndexOf(":") + 1))
+      .find(isProtected);
+  }
+  return undefined;
+}
+
+/** The temp dirs the OS sandbox lets agents write: os.tmpdir(), $TMPDIR and /tmp. */
+function tempRoots(): string[] {
+  return [tmpdir(), process.env.TMPDIR ?? "", "/tmp"].filter((d) => isAbsolute(d));
+}
+
+/**
+ * rm -r aimed at /, ~, $HOME or .. Absolute paths strictly inside the
+ * worktree, writableDirs, extraRoots or the temp dir are fine (the OS sandbox
+ * allows tmp anyway); the roots themselves are not.
+ */
+function deletesOutside(words: string[], ctx: GuardContext): boolean {
+  const i = words.findIndex((w) => isCmd(w, "rm"));
+  if (i < 0) return false;
+  const args = words.slice(i + 1);
+  const end = args.indexOf("--");
+  const flags = (end < 0 ? args : args.slice(0, end)).filter((a) => a.startsWith("-"));
+  if (!flags.some((f) => /^-[a-zA-Z]*[rR]/.test(f) || f === "--recursive")) return false;
+  const targets = args.filter((a, n) => (end >= 0 && n > end) || !a.startsWith("-"));
+  return targets.some((t) => {
+    if (/^(~|\$HOME|\$\{HOME\})/.test(t) || t === ".." || t.startsWith("../") || t.includes("/../")) return true;
+    if (!t.startsWith("/")) return false;
+    // Each root under every name it goes by (macOS: /var/folders/.. is /private/var/folders/..).
+    const roots = [ctx.worktree, ...ctx.writableDirs, ...(ctx.extraRoots ?? []), ...tempRoots()]
+      .map((d) => normalize(d).replace(/(.)\/+$/, "$1"))
+      .flatMap((d) => [d, realPath(d)]);
+    const within = (p: string) => roots.some((d) => isInside(p, d) && p !== d);
+    // Both the path as written and where it really leads (a symlink in tmp can point anywhere).
+    const abs = normalize(t).replace(/(.)\/+$/, "$1");
+    return !within(abs) || !within(realPath(abs));
+  });
+}
+
+function guardWrite(path: string, ctx: GuardContext): GuardDecision {
+  if (!path) return deny("A write needs a file path.");
+  const abs = isAbsolute(path) ? normalize(path) : resolve(ctx.worktree, path);
+  // Refuse by spelling first: only paths inside our own folders touch the
+  // disk, so an agent can't stall the crew on a slow mount (/net, /home).
+  const writable = ctx.writableDirs.find((dir) => isInside(abs, dir));
+  if (!writable && !isInside(abs, ctx.worktree)) return deny("Writes must stay inside the task's worktree.");
+  // The file tools follow symlinks in the path and don't run in the OS
+  // sandbox, so judge where the write really lands, not just how it's spelled.
+  const lands = landing(abs, false);
+  if (!lands) return deny("Writes can't go through a symlink.");
+  if (writable) return isInside(lands, landing(writable, true) ?? writable) ? { allow: true } : deny(ESCAPES);
+  const root = landing(ctx.worktree, true) ?? ctx.worktree;
+  if (!isInside(lands, root)) return deny(ESCAPES);
+  if (ctx.readOnly) return deny("Research tasks don't change the code. Write the report to the artifacts folder.");
+
+  // Both names: wt/ci -> .github/workflows makes ci/x.yml a workflow.
+  for (const rel of new Set([relative(ctx.worktree, abs), relative(root, lands)])) {
+    if (isAlwaysProtected(rel)) return deny(`${rel} is protected (workflows, secrets and git config).`);
+    if (ctx.scope.length && !matchesAny(rel, ctx.scope)) {
+      return deny(`${rel} is outside this task's scope (${ctx.scope.join(", ")}).`);
+    }
+  }
+  return { allow: true };
+}
+
+const ESCAPES = "Writes must stay inside the task's worktree; this path leads outside it through a symlink.";
+
+/**
+ * Where a write to `abs` lands: the deepest part that exists, resolved, plus
+ * the rest. Undefined when `abs` is itself a symlink (unless `followLast`) or
+ * a part on the way exists but doesn't resolve (a dangling or looping link).
+ */
+function landing(abs: string, followLast: boolean): string | undefined {
+  const exists = (p: string) => {
+    try {
+      return lstatSync(p);
+    } catch {
+      return undefined;
+    }
+  };
+  if (!followLast && exists(abs)?.isSymbolicLink()) return undefined;
+  const rest: string[] = [];
+  for (let dir = abs; ; dir = dirname(dir)) {
+    try {
+      return join(realpathSync(dir), ...rest);
+    } catch {
+      if (exists(dir)) return undefined;
+    }
+    if (dirname(dir) === dir) return abs;
+    rest.unshift(basename(dir));
+  }
+}
+
+function deny(reason: string): GuardDecision {
+  return { allow: false, reason };
+}
+
+function isInside(path: string, dir: string): boolean {
+  const rel = relative(normalize(dir), path);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function baseName(p: string): string {
+  return p.split("/").pop() ?? p;
+}
+
+/** `ignoreCase` is for NightCrew's own protected and secret names, never a task's scope. */
+export function matchesAny(path: string, globs: string[], ignoreCase = false): boolean {
+  return globs.some((g) => globToRegExp(g, ignoreCase).test(path));
+}
+
+const cache = new Map<string, RegExp>();
+
+/** Glob → RegExp supporting **, *, ? and {a,b}. Paths use forward slashes. */
+export function globToRegExp(input: string, ignoreCase = false): RegExp {
+  const glob = input.replace(/^\.\//, "").replace(/\/+$/, "");
+  const key = `${ignoreCase ? "i" : "s"}:${glob}`;
+  const hit = cache.get(key);
+  if (hit) return hit;
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i] as string;
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        const slash = glob[i + 2] === "/";
+        re += slash ? "(?:.*/)?" : ".*";
+        i += slash ? 2 : 1;
+      } else re += "[^/]*";
+    } else if (c === "?") re += "[^/]";
+    else if (c === "{") {
+      const end = glob.indexOf("}", i);
+      if (end > i) {
+        re += `(?:${glob
+          .slice(i + 1, end)
+          .split(",")
+          .map((s) => s.replace(/[.+^$()|[\]\\]/g, "\\$&"))
+          .join("|")})`;
+        i = end;
+      } else re += "\\{";
+    } else re += c.replace(/[.+^$()|[\]\\]/g, "\\$&");
+  }
+  // A bare directory ("src/auth" or "src/auth/") covers everything under it.
+  const dirLike = !/[*?{]/.test(glob) && !/\.[^/]+$/.test(glob);
+  const out = new RegExp(`^${re}${dirLike ? "(?:/.*)?" : ""}$`, ignoreCase ? "i" : "");
+  cache.set(key, out);
+  return out;
+}

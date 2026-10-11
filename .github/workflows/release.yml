@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: bun-darwin-arm64
+            asset: nightcrew-darwin-arm64
+          - target: bun-darwin-x64
+            asset: nightcrew-darwin-x64
+          - target: bun-linux-x64
+            asset: nightcrew-linux-x64
+          - target: bun-linux-arm64
+            asset: nightcrew-linux-arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run --filter @nightcrew/web build
+      - name: Compile
+        working-directory: apps/cli
+        run: |
+          bun scripts/embed-web.ts
+          bun build src/main.ts --compile --minify --external "chromium-bidi/*" --target=${{ matrix.target }} --outfile dist/${{ matrix.asset }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: apps/cli/dist/${{ matrix.asset }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # install.sh downloads from /releases/latest, which never points at a
+        # prerelease, so only tags like v1.0.0-rc.1 publish as one.
+        run: |
+          pre=""
+          case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "NightCrew $GITHUB_REF_NAME" --generate-notes $pre

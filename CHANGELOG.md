@@ -2,6 +2,61 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.2] - 2026-10-10
+
+NightCrew stops being night-only. It's a control room for coding agents:
+you dispatch work, agents run in parallel inside your guardrails, and each
+comes back with evidence and a status report, around the clock.
+
+### Added
+- **Parallel dispatcher.** New tasks start as soon as a slot is free: 3 agents at once and 1 per repo by default, within a daily budget that counts real spend plus the caps of running agents.
+  - Per-repo git locks keep parallel agents from racing on worktrees or integration branches.
+  - Stop one agent, stop all, or pause dispatch.
+  - Scheduling ("run at 22:00") is now an option per task, not the default.
+- **Agents page** (replaces Tonight). Live cards per agent (phase progress, last step, elapsed time, Stop), the queue waiting for a slot, scheduled work, and Run now / Schedule / Later on drafts.
+- **Inbox** (replaces the Morning Report). Reports arrive as agents finish, today shows "Working now" at the top, the Horizon follows the day with a "now" marker, and days are labelled Today / Yesterday.
+- **Notifications.** In-app toasts when an agent reports; optional desktop notifications and a Slack webhook for work that finished or needs you.
+- **CLI.** `nightcrew add --schedule`; `nightcrew run` shows parallel agents' steps tagged by task.
+
+### Changed
+- Report days turn over at 04:00 local, not 18:00.
+- The nightly train is the daily train, published whenever no agent is working in the repo.
+- Settings: agents at once, per repo, daily budget, dispatch on/off, schedule time, Slack webhook. Night-era settings carry over.
+- `H` in the Inbox runs a task again now, instead of "tonight".
+- Landing page and docs repositioned: "Dispatch the work. Judge the evidence."
+
+### Fixed
+- Files written by NightCrew's own dependency install (for example `package-lock.json` from `npm install`) no longer count against a task's scope or get committed; npm installs without a lockfile no longer create one.
+
+## [1.0.0-alpha.1] - 2026-10-10
+
+NightCrew 1.0: a rebuild of the product around a calm Morning Report, an
+evidence pipeline and a per-repo trust ladder.
+
+### Added
+- **Dashboard and single binary.** `nightcrew` serves the dashboard at localhost:3721 and keeps the nightly schedule. One file (`bun build --compile`), installable with `curl | sh`. Light ("Morning") and dark ("Night") themes.
+- **Morning Report.** A greeting, the Horizon timeline, and five buckets: Shipped, Ready to merge, Needs your eyes, Sent back and Failed. A detail pane covers plan, decisions, review, checks, evidence and attempts. One-key triage: `1` merge, `2` send back with a note, `3` dismiss or take off the train, `H` try again tonight, `U` undo.
+- **Tonight.** A plain-English composer drafts typed task cards (scope, criteria, questions). There's also a drag-to-reorder queue, a budget meter, a live crew strip, Later, a task editor with notes and attempts, a live run view, settings, and a `⌘K` command bar. CLI: `nightcrew add`, `repo add`, `run`.
+- **Agent SDK runner.** Plan → build → check (with one repair attempt) → Skeptic review → commit, push and draft PR, each task in its own worktree.
+  - Every tool call passes a PreToolUse guard (scope, protected paths and branches, no push, publish, sudo, network writes or secrets).
+  - Artifacts stay in `~/.nightcrew/runs`, never in your repo.
+  - Unfinished work is kept on the branch, and sent-back tasks resume it with your note.
+- **Isolated crew sessions.** No filesystem settings, MCP servers, skills or plugins; the repo's CLAUDE.md and AGENTS.md are passed in. Measured 48× cheaper per turn: a small task costs about $0.08 end to end.
+- **Evidence pipeline.**
+  - UI tasks: before and after screenshots (desktop and mobile, light and dark) from previews of both branches, pixel diffs, axe accessibility scans and console errors.
+  - Bug fixes: fail-then-pass proof.
+  - Missing evidence always means Needs your eyes. Evidence and Skeptic results go into the PR.
+- **Trust ladder.** Propose, Draft PR, Nightly train (tested together, one PR, take tasks off) and Ship to dev (gated on verdict, evidence, 80% confidence and allow and always-ask rules, with Undo that also demotes the repo). Promotion suggestions come from each repo's track record.
+- **Reflexes.** Jev (TypeSafe System One) chooses the workflow, scores confidence and classifies failures when `TYPESAFE_API_KEY` is set; rules decide otherwise. Small tasks skip planning, and flaky failures get one retry.
+- **Routines** (recurring tasks on chosen weekdays) and **GitHub intake** (issues labelled `crew` import into Later, and their PRs close them).
+- **Demo crew** (`--demo`) for trying everything without spending anything.
+- **Classic import.** 0.x history appears in the Morning Report, with PR state from GitHub.
+- **Landing page** (`apps/site`), release builds for macOS and Linux, CI.
+
+### Changed
+- The bash runner moved to `classic/`; its 141 bats tests pass unchanged.
+- `DESIGN.md` now describes "The hour before sunrise" (blue-black ink, one dawn accent, Instrument Serif + Geist).
+
 ## [0.4.0.0] - 2026-04-17
 
 ### Added

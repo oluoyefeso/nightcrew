@@ -89,6 +89,16 @@ Dashboard requests include the preview fingerprint. A changed branch, repository
 
 `GET /api/results/:kind/:id` returns the requested saved result for `delivery`, `mission` or `repository`. These launch-key-protected responses are uncached. Operation pages use their saved `resultId`; they never substitute the latest result. A missing result is reported explicitly. Delivery history in Operations is bounded to the latest 100 records across repositories; a known result link remains accessible beyond that window while its record exists.
 
+## Attention and review
+
+Station includes unreviewed failed and interrupted operations in its decision count. **Operations → Needs attention** retains them independently of the recent-job window. The list initially previews three items; expand it, filter by operation kind and outcome, or load older pages of 30 items. Section links jump directly to running work, delivery, setup or activity. Repository setup, mission acceptance and delivery share this list, including validation failures with no command result. Earlier failed operations appear after upgrading; a later pass does not silently acknowledge them.
+
+Open an operation, inspect its message and exact saved result, then choose **Mark reviewed**. The acknowledgement persists across restarts and is recorded in local activity history. It clears attention only: the operation status, result, retry guards and publishing authority remain unchanged. Interrupted delivery still needs its separate external-outcome acknowledgement before a manual retry. Active and passing jobs cannot be marked reviewed; stale operation versions are rejected.
+
+Authenticated `GET /api/operations/attention` returns a filtered total, jobs and `nextCursor`. Optional `kind`, `status` and `before` parameters select the list. `POST /api/operations/:id/review` requires `expectedUpdatedAt` from the inspected job. Review is idempotent for that version and never executes work.
+
+Station’s **Next departures** can be filtered by repository and departure reason, with an option to show every matching queued task. These controls help locate holds without changing dispatch order or bypassing limits.
+
 ## History and reliability
 
 Operations includes an append-only action history of repository changes, task edits, recoveries, run outcomes and delivery stages. It records field names and identifiers instead of settings values, credentials or command output. This local SQLite history is an operational aid, not a tamper-proof compliance log.

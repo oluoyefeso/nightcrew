@@ -11,6 +11,16 @@ export function OperationPage({ operationId }: { operationId: string }) {
     queryFn: () => api.get<OperationJob>(`/api/operations/${operationId}`),
     refetchInterval: (q) => (operationActive(q.state.data) ? 2000 : false),
   });
+  const qc = useQueryClient();
+  const review = useMutation({
+    mutationFn: () =>
+      api.post(`/api/operations/${operationId}/review`, { expectedUpdatedAt: operation.data?.updatedAt }),
+    onSuccess: () => {
+      void operation.refetch();
+      void qc.invalidateQueries({ queryKey: ["operation-attention"] });
+      void qc.invalidateQueries({ queryKey: ["operations"] });
+    },
+  });
   const job = operation.data;
   return (
     <div className="mx-auto grid max-w-[900px] gap-5 px-4 pt-8 pb-24 sm:px-8">
@@ -36,6 +46,32 @@ export function OperationPage({ operationId }: { operationId: string }) {
         <>
           <p className="text-[13px] text-muted">Started {new Date(job.createdAt).toLocaleString()}</p>
           <OperationProgress job={job} />
+          {job.reviewedAt ? (
+            <p className="text-[13px] text-muted">
+              Reviewed {new Date(job.reviewedAt).toLocaleString()}. Saved outcomes and delivery guards are unchanged.
+            </p>
+          ) : (
+            ["failed", "interrupted"].includes(job.status) && (
+              <section className="grid gap-3 rounded-xl bg-raised/40 p-4">
+                <h2 className="text-[14px] font-medium">Review this operation</h2>
+                <p className="text-[13px] text-muted">
+                  Inspect the message and saved result, then mark this item reviewed to clear it from attention. This
+                  does not retry commands or acknowledge a delivery retry.
+                </p>
+                <div>
+                  <Button disabled={review.isPending} onClick={() => review.mutate()}>
+                    Mark reviewed
+                  </Button>
+                </div>
+              </section>
+            )
+          )}
+          {review.error && (
+            <p role="alert" className="text-bad">
+              {review.error.message}
+            </p>
+          )}
+
           {job.resultId ? (
             <ResultDetails kind={job.kind} resultId={job.resultId} />
           ) : (

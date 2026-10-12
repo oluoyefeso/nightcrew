@@ -3,11 +3,12 @@ import type {
   Checkpoint,
   Delivery,
   MissionAcceptance,
+  OperationAttention,
   OperationJob,
   PolicyTemplate,
   RepositoryCheck,
 } from "@nightcrew/core";
-import { and, desc, eq, inArray, lt, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "./index";
 import * as schema from "./schema";
 
@@ -226,4 +227,54 @@ export function getRepositoryCheck(db: Db, id: string): RepositoryCheck | null {
     (db.select().from(schema.repositoryChecks).where(eq(schema.repositoryChecks.id, id)).get() as RepositoryCheck) ??
     null
   );
+}
+
+export interface AttentionFilter {
+  before?: string;
+  kind?: OperationJob["kind"];
+  status?: "failed" | "interrupted";
+}
+export function operationAttention(db: Db, filter: AttentionFilter = {}): OperationAttention {
+  const table = schema.operationJobs;
+  const where = and(
+    inArray(table.status, ["failed", "interrupted"]),
+    isNull(table.reviewedAt),
+    filter.kind ? eq(table.kind, filter.kind) : undefined,
+    filter.status ? eq(table.status, filter.status) : undefined,
+  );
+  const cursor = filter.before ? getOperationJob(db, filter.before) : null;
+  const rows = db
+    .select()
+    .from(table)
+    .where(
+      and(
+        where,
+        cursor
+          ? or(
+              lt(table.createdAt, cursor.createdAt),
+              and(eq(table.createdAt, cursor.createdAt), lt(table.id, cursor.id)),
+            )
+          : undefined,
+      ),
+    )
+    .orderBy(desc(table.createdAt), desc(table.id))
+    .limit(31)
+    .all() as OperationJob[];
+  const jobs = rows.slice(0, 30);
+  const total = db.select({ count: sql<number>`count(*)` }).from(table).where(where).get()!.count;
+  return { jobs, total, nextCursor: rows.length > 30 ? jobs.at(-1)!.id : null };
+}
+
+/** A review acknowledgement never changes the result, job status or delivery retry gates. */
+export function reviewOperation(db: Db, id: string, expectedUpdatedAt: string): OperationJob | null {
+  return db.transaction(() => {
+    const current = getOperationJob(db, id);
+    if (!current || !["failed", "interrupted"].includes(current.status) || current.updatedAt !== expectedUpdatedAt)
+      return null;
+    if (current.reviewedAt) return current;
+    const reviewedAt = new Date().toISOString();
+    db.update(schema.operationJobs).set({ reviewedAt }).where(eq(schema.operationJobs.id, id)).run();
+    auditEvent(db, "you", "operation.reviewed", id);
+    return getOperationJob(db, id);
+  });
 }

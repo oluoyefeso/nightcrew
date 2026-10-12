@@ -303,6 +303,7 @@ export const operationJobs = sqliteTable(
     detail: text("detail").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
+    reviewedAt: text("reviewed_at"),
   },
   (t) => [index("operation_jobs_subject_idx").on(t.kind, t.subjectId, t.createdAt)],
 );

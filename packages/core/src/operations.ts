@@ -13,6 +13,14 @@ export interface OperationJob {
   detail: string;
   createdAt: string;
   updatedAt: string;
+  /** Review clears attention only; it never changes execution or retry authority. */
+  reviewedAt?: string | null;
+}
+
+export interface OperationAttention {
+  jobs: OperationJob[];
+  total: number;
+  nextCursor: string | null;
 }
 
 export interface RepositoryCheck {

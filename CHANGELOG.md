@@ -2,6 +2,21 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.11] - 2026-10-12
+
+Keep unresolved operation outcomes visible and find queued work that needs a conductor’s decision.
+
+### Added
+- **Persistent attention list.** Failed and interrupted operations appear in Station’s decision count and Operations until explicitly reviewed, including results older than the recent-history window.
+- **Focused review.** Filter attention by operation kind and outcome, page through older items, and inspect the exact saved result. Mark reviewed records a persistent acknowledgement without changing command outcomes or retry authority.
+- **Departure filters.** Filter the Station queue by repository and hold reason, and show all matching tasks to find work beyond the first six departures.
+- **Landing walkthrough.** An interactive attention example explains review acknowledgements and their separation from delivery retry approval.
+
+### Upgrade and limits
+- An embedded SQLite migration adds review timestamps while preserving existing operation results, tasks, policies and authority. Earlier failures appear as unreviewed; later success does not silently clear them.
+- Reviewing an operation never retries it or authorizes deployment. Interrupted delivery keeps its separate external-outcome inspection requirement.
+- Managed mode remains **Coming soon**. The listed conductor roadmap batches are implemented in the open-source local edition.
+
 ## [1.0.0-alpha.10] - 2026-10-12
 
 See why delivery may proceed on the current commit, and return to the exact evidence from any saved operation.

@@ -1,5 +1,6 @@
 import { portableTemplate, validateDelivery, validatePolicies, validateTemplateName } from "@nightcrew/core";
 import {
+  type AttentionFilter,
   auditEvent,
   type Db,
   deleteTemplate,
@@ -17,6 +18,8 @@ import {
   listOperationJobs,
   listRepos,
   listTemplates,
+  operationAttention,
+  reviewOperation,
   saveDelivery,
   saveTemplate,
   schema,
@@ -109,6 +112,32 @@ export function mountOperationsRoutes(app: Hono, deps: { db: Db; crew: Crew; dat
     stopOperations(db);
     auditEvent(db, "you", "operations.stop", "operations");
     return c.json({ ok: true });
+  });
+  app.get("/api/operations/attention", (c) => {
+    const { before, kind, status } = c.req.query();
+    if (
+      (kind && !["mission", "delivery", "repository"].includes(kind)) ||
+      (status && !["failed", "interrupted"].includes(status))
+    )
+      return c.json({ error: "Choose a valid operation kind and attention status." }, 400);
+    if (before && !getOperationJob(db, before))
+      return c.json({ error: "Attention cursor not found. Refresh the list." }, 400);
+    c.header("cache-control", "no-store");
+    return c.json(operationAttention(db, { before, kind, status } as AttentionFilter));
+  });
+  app.post("/api/operations/:id/review", async (c) => {
+    const id = c.req.param("id");
+    if (!getOperationJob(db, id)) return c.json({ error: "Operation not found." }, 404);
+    const value = await c.req.json().catch(() => null);
+    if (typeof value?.expectedUpdatedAt !== "string")
+      return c.json({ error: "Provide the operation version you inspected." }, 400);
+    const row = reviewOperation(db, id, value.expectedUpdatedAt);
+    return row
+      ? c.json(row)
+      : c.json(
+          { error: "Only a finished failed or interrupted operation can be reviewed. Refresh its current outcome." },
+          409,
+        );
   });
   app.get("/api/operations/:id", (c) => {
     const job = getOperationJob(db, c.req.param("id"));

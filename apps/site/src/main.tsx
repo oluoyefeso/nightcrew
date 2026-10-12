@@ -441,7 +441,7 @@ function Site() {
             <p className="max-w-[700px] text-[15px] text-muted leading-relaxed">
               Plan paused missions across repos with acceptance criteria, priorities and token limits. Link tasks to
               outcomes and see gaps before dispatch. Recover saved work, verify the combined result, and follow delivery
-              under the authority you choose.
+              under the authority you choose. Failed and interrupted operations stay visible until reviewed.
             </p>
           </Reveal>
           <StationExample />

@@ -57,7 +57,7 @@ From a terminal: `nightcrew add "…"` (add `--schedule` or `--later`).
 
 The **Station** is your home screen. Decisions stay visible across days until you resolve them. Open a decision to inspect evidence, merge, send instructions, retry, or dismiss. Briefs awaiting an answer appear here too.
 
-**Crew at work** shows active agents. **Next departures** explains what queued tasks are waiting for: dependencies, capacity, budget, a schedule, or paused dispatch. **Routes & authority** shows each repo's current autonomy level and links to its settings.
+**Crew at work** shows active agents. **Next departures** explains what queued tasks are waiting for: dependencies, capacity, budget, a schedule, or paused dispatch. **Routes & authority** shows each repo's current autonomy level and links to its settings. Filter Next departures by repository or reason, then open a task to resolve its hold. Station also surfaces failed and interrupted operations; inspect their exact saved outcomes and mark them reviewed in Operations.
 
 Resolved work appears in **Recent outcomes**. **History** keeps the daily reports and their Horizon timeline.
 

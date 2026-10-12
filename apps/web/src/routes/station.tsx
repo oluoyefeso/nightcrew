@@ -3,18 +3,24 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { clsx } from "clsx";
 import { ArrowRight, CheckCheck, CircleHelp, History, Plus, Route, Signal, TrainFront } from "lucide-react";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { crewQuery, missionsQuery, reposQuery, stationQuery, tasksQuery, toast } from "../api";
 import { AgentBoard, CrewSummary } from "../components/agent-board";
+import { Select } from "../components/form";
+import { AttentionCard, operationAttentionQuery } from "../components/operation-attention";
 import { RunPane } from "../components/run-pane";
 import { RunRow } from "../components/run-row";
 import { PromotionBanners, TrainCards } from "../components/trust";
-import { Kbd } from "../components/ui";
+import { Button, Kbd } from "../components/ui";
 import { isTypingTarget } from "../lib";
 import { MissionCard } from "./missions";
 
 export function StationPage({ runId }: { runId?: string }) {
   const station = useQuery(stationQuery);
+  const attention = useQuery(operationAttentionQuery);
+  const [queueRepo, setQueueRepo] = useState("");
+  const [queueKind, setQueueKind] = useState("");
+  const [showAllQueue, setShowAllQueue] = useState(false);
   const crew = useQuery(crewQuery);
   const repos = useQuery(reposQuery);
   const drafts = useQuery(tasksQuery(["draft"]));
@@ -50,9 +56,12 @@ export function StationPage({ runId }: { runId?: string }) {
   });
   const questions = drafts.data ?? [];
   const setupHolds = station.data?.queue.filter((entry) => entry.kind === "setup") ?? [];
-  const needsYou = decisions.length + questions.length + setupHolds.length;
+  const needsYou = decisions.length + questions.length + setupHolds.length + (attention.data?.total ?? 0);
   const active = crew.data?.active.length ?? 0;
   const queue = station.data?.queue ?? [];
+  const filteredQueue = queue.filter(
+    (entry) => (!queueRepo || entry.repoName === queueRepo) && (!queueKind || entry.kind === queueKind),
+  );
 
   return (
     <div className={clsx("mx-auto grid max-w-[1440px]", runId && "lg:grid-cols-[minmax(0,1fr)_minmax(420px,560px)]")}>
@@ -71,7 +80,7 @@ export function StationPage({ runId }: { runId?: string }) {
               </Link>
             </div>
             <h1 className="t-h1">
-              {!station.data || !drafts.data || station.error || drafts.error
+              {!station.data || !drafts.data || !attention.data || station.error || drafts.error || attention.error
                 ? "Your station."
                 : needsYou
                   ? `${needsYou} ${needsYou === 1 ? "decision needs" : "decisions need"} you.`
@@ -99,7 +108,16 @@ export function StationPage({ runId }: { runId?: string }) {
           <div className="grid grid-cols-3 gap-3">
             <Metric
               label="Need you"
-              value={station.isPending || drafts.isPending || station.error || drafts.error ? "—" : needsYou}
+              value={
+                station.isPending ||
+                drafts.isPending ||
+                attention.isPending ||
+                station.error ||
+                drafts.error ||
+                attention.error
+                  ? "—"
+                  : needsYou
+              }
               tone="text-dawn"
             />
             <Metric label="Working" value={crew.data ? active : "—"} />
@@ -154,6 +172,19 @@ export function StationPage({ runId }: { runId?: string }) {
                 Couldn't load tasks awaiting your input. {drafts.error.message}
               </p>
             )}
+            {attention.error && (
+              <p role="alert" className="text-[13px] text-bad">
+                Couldn’t load operation attention. {attention.error.message}
+              </p>
+            )}
+            {attention.data?.jobs.slice(0, 3).map((job) => (
+              <AttentionCard key={job.id} job={job} />
+            ))}
+            {!!attention.data?.total && (
+              <Link to="/operations" hash="attention" className="text-[13px] text-dawn">
+                Review {attention.data.total} operations needing attention →
+              </Link>
+            )}
             {questions.map((task) => (
               <Link
                 key={task.id}
@@ -197,15 +228,23 @@ export function StationPage({ runId }: { runId?: string }) {
                 }}
               />
             ))}
-            {station.data && drafts.data && !station.error && !drafts.error && needsYou === 0 && (
-              <div className="flex items-start gap-3 rounded-2xl border border-line border-dashed p-5">
-                <CheckCheck className="mt-0.5 size-5 shrink-0 text-ok" />
-                <div className="grid gap-1">
-                  <p className="font-medium text-[14px]">No decisions waiting.</p>
-                  <p className="text-[13px] text-muted">The crew will bring you work that needs your judgement here.</p>
+            {station.data &&
+              drafts.data &&
+              attention.data &&
+              !station.error &&
+              !drafts.error &&
+              !attention.error &&
+              needsYou === 0 && (
+                <div className="flex items-start gap-3 rounded-2xl border border-line border-dashed p-5">
+                  <CheckCheck className="mt-0.5 size-5 shrink-0 text-ok" />
+                  <div className="grid gap-1">
+                    <p className="font-medium text-[14px]">No decisions waiting.</p>
+                    <p className="text-[13px] text-muted">
+                      The crew will bring you work that needs your judgement here.
+                    </p>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
           </section>
 
           {active > 0 && (
@@ -219,15 +258,54 @@ export function StationPage({ runId }: { runId?: string }) {
           <PromotionBanners onToast={toast} />
 
           {queue.length > 0 && (
-            <section className="grid gap-3">
+            <section className="grid gap-3" aria-label="Next departures">
               <div className="flex items-baseline justify-between gap-3">
                 <h2 className="t-h3">Next departures</h2>
                 <Link to="/agents" className="inline-flex items-center gap-1 text-[12.5px] text-muted hover:text-fg">
                   Manage queue <ArrowRight className="size-3" />
                 </Link>
               </div>
+              <div className="flex flex-wrap gap-3">
+                <Select
+                  aria-label="Departure repository"
+                  value={queueRepo}
+                  onChange={(e) => {
+                    setQueueRepo(e.target.value);
+                    setShowAllQueue(false);
+                  }}
+                >
+                  <option value="">All repositories</option>
+                  {[...new Set([...queue.map((entry) => entry.repoName), ...(queueRepo ? [queueRepo] : [])])]
+                    .sort()
+                    .map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                </Select>
+                <Select
+                  aria-label="Departure reason"
+                  value={queueKind}
+                  onChange={(e) => {
+                    setQueueKind(e.target.value);
+                    setShowAllQueue(false);
+                  }}
+                >
+                  <option value="">All departure reasons</option>
+                  {[...new Set([...queue.map((entry) => entry.kind), ...(queueKind ? [queueKind] : [])])]
+                    .sort()
+                    .map((kind) => (
+                      <option key={kind} value={kind}>
+                        {kind.charAt(0).toUpperCase() + kind.slice(1)}
+                      </option>
+                    ))}
+                </Select>
+              </div>
+              <p className="text-[12px] text-muted">
+                {filteredQueue.length} of {queue.length} queued tasks match these filters.
+              </p>
               <div className="divide-y divide-line overflow-hidden rounded-2xl bg-surface ring-1 ring-line">
-                {queue.slice(0, 6).map((entry) => (
+                {filteredQueue.slice(0, showAllQueue ? filteredQueue.length : 6).map((entry) => (
                   <Link
                     key={entry.taskId}
                     to="/task/$taskId"
@@ -258,10 +336,13 @@ export function StationPage({ runId }: { runId?: string }) {
                   </Link>
                 ))}
               </div>
-              {queue.length > 6 && (
-                <Link to="/agents" className="text-[12px] text-dawn">
-                  View all {queue.length} queued tasks
-                </Link>
+              {!filteredQueue.length && <p className="text-[13px] text-muted">No queued tasks match these filters.</p>}
+              {filteredQueue.length > 6 && (
+                <div>
+                  <Button variant="ghost" onClick={() => setShowAllQueue(!showAllQueue)}>
+                    {showAllQueue ? "Show fewer departures" : `Show all ${filteredQueue.length} matching departures`}
+                  </Button>
+                </div>
               )}
             </section>
           )}

@@ -85,6 +85,13 @@
       "when": 1791761728534,
       "tag": "0011_mission_planning",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1791762908182,
+      "tag": "0012_operation_attention",
+      "breakpoints": true
     }
   ]
 }

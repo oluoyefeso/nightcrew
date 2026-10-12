@@ -1,12 +1,21 @@
 import { clsx } from "clsx";
 import { useState } from "react";
 
-const VIEWS = ["Mission", "Departure checks", "Decision brief", "Recovery", "Acceptance", "Delivery"] as const;
+const VIEWS = [
+  "Mission",
+  "Departure checks",
+  "Decision brief",
+  "Recovery",
+  "Acceptance",
+  "Delivery",
+  "Attention",
+] as const;
 
 /** Synthetic product example. Controls change this illustration only. */
 export function StationExample() {
   const [view, setView] = useState<(typeof VIEWS)[number]>("Mission");
   const [paused, setPaused] = useState(false);
+  const [reviewed, setReviewed] = useState(false);
   return (
     <div className="overflow-hidden rounded-[18px] bg-surface ring-1 ring-line shadow-[var(--shadow)]">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line p-4">
@@ -192,7 +201,7 @@ export function StationExample() {
               the previous acceptance outdated.
             </p>
           </>
-        ) : (
+        ) : view === "Delivery" ? (
           <>
             <span className="font-mono text-[11px] text-dawn">FOLLOW THE DELIVERY</span>
             <h3 className="text-[24px] font-medium tracking-[-0.025em]">Check. Deploy. Release.</h3>
@@ -216,6 +225,35 @@ export function StationExample() {
               See why each stage is ready or held for the current commit and settings. Open the exact saved result from
               an earlier operation, even after later checks run. A runner restart marks unfinished actions interrupted
               for inspection.
+            </p>
+          </>
+        ) : (
+          <>
+            <span className="font-mono text-[11px] text-dawn">KEEP OUTCOMES IN VIEW</span>
+            <h3 className="text-[24px] font-medium tracking-[-0.025em]">An interruption stays visible.</h3>
+            <div className="grid gap-3 rounded-xl bg-raised/60 p-5 text-[14px]">
+              <b className="font-medium">API · interrupted deployment</b>
+              <p className="text-muted">
+                The command stopped before recording its outcome. Inspect the saved result and the external deployment.
+              </p>
+              <p className="text-dawn" aria-live="polite">
+                {reviewed
+                  ? "Reviewed in this example. Delivery retry remains held."
+                  : "Needs attention until you mark it reviewed."}
+              </p>
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setReviewed(!reviewed)}
+                  className="rounded-full px-4 py-2 text-[13px] ring-1 ring-line hover:bg-raised"
+                >
+                  {reviewed ? "Reset example" : "Mark example reviewed"}
+                </button>
+              </div>
+            </div>
+            <p className="text-[12px] text-muted">
+              Filter failed and interrupted operations across repos, or narrow queued departures by repository and hold
+              reason. Reviewing clears attention; it does not execute work or approve a delivery retry.
             </p>
           </>
         )}

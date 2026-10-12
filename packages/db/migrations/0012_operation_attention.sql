@@ -1,0 +1,1 @@
+ALTER TABLE `operation_jobs` ADD `reviewed_at` text;

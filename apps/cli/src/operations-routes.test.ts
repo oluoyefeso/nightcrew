@@ -265,3 +265,51 @@ test("readiness and saved results are authenticated, uncached and resolve the re
     400,
   );
 });
+
+test("attention review requires authentication and the inspected terminal version without allowing delivery retries", async () => {
+  const { saveOperationJob, saveDelivery, getDelivery, operationAttention } = await import("@nightcrew/db");
+  const repo = addRepo(db, { name: "Acme", path: "/demo/repo", defaultBranch: "main" });
+  const at = "2026-10-12T00:00:00Z";
+  saveDelivery(db, {
+    id: "interrupted_result",
+    repoId: repo.id,
+    sha: "fixture",
+    branch: "main",
+    policy: DEFAULT_DELIVERY,
+    stage: "deploy",
+    status: "interrupted",
+    log: "Inspect outcome.",
+    createdAt: at,
+    updatedAt: at,
+  });
+  saveOperationJob(db, {
+    id: "attention_fixture",
+    kind: "delivery",
+    subjectId: repo.id,
+    stage: "deploy",
+    status: "interrupted",
+    phase: "finished",
+    repoId: repo.id,
+    resultId: "interrupted_result",
+    detail: "Inspect outcome.",
+    createdAt: at,
+    updatedAt: at,
+  });
+  expect((await app.request("/api/operations/attention")).status).toBe(401);
+  expect((await app.request("/api/operations/attention_fixture/review", { method: "POST" })).status).toBe(401);
+  expect((await send("GET", "/api/operations/attention?kind=unknown")).status).toBe(400);
+  expect((await send("GET", "/api/operations/attention?status=passed")).status).toBe(400);
+  expect((await send("GET", "/api/operations/attention?before=missing")).status).toBe(400);
+  const response = await send("GET", "/api/operations/attention?kind=delivery&status=interrupted");
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(await response.json()).toMatchObject({ total: 1, nextCursor: null });
+  expect((await send("POST", "/api/operations/attention_fixture/review", {})).status).toBe(400);
+  expect((await send("POST", "/api/operations/attention_fixture/review", { expectedUpdatedAt: "stale" })).status).toBe(
+    409,
+  );
+  expect((await send("POST", "/api/operations/attention_fixture/review", { expectedUpdatedAt: at })).status).toBe(200);
+  expect(operationAttention(db).total).toBe(0);
+  expect(getDelivery(db, "interrupted_result")?.status).toBe("interrupted");
+  expect(getOperationJob(db, "attention_fixture")?.status).toBe("interrupted");
+  expect((await send("GET", "/api/results/delivery/interrupted_result")).status).toBe(200);
+});

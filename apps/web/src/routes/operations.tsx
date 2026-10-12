@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { api, missionsQuery, reposQuery } from "../api";
 import { DeliveryReadinessPanel } from "../components/delivery-readiness";
+import { OperationAttentionPanel } from "../components/operation-attention";
 import { OperationProgress, operationActive } from "../components/operation-progress";
 import { RepositoryReadinessPanel } from "../components/repository-readiness";
 import { Button } from "../components/ui";
@@ -60,13 +61,21 @@ export function OperationsPage() {
       <header className="grid gap-2">
         <h1 className="t-h1">Operations</h1>
         <p className="text-[14px] text-muted">Follow delivery, reliability and the decisions that changed your crew.</p>
+        <nav aria-label="Operations sections" className="flex flex-wrap gap-x-4 gap-y-2 text-[13px] text-dawn">
+          <a href="#attention">Needs attention</a>
+          <a href="#progress">Running & recent</a>
+          <a href="#delivery">Delivery</a>
+          <a href="#setup">Repository setup</a>
+          <a href="#activity">Activity</a>
+        </nav>
       </header>
       {info.error && (
         <p role="alert" className="text-bad">
           {info.error.message}
         </p>
       )}
-      <section className="grid gap-3">
+      <OperationAttentionPanel />
+      <section id="progress" className="grid scroll-mt-20 gap-3">
         <h2 className="text-[18px] font-medium">Running and recent operations</h2>
         <p className="text-[13px] text-muted">
           Follow repository setup, mission verification and delivery here, including work started automatically.
@@ -123,7 +132,7 @@ export function OperationsPage() {
           These are recorded reviewer outcomes, not a guarantee of correctness. Small samples can vary widely.
         </p>
       </section>
-      <section className="grid gap-4">
+      <section id="delivery" className="grid scroll-mt-20 gap-4">
         <div className="flex flex-wrap justify-between gap-2">
           <h2 className="text-[18px] font-medium">Delivery</h2>
           <Button variant="ghost" disabled={stop.isPending} onClick={() => stop.mutate()}>
@@ -147,7 +156,7 @@ export function OperationsPage() {
           </p>
         )}
       </section>
-      <section className="grid gap-3">
+      <section id="setup" className="grid scroll-mt-20 gap-3">
         <h2 className="text-[18px] font-medium">Repository setup</h2>
         <p className="text-[13px] text-muted">
           Start with Draft PR, configure tests and any UI preview, then choose task routes. Increase authority after
@@ -176,7 +185,7 @@ export function OperationsPage() {
           </div>
         ))}
       </section>
-      <section className="grid gap-3">
+      <section id="activity" className="grid scroll-mt-20 gap-3">
         <h2 className="text-[18px] font-medium">Activity and policy history</h2>
         <p className="text-[12px] text-muted">
           Local history records actions and changed field names. Credential values and command output are excluded from

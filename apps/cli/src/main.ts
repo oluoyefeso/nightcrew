@@ -81,6 +81,9 @@ if (values.version) {
 
 const command = positionals[0] ?? "up";
 const cwd = process.cwd();
+// Downstream git commands change cwd; every workspace and artifact path must
+// still resolve against the directory where the CLI was launched.
+values.data = resolve(values.data);
 const usesAgents = ["up", "serve", "run"].includes(command);
 const compiled = import.meta.path.startsWith("/$bunfs") || import.meta.path.includes("~BUN");
 if (values.engine !== "local") {

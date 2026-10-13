@@ -36,6 +36,15 @@ const patch = (body: unknown) =>
   });
 
 describe("PATCH /api/settings", () => {
+  test("an optional webhook can be cleared without losing other settings", async () => {
+    expect((await patch({ slackWebhookUrl: "https://hooks.slack.com/services/example", maxAgents: 2 })).status).toBe(
+      200,
+    );
+    const cleared = await patch({ slackWebhookUrl: null });
+    expect(cleared.status).toBe(200);
+    expect(getSettings(db)).toMatchObject({ slackWebhookUrl: null, maxAgents: 2 });
+  });
+
   // Value: protects=settings API rejects out-of-range limits, bad times and non-Slack webhooks, and accepts the edges; fails_when=a validation branch is dropped or a bound shifts; why_new=no route tests existed; seam=none
   test.each([
     [{ scheduleAt: "25:00" }, 400, "24-hour time"],

@@ -36,6 +36,8 @@ export interface PhaseResult {
   tokensIn: number;
   tokensOut: number;
   turns: number;
+  /** Missing means engine-reported totals; partial/unknown must not look like complete accounting. */
+  usageStatus?: "reported" | "partial" | "unknown";
   /** Why the phase ended badly, in words a person can act on. */
   error: string | null;
   rateLimited: boolean;

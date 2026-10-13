@@ -210,6 +210,7 @@ export interface RunEvent {
   phase: string;
   kind: "phase" | "text" | "tool" | "denied" | "result" | "error" | "info";
   text: string;
+  data?: unknown;
 }
 
 export interface ActiveAgent {

@@ -13,10 +13,11 @@ import { Link } from "@tanstack/react-router";
 import { clsx } from "clsx";
 import { ArrowLeft, ExternalLink, GitBranch, GitPullRequest, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { api, runQuery, useTriage } from "../api";
+import { api, eventsQuery, runQuery, useTriage } from "../api";
 import { BUCKET_COLOR, durationMs, fmtModel, fmtTime, isTypingTarget } from "../lib";
 import { AgentMarkdown } from "../markdown";
 import { EvidenceView, parseEvidence } from "./evidence";
+import { PhaseUsage } from "./phase-usage";
 import { Button, Chip, Kbd, Pill } from "./ui";
 
 const TAB_LABEL: Record<ArtifactKind, string> = {
@@ -40,6 +41,11 @@ export function RunPane({
   onToast: (msg: string) => void;
 }) {
   const { data, isPending, error } = useQuery(runQuery(runId));
+  const events = useQuery({
+    ...eventsQuery(runId),
+    enabled: data?.run.source === "local",
+    refetchInterval: data?.run.status === "running" ? 4000 : false,
+  });
   const [tab, setTab] = useState<ArtifactKind | null>(null);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset the tab when the run changes
@@ -108,6 +114,8 @@ export function RunPane({
           <Stat label="Model" value={fmtModel(run.model)} />
           <Stat label="In / out" value={`${formatTokens(run.tokensIn)} · ${formatTokens(run.tokensOut)}`} />
         </dl>
+
+        <PhaseUsage events={events.data ?? []} live={run.status === "running"} />
 
         {run.shipSha && (
           <Callout

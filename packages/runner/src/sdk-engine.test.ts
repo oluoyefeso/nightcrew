@@ -90,6 +90,53 @@ describe("SdkEngine", () => {
     expect(r.error).toBe(STOPPED);
     expect(r.ok).toBe(false);
     expect(r.sessionId).toBe("s1");
+    expect(r.usageStatus).toBe("partial");
+  });
+
+  test("a stream without usage does not report a known zero-cost attempt", async () => {
+    scripted = async function* () {};
+    const r = await new SdkEngine().runPhase(request(), () => {});
+    expect(r.ok).toBe(false);
+    expect(r.usageStatus).toBe("unknown");
+  });
+
+  test("terminal usage includes cache reads and writes exactly once", async () => {
+    scripted = async function* () {
+      yield {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "Done",
+        total_cost_usd: 0.12,
+        num_turns: 2,
+        modelUsage: {
+          example: {
+            inputTokens: 10,
+            cacheReadInputTokens: 80,
+            cacheCreationInputTokens: 10,
+            outputTokens: 5,
+            costUSD: 0.12,
+          },
+        },
+      };
+    };
+    const r = await new SdkEngine().runPhase(request(), () => {});
+    expect(r).toMatchObject({
+      ok: true,
+      tokensIn: 100,
+      tokensOut: 5,
+      costUsd: 0.12,
+      turns: 2,
+      usageStatus: "reported",
+    });
+  });
+
+  test("a terminal response without accounting remains unknown", async () => {
+    scripted = async function* () {
+      yield { type: "result", subtype: "error_during_execution", is_error: true, result: "Unavailable" };
+    };
+    const r = await new SdkEngine().runPhase(request(), () => {});
+    expect(r.usageStatus).toBe("unknown");
   });
 
   test("the agent's git can't push to a real remote, and this process still can", async () => {

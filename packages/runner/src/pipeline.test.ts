@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_TASK_POLICY, type Repo } from "@nightcrew/core";
+import { DEFAULT_TASK_POLICY, phaseMeasurements, type Repo } from "@nightcrew/core";
 import { guardToolCall } from "@nightcrew/core/guard";
 import {
   addNote,
@@ -82,6 +82,24 @@ function setupTask(over: Parameters<typeof createTask>[1] extends infer T ? Part
 }
 
 describe("runTask", () => {
+  test("phase starts survive engine failure and reported usage is saved before the run ends", async () => {
+    const task = setupTask({ type: "research" });
+    const engine = new ScriptedEngine({
+      research: () => {
+        const runId = getTask(db, task.id)!.lastRunId!;
+        expect(phaseMeasurements(listRunEvents(db, runId), true)).toHaveLength(1);
+        expect(phaseMeasurements(listRunEvents(db, runId), true)[0]?.status).toBe("running");
+        return { ok: false, error: "Connection closed.", tokensIn: 40, tokensOut: 10, usageStatus: "partial" };
+      },
+    });
+    const outcome = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(outcome.status).toBe("failed");
+    expect(phaseMeasurements(listRunEvents(db, outcome.runId), false)).toMatchObject([
+      { phase: "research", status: "failed", tokensIn: 40, tokensOut: 10, costUsd: null, usageStatus: "partial" },
+    ]);
+    expect(getRun(db, outcome.runId)?.run).toMatchObject({ tokensIn: 40, tokensOut: 10 });
+  });
+
   test("a task-type plan cap forces planning even for a quick task", async () => {
     const task = setupTask({ workflow: "quick" });
     updateRepo(db, task.repoId, {
@@ -1301,4 +1319,12 @@ test("every configured independent reviewer must approve before a train can boar
   expect(reviews).toBe(2);
   expect(getRun(db, out.runId)?.run.verdict).toBe("needs_eyes");
   expect(getRun(db, out.runId)?.run.trainId).toBeNull();
+  const measurements = phaseMeasurements(listRunEvents(db, out.runId), false);
+  expect(measurements.map((m) => m.phase)).toEqual(["plan", "implement", "review", "review"]);
+  expect(new Set(measurements.map((m) => m.id)).size).toBe(4);
+  const run = getRun(db, out.runId)!.run;
+  expect(measurements.reduce((n, m) => n + (m.tokensIn ?? 0) + (m.tokensOut ?? 0), 0)).toBe(
+    run.tokensIn + run.tokensOut,
+  );
+  expect(Math.round(measurements.reduce((n, m) => n + (m.costUsd ?? 0), 0) * 100)).toBe(run.costCents);
 });

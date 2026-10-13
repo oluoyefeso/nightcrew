@@ -5,6 +5,7 @@ import { clsx } from "clsx";
 import { ArrowLeft, Ban, Check, ChevronRight, CircleAlert, Terminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { eventsQuery, type RunEvent, runQuery } from "../api";
+import { PhaseUsage } from "../components/phase-usage";
 import { Pill } from "../components/ui";
 import { BUCKET_COLOR, durationMs, fmtTime } from "../lib";
 
@@ -114,6 +115,8 @@ export function RunPage({ runId }: { runId: string }) {
           <p className="text-[13.5px]">{r.summary}</p>
         </div>
       )}
+
+      <PhaseUsage events={list} live={live} />
 
       <section className="grid gap-2" onWheel={() => setFollow(false)}>
         <div className="flex items-center justify-between">

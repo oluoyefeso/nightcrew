@@ -12,6 +12,8 @@ export interface Mission {
   tokenBudget: number | null;
   priority: number;
   deadline: string | null;
+  /** Absolute limit for agent execution; active attempts keep their earliest observed limit. */
+  stopAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -27,4 +29,13 @@ export interface MissionSummary extends Mission {
 export interface MissionDetail {
   mission: MissionSummary;
   tasks: { task: Task; run: Run | null; departure: QueueEntry | null }[];
+}
+
+export const MISSION_STOP_REASON = "Mission stop deadline reached.";
+
+/** Invalid stored limits fail closed; an absent limit leaves execution unbounded by the mission. */
+export function missionStopTime(stopAt: string | null | undefined): number | null {
+  if (stopAt == null) return null;
+  const time = Date.parse(stopAt);
+  return Number.isFinite(time) ? time : 0;
 }

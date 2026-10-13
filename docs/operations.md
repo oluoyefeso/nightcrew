@@ -40,11 +40,18 @@ New local runs show **Agent usage by phase** in the run detail pane and activity
 
 Input includes cache reads and writes. Reported tokens above a phase limit appear as an overshoot: provider usage arrives during or after a call, so cancellation cannot guarantee an exact ceiling. A partial stream retains observed tokens while missing cost and turn totals remain unknown; the run view labels its total tokens as partial. A phase interrupted before its result is saved remains visible, with unknown usage. Time limits appear separately from manual cancellation. Measurements contain numerical usage and execution metadata, without adding prompts, tool arguments, session handles or error text to the measurement records. Existing activity logs and artifacts retain their own content.
 
-A successful agent call is not task or mission acceptance. Use the checks, evidence and reviewer verdicts to judge the result. These measurements are a foundation for comparing resource use across attempts; they do not yet provide a mission-wide cost-per-accepted-outcome report or enforce an overall mission runtime.
+A successful agent call is not task or mission acceptance. Use the checks, evidence and reviewer verdicts to judge the result. These measurements are a foundation for comparing resource use across attempts; they do not yet provide a mission-wide cost-per-accepted-outcome report or choose the next task automatically.
 
 ## Mission controls and acceptance
 
 Set mission acceptance criteria, a token limit, priority (Normal through Urgent), and an optional start deadline when creating or editing a mission. The dashboard uses your browser’s local timezone and stores the deadline in UTC; the API accepts an ISO date with a timezone. New dashboard missions start paused by default so you can review the plan; API clients retain the active default unless they send `paused: true`. Higher priorities go first; deadlines break ties, followed by queue position. Dependencies, schedules, repository capacity and verification setup still apply. A passed start deadline holds new starts; it does not terminate an active agent. Pause has the same active-run behavior.
+
+**Stop work at** is a separate, optional execution deadline. It is saved in UTC and survives a runner restart. At that time, the runner cancels active mission agents, preserves unfinished code where possible, and holds new tasks. Task time limits can stop an attempt sooner. Cancellation begins at the deadline; subprocess shutdown and saving work can take additional time. It cannot undo a push, merge or other external action already completed.
+
+Pausing dispatch or a mission does not extend its stop time. A tighter stop time applies to active attempts immediately when saved through the dashboard or API. Each active attempt retains its earliest observed stop time; extending or clearing the field applies to future attempts. Timed-out work needs an explicit retry after the deadline is extended or cleared. Crash recovery still observes the saved deadline before dispatching a recovered task.
+
+The dashboard uses the browser's timezone. Authenticated mission creation and patch requests accept `stopAt` as an ISO timestamp with `Z` or an explicit timezone offset, or `null` to remove the limit. An already-passed time stops active work immediately. Mission stop times govern agent tasks; verification and delivery operations have their own stop controls.
+
 
 Mission token usage is charged at dispatch, across retries. Changing membership or deleting a task does not refund it. Running tasks reserve their remaining task caps. Migration assigns historical local attempts to each task's mission at upgrade time. Unassigned and classic work is not retroactively charged. Token limits govern dispatch capacity; provider token accounting can arrive after a model turn, so they are not financial guarantees. Command execution has timeouts rather than a token cost.
 

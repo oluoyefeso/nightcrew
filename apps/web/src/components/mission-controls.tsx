@@ -6,13 +6,16 @@ export interface MissionControlValues {
   budget: string;
   priority: number;
   deadline: string;
+  stopAt: string;
 }
 export function missionControlValues(mission?: Mission): MissionControlValues {
+  const stopAt = mission?.stopAt ? new Date(mission.stopAt) : null;
   const deadline = mission?.deadline ? new Date(mission.deadline) : null;
   return {
     criteria: mission?.criteria.join("\n") ?? "",
     budget: mission?.tokenBudget?.toString() ?? "",
     priority: mission?.priority ?? 0,
+    stopAt: stopAt ? new Date(stopAt.getTime() - stopAt.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : "",
     deadline: deadline
       ? new Date(deadline.getTime() - deadline.getTimezoneOffset() * 60000).toISOString().slice(0, 16)
       : "",
@@ -26,6 +29,7 @@ export function missionControlPatch(values: MissionControlValues) {
       .filter(Boolean),
     tokenBudget: values.budget ? Number(values.budget) : null,
     priority: values.priority,
+    stopAt: values.stopAt ? new Date(values.stopAt).toISOString() : null,
     deadline: values.deadline ? new Date(values.deadline).toISOString() : null,
   };
 }
@@ -89,6 +93,18 @@ export function MissionControls({
           type="datetime-local"
           value={values.deadline}
           onChange={(e) => onChange({ ...values, deadline: e.target.value })}
+        />
+      </Field>
+      <Field
+        label="Stop work at"
+        htmlFor="mission-stop-at"
+        hint={`Optional, in ${Intl.DateTimeFormat().resolvedOptions().timeZone}. Stops active agents and holds new tasks. Cleanup may continue. Pausing does not extend this time; active attempts keep their earliest stop time.`}
+      >
+        <TextInput
+          id="mission-stop-at"
+          type="datetime-local"
+          value={values.stopAt}
+          onChange={(e) => onChange({ ...values, stopAt: e.target.value })}
         />
       </Field>
     </>

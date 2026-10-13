@@ -5,7 +5,7 @@ NightCrew is the local station for dispatching agents, verifying their work and 
 ## Available
 
 - Station decisions across days, task routes and repository authority ceilings.
-- Missions, prerequisites, dispatch priorities, token limits and start deadlines.
+- Missions, prerequisites, dispatch priorities, token limits, start deadlines and saved execution stop times.
 - Saved-work recovery, bounded retries, independent reviews and evidence requirements.
 - Human-attested mission acceptance with combined repository checks.
 - Opt-in check → deploy → release commands on pinned local commits.

@@ -81,4 +81,4 @@ nightcrew import              Import 0.x (classic) history
 
 ## Conductor operations
 
-Mission token limits, priority, start deadlines, acceptance, reusable verification templates, and delivery commands are documented in [Conductor operations](operations.md). Delivery is manual until a repository explicitly grants automatic stage authority. Managed mode remains Coming soon.
+Mission token limits, priority, start deadlines, execution stop times, acceptance, reusable verification templates, and delivery commands are documented in [Conductor operations](operations.md). Delivery is manual until a repository explicitly grants automatic stage authority. Managed mode remains Coming soon.

@@ -4,7 +4,7 @@ export interface QueueEntry {
   taskId: string;
   title: string;
   repoName: string;
-  kind: "ready" | "scheduled" | "paused" | "dependency" | "capacity" | "budget" | "backoff" | "setup";
+  kind: "ready" | "scheduled" | "paused" | "dependency" | "capacity" | "budget" | "deadline" | "backoff" | "setup";
   reason: string;
   runAt: string | null;
 }

@@ -18,7 +18,13 @@ export function MissionCard({ mission }: { mission: MissionSummary }) {
     >
       <div className="flex items-start justify-between gap-3">
         <h3 className="font-medium text-[16px]">{mission.title}</h3>
-        <span className="shrink-0 text-[12px] text-dawn">{mission.paused ? "Paused" : "Active"}</span>
+        <span className="shrink-0 text-[12px] text-dawn">
+          {mission.stopAt && Date.parse(mission.stopAt) <= Date.now()
+            ? "Stop time reached"
+            : mission.paused
+              ? "Paused"
+              : "Active"}
+        </span>
       </div>
       <p className="line-clamp-2 whitespace-pre-wrap text-[13px] text-muted">{mission.objective}</p>
       <p className="flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-muted">
@@ -27,6 +33,9 @@ export function MissionCard({ mission }: { mission: MissionSummary }) {
         <span>{mission.counts.needsYou} need review</span>
         <span>{formatTokens(mission.tokensUsed)} tokens used</span>
       </p>
+      {mission.stopAt ? (
+        <p className="text-[12px] text-muted">Stop work at {new Date(mission.stopAt).toLocaleString()}</p>
+      ) : null}
       <span className="text-[12px] text-dawn">Open mission →</span>
     </Link>
   );
@@ -195,6 +204,9 @@ export function MissionPage({ missionId }: { missionId: string }) {
         <p className="text-[13px] text-muted">
           Priority: {["Normal", "Raised", "High", "Urgent"][mission.priority]} · Token limit:{" "}
           {mission.tokenBudget === null ? "Daily budget only" : formatTokens(mission.tokenBudget)}
+          {mission.stopAt
+            ? ` · Stop work at ${new Date(mission.stopAt).toLocaleString()}${Date.parse(mission.stopAt) <= Date.now() ? " (reached)" : ""}`
+            : ""}
           {mission.deadline ? ` · New starts before ${new Date(mission.deadline).toLocaleString()}` : ""}
         </p>
         <p className="text-[12.5px] text-muted">

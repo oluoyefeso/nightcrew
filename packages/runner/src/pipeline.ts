@@ -7,6 +7,8 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   formatTokens,
+  MISSION_STOP_REASON,
+  missionStopTime,
   nightIdFor,
   policyEvidence,
   policySummary,
@@ -277,14 +279,22 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
   emit("info", `Started ${task.title} in ${repo.name}`);
   emit("info", `Route: ${policySummary(policy)}`);
 
-  // The task's own time limit, on top of a stop from you or the crew.
+  // Capture the original stop deadline even for callers that do not use Crew.
+  // Crew also applies any tighter deadline observed during this attempt.
   const timeout = new AbortController();
-  const timer = setTimeout(
-    () => timeout.abort(new DOMException("Task time limit reached.", "TimeoutError")),
-    task.maxMinutes * 60_000,
-  );
+  const missionLimit = missionStopTime(mission?.stopAt);
+  const taskLimit = Date.now() + task.maxMinutes * 60_000;
+  const missionFirst = missionLimit !== null && missionLimit <= taskLimit;
+  const expiresAt = missionFirst ? missionLimit : taskLimit;
+  const expire = () =>
+    timeout.abort(new DOMException(missionFirst ? MISSION_STOP_REASON : "Task time limit reached.", "TimeoutError"));
+  const timer = setTimeout(expire, Math.max(0, expiresAt - Date.now()));
+  if (expiresAt <= Date.now()) expire();
   const stop = AbortSignal.any([signal, timeout.signal]);
-  const stoppedReason = (when: string) => `${timeout.signal.aborted ? "Ran out of time" : "Stopped"} ${when}.`;
+  const stoppedReason = (when: string) =>
+    stop.reason?.message === MISSION_STOP_REASON
+      ? `${MISSION_STOP_REASON} Stopped ${when}.`
+      : `${timeout.signal.aborted ? "Ran out of time" : "Stopped"} ${when}.`;
 
   const finish = async (status: "complete" | "failed" | "timeout", reason: string | null): Promise<TaskOutcome> => {
     clearTimeout(timer);
@@ -365,6 +375,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
   const gone = "The task was archived or deleted while it ran, so nothing landed.";
 
   try {
+    if (stop.aborted) return await halt("before workspace setup");
     phase("setup", "Preparing the workspace");
     const unsupported = await repoSupport(repo.path);
     if (unsupported) return await finish("failed", unsupported);
@@ -959,7 +970,10 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     recordPolicy(landingNote ? [landingNote] : []);
     return await finish("complete", landingNote);
   } catch (e) {
-    return await finish(stop.aborted ? "timeout" : "failed", e instanceof Error ? e.message : String(e));
+    return await finish(
+      stop.aborted ? "timeout" : "failed",
+      stop.aborted ? stoppedReason("during execution") : e instanceof Error ? e.message : String(e),
+    );
   }
 }
 

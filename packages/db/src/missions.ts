@@ -10,7 +10,7 @@ export function getMission(db: Db, id: string): Mission | null {
 }
 
 export type NewMission = Pick<Mission, "title" | "objective"> &
-  Partial<Pick<Mission, "criteria" | "paused" | "tokenBudget" | "priority" | "deadline">>;
+  Partial<Pick<Mission, "criteria" | "paused" | "tokenBudget" | "priority" | "deadline" | "stopAt">>;
 
 export function createMission(db: Db, input: NewMission): Mission {
   const at = new Date().toISOString();
@@ -23,6 +23,7 @@ export function createMission(db: Db, input: NewMission): Mission {
     tokenBudget: input.tokenBudget ?? null,
     priority: input.priority ?? 0,
     deadline: input.deadline ? new Date(input.deadline).toISOString() : null,
+    stopAt: input.stopAt ? new Date(input.stopAt).toISOString() : null,
     createdAt: at,
     updatedAt: at,
   };
@@ -34,7 +35,7 @@ export function updateMission(
   db: Db,
   id: string,
   patch: Partial<
-    Pick<Mission, "title" | "objective" | "paused" | "criteria" | "tokenBudget" | "priority" | "deadline">
+    Pick<Mission, "title" | "objective" | "paused" | "criteria" | "tokenBudget" | "priority" | "deadline" | "stopAt">
   >,
 ) {
   db.update(schema.missions)

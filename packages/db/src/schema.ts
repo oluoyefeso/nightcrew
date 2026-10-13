@@ -115,6 +115,7 @@ export const missions = sqliteTable("missions", {
   tokenBudget: integer("token_budget"),
   priority: integer("priority").notNull().default(0),
   deadline: text("deadline"),
+  stopAt: text("stop_at"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

@@ -21,6 +21,8 @@ import {
   type DepartureTask,
   departureChecks,
   formatTokens,
+  MISSION_STOP_REASON,
+  missionStopTime,
   nightIdFor,
   planQueue,
   type QueueEntry,
@@ -97,6 +99,9 @@ interface Running {
   agent: ActiveAgent;
   abort: AbortController;
   done: Promise<void>;
+  missionId: string | null;
+  stopAt: number | null;
+  stopTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export class Crew {
@@ -202,7 +207,7 @@ export class Crew {
         if (mission?.paused)
           return { ...entry, kind: "paused", reason: `Mission paused: ${mission.title}. Resume it from Missions.` };
         const missionHold = this.missionHold(task);
-        if (missionHold) return { ...entry, kind: "budget", reason: missionHold };
+        if (missionHold) return { ...entry, ...missionHold };
         const waiting = task.dependsOn.filter((id) => !byId.has(id) || !this.satisfied(byId.get(id) as Task));
         if (waiting.length)
           return {
@@ -292,7 +297,7 @@ export class Crew {
             check.signals.push({
               code: "mission-limit",
               kind: "wait",
-              message: held,
+              message: held.reason,
               target: "mission",
               missionId: mission.id,
             });
@@ -413,6 +418,7 @@ export class Crew {
     this.pumping = true;
     try {
       const { db } = this.deps;
+      for (const running of this.running.values()) this.refreshMissionStop(running);
       materializeRoutines(db);
       const s = getSettings(db);
       if (this.halted || !s.dispatch || this.pausedUntil > Date.now()) return this.emitStatus();
@@ -514,13 +520,23 @@ export class Crew {
     return Math.max(0, budget - missionTokens(this.deps.db, id) - reserved);
   }
 
-  private missionHold(task: DepartureTask): string | null {
+  private missionHold(task: DepartureTask): { kind: "deadline" | "budget"; reason: string } | null {
     const mission = task.missionId ? getMission(this.deps.db, task.missionId) : null;
     if (!mission) return null;
+    const stopAt = missionStopTime(mission.stopAt);
+    if (stopAt !== null && stopAt <= Date.now())
+      return {
+        kind: "deadline",
+        reason: "The mission stop deadline has passed. Extend or clear it to dispatch more work.",
+      };
     if (mission.deadline && Date.parse(mission.deadline) <= Date.now())
-      return "The mission's start deadline has passed. Extend it to dispatch more work.";
+      return { kind: "deadline", reason: "The mission's start deadline has passed. Extend it to dispatch more work." };
     if (mission.tokenBudget !== null && task.tokenBudget > this.missionAvailable(mission.id, mission.tokenBudget))
-      return "Mission budget has insufficient room after recorded usage and running reservations. Raise its limit or lower this task's cap.";
+      return {
+        kind: "budget",
+        reason:
+          "Mission budget has insufficient room after recorded usage and running reservations. Raise its limit or lower this task's cap.",
+      };
     return null;
   }
 
@@ -528,6 +544,31 @@ export class Crew {
     let n = 0;
     for (const r of this.running.values()) n += getTask(this.deps.db, r.agent.taskId)?.tokenBudget ?? 0;
     return n;
+  }
+
+  /** Tightening applies immediately, including while dispatch is paused or cooling down. */
+  private refreshMissionStop(running: Running) {
+    if (running.abort.signal.aborted) return;
+    const mission = running.missionId ? getMission(this.deps.db, running.missionId) : null;
+    const latest = missionStopTime(mission?.stopAt);
+    const earliest = latest === null ? running.stopAt : Math.min(running.stopAt ?? Infinity, latest);
+    if (earliest === null) return;
+    if (earliest === running.stopAt && running.stopTimer && earliest > Date.now()) return;
+    if (running.stopTimer) clearTimeout(running.stopTimer);
+    running.stopAt = earliest;
+    running.stopTimer = null;
+    if (earliest <= Date.now()) {
+      auditEvent(this.deps.db, "crew", "mission.stop", running.agent.taskId, MISSION_STOP_REASON);
+      running.abort.abort(new DOMException(MISSION_STOP_REASON, "TimeoutError"));
+      return;
+    }
+    running.stopTimer = setTimeout(
+      () => {
+        running.stopTimer = null;
+        this.refreshMissionStop(running);
+      },
+      Math.min(earliest - Date.now(), 2_147_483_647),
+    );
   }
 
   private launch(taskId: string) {
@@ -588,11 +629,15 @@ export class Crew {
         this.message = `"${task.title}" crashed: ${e instanceof Error ? e.message : String(e)}${next}`;
       })
       .finally(() => {
+        const running = this.running.get(taskId);
+        if (running?.stopTimer) clearTimeout(running.stopTimer);
         this.running.delete(taskId);
         this.emitStatus();
         void this.pump();
       });
-    this.running.set(taskId, { agent, abort, done });
+    const running: Running = { agent, abort, done, missionId: task.missionId ?? null, stopAt: null, stopTimer: null };
+    this.running.set(taskId, running);
+    this.refreshMissionStop(running);
     this.message = null;
   }
 

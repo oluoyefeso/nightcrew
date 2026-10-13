@@ -23,7 +23,7 @@ test("existing tasks migrate unassigned and mission membership and pause survive
     const repo = addRepo(db, { name: "Demo", path: "/demo", defaultBranch: "main" });
     const task = createTask(db, { repoId: repo.id, title: "Existing work", status: "later" });
     db.$client.exec(
-      "DROP INDEX runs_mission_idx; DROP TABLE mission_acceptances; DROP TABLE checkpoints; DROP TABLE deliveries; DROP TABLE audit; DROP TABLE policy_templates; ALTER TABLE runs DROP COLUMN mission_id; ALTER TABLE repos DROP COLUMN delivery; ALTER TABLE tasks DROP COLUMN recovery_mode; ALTER TABLE tasks DROP COLUMN auto_retries; DELETE FROM __migrations WHERE name = '0008_conductor_operations'; DROP INDEX tasks_mission_idx; ALTER TABLE tasks DROP COLUMN mission_id; DROP TABLE missions; DELETE FROM __migrations WHERE name = '0007_missions'",
+      "DROP INDEX runs_mission_idx; DROP TABLE mission_acceptances; DROP TABLE checkpoints; DROP TABLE deliveries; DROP TABLE audit; DROP TABLE policy_templates; ALTER TABLE runs DROP COLUMN mission_id; ALTER TABLE repos DROP COLUMN delivery; ALTER TABLE tasks DROP COLUMN recovery_mode; ALTER TABLE tasks DROP COLUMN auto_retries; DELETE FROM __migrations WHERE name = '0008_conductor_operations'; DROP INDEX tasks_mission_idx; ALTER TABLE tasks DROP COLUMN mission_id; DROP TABLE missions; DELETE FROM __migrations WHERE name IN ('0007_missions', '0013_mission_stop')",
     );
     db.$client.close();
     db = openDb(join(dir, "crew.db"));
@@ -119,5 +119,32 @@ test("spent tokens stay charged to their dispatch mission after membership chang
     expect(listMissions(db)[0]?.tokensUsed).toBe(300);
   } finally {
     db.$client.close();
+  }
+});
+
+test("upgrading existing missions adds an unset stop time and preserves it on reopening", () => {
+  const dir = mkdtempSync(join(tmpdir(), "nc-mission-upgrade-"));
+  const path = join(dir, "crew.db");
+  let db = openDb(path);
+  try {
+    const mission = createMission(db, {
+      title: "Existing mission",
+      objective: "Keep its settings",
+      paused: true,
+      tokenBudget: 150000,
+    });
+    db.$client.exec(
+      "ALTER TABLE missions DROP COLUMN stop_at; DELETE FROM __migrations WHERE name = '0013_mission_stop'",
+    );
+    db.$client.close();
+    db = openDb(path);
+    expect(getMission(db, mission.id)).toMatchObject({ paused: true, tokenBudget: 150000, stopAt: null });
+    updateMission(db, mission.id, { stopAt: "2027-01-20T19:00:00.000Z" });
+    db.$client.close();
+    db = openDb(path);
+    expect(getMission(db, mission.id)?.stopAt).toBe("2027-01-20T19:00:00.000Z");
+  } finally {
+    db.$client.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -18,6 +18,7 @@ import { guardToolCall } from "@nightcrew/core/guard";
 import {
   addNote,
   addRepo,
+  createMission,
   createTask,
   type Db,
   getRun,
@@ -82,6 +83,22 @@ function setupTask(over: Parameters<typeof createTask>[1] extends infer T ? Part
 }
 
 describe("runTask", () => {
+  test("an expired mission stops direct execution before creating a workspace or spending tokens", async () => {
+    const mission = createMission(db, {
+      title: "Bounded",
+      objective: "Stop on time",
+      stopAt: new Date(0).toISOString(),
+    });
+    const task = setupTask({ missionId: mission.id });
+    const engine = new ScriptedEngine({});
+    const outcome = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(outcome.status).toBe("timeout");
+    expect(outcome.reason).toContain("Mission stop deadline reached");
+    expect(outcome.tokens).toBe(0);
+    expect(engine.calls).toHaveLength(0);
+    expect(existsSync(workspaceDir(deps(engine).dataDir, task.repoId, task.id))).toBe(false);
+  });
+
   test("phase starts survive engine failure and reported usage is saved before the run ends", async () => {
     const task = setupTask({ type: "research" });
     const engine = new ScriptedEngine({

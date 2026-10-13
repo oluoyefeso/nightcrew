@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as realSdk from "@anthropic-ai/claude-agent-sdk";
 import { browserProfileDirs } from "@nightcrew/core/guard";
-import { type PhaseRequest, STOPPED } from "./engine";
+import { type EngineEvent, type PhaseRequest, STOPPED } from "./engine";
 import { cacheDirs } from "./env";
 import { git, run } from "./git";
 import { agentEnv, SdkEngine, sandboxFor, TAMPERED } from "./sdk-engine";
@@ -81,10 +81,17 @@ describe("SdkEngine", () => {
     scripted = async function* () {
       yield assistant("m1", { input_tokens: 100, cache_read_input_tokens: 50, output_tokens: 10 });
       yield assistant("m1", { input_tokens: 100, cache_read_input_tokens: 50, output_tokens: 40 });
+      yield assistant("m1", { input_tokens: 100, cache_read_input_tokens: 50, output_tokens: 40 });
       yield assistant("m2", { input_tokens: 300, cache_creation_input_tokens: 20, output_tokens: 5 });
       stop.abort();
     };
-    const r = await new SdkEngine().runPhase(request({ signal: stop.signal }), () => {});
+    const events: EngineEvent[] = [];
+    const r = await new SdkEngine().runPhase(request({ signal: stop.signal }), (event) => events.push(event));
+    expect(events.filter((event) => event.kind === "usage").map((event) => [event.tokensIn, event.tokensOut])).toEqual([
+      [150, 10],
+      [150, 40],
+      [470, 45],
+    ]);
     expect(r.tokensIn).toBe(150 + 320);
     expect(r.tokensOut).toBe(40 + 5);
     expect(r.error).toBe(STOPPED);

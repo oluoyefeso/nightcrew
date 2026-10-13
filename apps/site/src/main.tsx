@@ -593,8 +593,8 @@ function Site() {
               ))}
             </div>
             <p className="mt-5 text-[14px] text-muted leading-relaxed">
-              Inspect tokens, cost, time and limits for each agent phase in the run view. Interrupted calls keep unknown
-              usage visible, and repeated reviews remain separate.
+              Inspect tokens, cost, time and limits for each agent phase in the run view. Streamed token checkpoints
+              survive interruption, missing accounting stays visible, and repeated reviews remain separate.
             </p>
           </Reveal>
           <Reveal>

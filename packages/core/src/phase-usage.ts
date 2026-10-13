@@ -52,6 +52,12 @@ export function phaseMeasurements(events: { data?: unknown }[], runIsActive: boo
     const previous = phases.get(data.id);
     // A delayed/replayed start must not overwrite a terminal measurement.
     if (previous && previous.status !== "running" && data.status === "running") continue;
+    if (
+      previous?.status === "running" &&
+      data.status === "running" &&
+      (previous.elapsedMs ?? -1) > (data.elapsedMs ?? -1)
+    )
+      continue;
     phases.set(data.id, data);
   }
   return [...phases.values()].map((p) => ({

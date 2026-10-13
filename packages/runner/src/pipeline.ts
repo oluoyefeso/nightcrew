@@ -41,7 +41,7 @@ import {
   updateTask,
   upsertRuns,
 } from "@nightcrew/db";
-import type { AgentEngine, EngineEvent, PhaseRequest, PhaseResult } from "./engine";
+import type { AgentEngine, EngineEvent, PhaseRequest } from "./engine";
 import { type Evidence, gatherEvidence, missingPolicyEvidence, summarizeEvidence } from "./evidence";
 import {
   commitsAhead,
@@ -179,7 +179,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
   let setupFiles = new Map<string, string>();
   let workspace: Workspace | null = null;
 
-  const save = () =>
+  const save = (includeArtifacts = true) =>
     upsertRuns(db, [
       {
         run: {
@@ -215,7 +215,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
           verdict: state.verdict,
           confidence: state.confidence,
         },
-        artifacts: [...artifacts.values()],
+        artifacts: includeArtifacts ? [...artifacts.values()] : [],
       },
     ]);
 
@@ -228,28 +228,39 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     save();
     emit("phase", label);
   };
-  const onEngine = (e: EngineEvent) => emit(e.kind, e.text, "tool" in e ? { tool: e.tool } : null);
-  const runPhase = (request: PhaseRequest, onEvent: (event: EngineEvent) => void) =>
-    measuredPhase(deps.engine, request, onEvent, (measurement) =>
-      emit(
-        "info",
-        `${PHASE_NAME[request.phase] ?? request.phase}: ${measurement.status === "running" ? "agent started" : measurement.status}.`,
-        measurement,
-      ),
-    );
-  const account = (r: PhaseResult) => {
+  const onEngine = (e: EngineEvent) => {
+    if (e.kind !== "usage") emit(e.kind, e.text, "tool" in e ? { tool: e.tool } : null);
+  };
+  const runPhase = async (request: PhaseRequest, onEvent: (event: EngineEvent) => void) => {
+    const before = { tokensIn: state.tokensIn, tokensOut: state.tokensOut, costUsd: state.costUsd };
+    state.rateLimited = false;
+    const result = await measuredPhase(deps.engine, request, onEvent, (measurement) => {
+      // The event and ledger commit together: recovery must not lose or double-charge a saved observation.
+      db.transaction(() => {
+        state.tokensIn = Math.max(state.tokensIn, before.tokensIn + (measurement.tokensIn ?? 0));
+        state.tokensOut = Math.max(state.tokensOut, before.tokensOut + (measurement.tokensOut ?? 0));
+        if (measurement.costUsd !== null) state.costUsd = before.costUsd + measurement.costUsd;
+        save(false);
+        emit(
+          "info",
+          `${PHASE_NAME[request.phase] ?? request.phase}: ${measurement.status === "running" ? (measurement.usageStatus === "partial" ? "usage checkpoint" : "agent started") : measurement.status}.`,
+          measurement,
+        );
+      });
+    });
     // Only the latest phase counts: an early rate limit the run got past isn't why it ended.
-    state.rateLimited = r.rateLimited;
-    state.costUsd += r.costUsd;
-    state.tokensIn += r.tokensIn;
-    state.tokensOut += r.tokensOut;
+    state.rateLimited = result.rateLimited;
+    state.tokensIn = Math.max(state.tokensIn, before.tokensIn + result.tokensIn);
+    state.tokensOut = Math.max(state.tokensOut, before.tokensOut + result.tokensOut);
+    state.costUsd = before.costUsd + result.costUsd;
     save();
-    if (r.tokensIn + r.tokensOut > 0)
+    if (result.tokensIn + result.tokensOut > 0)
       emit(
         "info",
-        `${PHASE_NAME[state.phase] ?? state.phase} used ${formatTokens(r.tokensIn + r.tokensOut)} tokens over ${r.turns} ${r.turns === 1 ? "turn" : "turns"}.`,
-        { tokens: r.tokensIn + r.tokensOut, turns: r.turns, usage: r.usage },
+        `${PHASE_NAME[state.phase] ?? state.phase} used ${formatTokens(result.tokensIn + result.tokensOut)} tokens over ${result.turns} ${result.turns === 1 ? "turn" : "turns"}.`,
+        { tokens: result.tokensIn + result.tokensOut, turns: result.turns, usage: result.usage },
       );
+    return result;
   };
   const used = () => state.tokensIn + state.tokensOut;
   const remainingTokens = () => Math.max(10_000, task.tokenBudget - used());
@@ -504,7 +515,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         },
         onEngine,
       );
-      account(r);
+
       if (stop.aborted) return await halt("while researching");
       if (!r.ok) return await finish("failed", r.error);
       state.summary = firstSentence(r.text);
@@ -536,7 +547,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         },
         onEngine,
       );
-      account(plan);
+
       // A plan cut short by a stop is not a plan to build from.
       if (stop.aborted) return await halt("while planning");
       // Build in the planner's session so what it already read stays in context.
@@ -590,7 +601,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         },
         onEngine,
       );
-      account(impl);
+
       session = impl.sessionId ?? session;
       if (stop.aborted) return await halt("while building");
       if (!impl.ok) return await finish("failed", impl.error);
@@ -621,7 +632,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         },
         onEngine,
       );
-      account(fix);
+
       if (!fix.ok)
         return await finish("failed", fix.error ?? "The repair failed; review the saved work before retrying.");
       if (stop.aborted) return await halt("while repairing");
@@ -680,7 +691,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       },
       onEngine,
     );
-    account(review);
+
     if (stop.aborted) return await halt("while reviewing");
     const verdict = review.ok ? normalizeReview(review.structured) : null;
     if (verdict) {
@@ -719,7 +730,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         },
         onEngine,
       );
-      account(extra);
+
       const result = extra.ok ? normalizeReview(extra.structured) : null;
       if (
         result?.verdict !== "ready" ||

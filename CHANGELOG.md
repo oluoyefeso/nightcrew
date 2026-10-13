@@ -2,6 +2,21 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.13] - 2026-10-13
+
+Give a mission a saved time window for agent execution.
+
+### Added
+- **Stop work at.** Set an optional execution deadline when creating or editing a mission. At that time, active agents stop, unfinished code is saved where possible, and queued tasks stay held across runner restarts.
+- **Tighter limits apply to active work.** Saving an earlier stop time cancels work when due, even while dispatch is paused or cooling down. Active attempts retain their earliest observed stop time; extending or clearing it applies to future attempts.
+- Mission cards show the stop time and when it has been reached. Queue holds distinguish deadlines from token budgets. Phase measurements identify deadline cancellation as a timeout.
+
+### Upgrade and limits
+- An additive database migration leaves existing missions without a stop time. Existing task time limits, mission start deadlines and pause behavior are preserved.
+- Cancellation begins at the deadline; stopping subprocesses and saving progress can continue afterward. Completed external actions cannot be undone by a stop time. Verification and delivery operations retain their separate stop controls.
+- Timed-out tasks require an explicit retry after extending or clearing the limit. This adds a bounded execution window, not automatic mission planning or process supervision.
+- The landing page and operating documentation describe the new control. Managed remains **Coming soon**; the open-source local runner is the focus.
+
 ## [1.0.0-alpha.12] - 2026-10-13
 
 Inspect where agent runs spend their resources, and preserve rate-limit recovery across restarts.

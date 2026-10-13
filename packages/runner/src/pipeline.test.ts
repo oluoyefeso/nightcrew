@@ -99,6 +99,29 @@ describe("runTask", () => {
     expect(existsSync(workspaceDir(deps(engine).dataDir, task.repoId, task.id))).toBe(false);
   });
 
+  test("direct execution cancels an active phase at the captured mission stop time", async () => {
+    const mission = createMission(db, {
+      title: "Timed",
+      objective: "Finish within the window",
+      stopAt: new Date(Date.now() + 1000).toISOString(),
+    });
+    const task = setupTask({ missionId: mission.id, type: "research" });
+    const engine = new ScriptedEngine({
+      research: async (req) => {
+        await new Promise<void>((resolve) => {
+          if (req.signal.aborted) resolve();
+          else req.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return { ok: false, error: "Stopped" };
+      },
+    });
+    const outcome = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(outcome.status).toBe("timeout");
+    expect(outcome.reason).toContain("Mission stop deadline reached");
+    expect(engine.calls).toHaveLength(1);
+    expect(phaseMeasurements(listRunEvents(db, outcome.runId), false)[0]?.status).toBe("timed_out");
+  });
+
   test("phase starts survive engine failure and reported usage is saved before the run ends", async () => {
     const task = setupTask({ type: "research" });
     const engine = new ScriptedEngine({

@@ -30,6 +30,7 @@ import {
 import {
   auditEvent,
   type Db,
+  getDispatchBackoff,
   getMission,
   getRepo,
   getRun,
@@ -44,6 +45,7 @@ import {
   type RunEvent,
   recoverDeliveries,
   recoverOperationJobs,
+  saveDispatchBackoff,
   tokensOnDay,
   updateTask,
   updateTrain,
@@ -115,7 +117,13 @@ export class Crew {
       publish: boolean;
       reflexes?: Reflexes;
     },
-  ) {}
+  ) {
+    const backoff = getDispatchBackoff(deps.db);
+    this.pausedUntil = backoff.until;
+    this.rateLimitStrikes = backoff.strikes;
+    if (this.pausedUntil > Date.now())
+      this.message = "Rate limited. Waiting for the saved cooldown before dispatch resumes.";
+  }
 
   /**
    * Put tasks left "running" by a crash back in the queue. Only the process
@@ -612,11 +620,16 @@ export class Crew {
       updateTask(db, taskId, { status: "queued", autoRetries: retries + 1 });
       auditEvent(db, "crew", "recovery.rate_limit", taskId);
       this.pausedUntil = Date.now() + wait;
+      saveDispatchBackoff(db, { until: this.pausedUntil, strikes: this.rateLimitStrikes });
       this.message = `Rate limited. Agents resume in ${wait / 60_000} minutes.`;
       setTimeout(() => void this.pump(), wait + 500);
       return;
     }
     this.rateLimitStrikes = 0;
+    // Another already-running task may finish during a cooldown. Keep that
+    // deadline while resetting the strike history, just as this process does.
+    if (this.pausedUntil <= Date.now()) this.pausedUntil = 0;
+    saveDispatchBackoff(db, { until: this.pausedUntil, strikes: 0 });
 
     if (outcome.status === "failed" && outcome.reason) {
       if (retries < 1) {

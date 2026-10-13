@@ -6,11 +6,13 @@ import {
   addRepo,
   createTask,
   type Db,
+  getDispatchBackoff,
   getRepo,
   getSettings,
   getTask,
   listRepos,
   openDb,
+  saveDispatchBackoff,
   updateTask,
 } from "@nightcrew/db";
 import { Crew, ScriptedEngine } from "@nightcrew/runner";
@@ -36,6 +38,23 @@ const patch = (body: unknown) =>
   });
 
 describe("PATCH /api/settings", () => {
+  test("user settings cannot overwrite the dispatcher's saved cooldown", async () => {
+    const cooldown = { until: Date.now() + 300_000, strikes: 1 };
+    saveDispatchBackoff(db, cooldown);
+    expect((await patch({ "internal.dispatchBackoff": { until: 0, strikes: 0 } })).status).toBe(200);
+    expect(getDispatchBackoff(db)).toEqual(cooldown);
+    expect(getSettings(db)).not.toHaveProperty("internal.dispatchBackoff");
+  });
+
+  test("an optional webhook can be cleared without losing other settings", async () => {
+    expect((await patch({ slackWebhookUrl: "https://hooks.slack.com/services/example", maxAgents: 2 })).status).toBe(
+      200,
+    );
+    const cleared = await patch({ slackWebhookUrl: null });
+    expect(cleared.status).toBe(200);
+    expect(getSettings(db)).toMatchObject({ slackWebhookUrl: null, maxAgents: 2 });
+  });
+
   // Value: protects=settings API rejects out-of-range limits, bad times and non-Slack webhooks, and accepts the edges; fails_when=a validation branch is dropped or a bound shifts; why_new=no route tests existed; seam=none
   test.each([
     [{ scheduleAt: "25:00" }, 400, "24-hour time"],

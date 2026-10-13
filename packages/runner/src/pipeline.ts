@@ -63,6 +63,7 @@ import {
   type TakenOff,
   trainBranch,
 } from "./landing";
+import { measuredPhase } from "./phase-usage";
 import {
   implementPrompt,
   type PromptContext,
@@ -226,12 +227,21 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     emit("phase", label);
   };
   const onEngine = (e: EngineEvent) => emit(e.kind, e.text, "tool" in e ? { tool: e.tool } : null);
+  const runPhase = (request: PhaseRequest, onEvent: (event: EngineEvent) => void) =>
+    measuredPhase(deps.engine, request, onEvent, (measurement) =>
+      emit(
+        "info",
+        `${PHASE_NAME[request.phase] ?? request.phase}: ${measurement.status === "running" ? "agent started" : measurement.status}.`,
+        measurement,
+      ),
+    );
   const account = (r: PhaseResult) => {
     // Only the latest phase counts: an early rate limit the run got past isn't why it ended.
     state.rateLimited = r.rateLimited;
     state.costUsd += r.costUsd;
     state.tokensIn += r.tokensIn;
     state.tokensOut += r.tokensOut;
+    save();
     if (r.tokensIn + r.tokensOut > 0)
       emit(
         "info",
@@ -269,7 +279,10 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
 
   // The task's own time limit, on top of a stop from you or the crew.
   const timeout = new AbortController();
-  const timer = setTimeout(() => timeout.abort(), task.maxMinutes * 60_000);
+  const timer = setTimeout(
+    () => timeout.abort(new DOMException("Task time limit reached.", "TimeoutError")),
+    task.maxMinutes * 60_000,
+  );
   const stop = AbortSignal.any([signal, timeout.signal]);
   const stoppedReason = (when: string) => `${timeout.signal.aborted ? "Ran out of time" : "Stopped"} ${when}.`;
 
@@ -467,7 +480,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     if (task.type === "research") {
       phase("research", "Researching");
       const p = researchPrompt(ctx);
-      const r = await deps.engine.runPhase(
+      const r = await runPhase(
         {
           ...base,
           phase: "research",
@@ -499,7 +512,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       // Plan
       phase("plan", "Planning");
       const pp = planPrompt(ctx);
-      const plan = await deps.engine.runPhase(
+      const plan = await runPhase(
         {
           ...base,
           phase: "plan",
@@ -553,7 +566,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     } else {
       phase("implement", "Implementing");
       const ip = implementPrompt(ctx);
-      const impl = await deps.engine.runPhase(
+      const impl = await runPhase(
         {
           ...base,
           phase: "implement",
@@ -584,7 +597,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       emit("info", `Checks failed: ${check.reason}. Trying one repair.`);
       phase("repair", "Repairing");
       const rp = repairPrompt(ctx, check.log);
-      const fix = await deps.engine.runPhase(
+      const fix = await runPhase(
         {
           ...base,
           phase: "repair",
@@ -642,7 +655,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
     // Review: the Skeptic tries to show the work isn't done
     phase("review", "Reviewing");
     const rv = reviewPrompt(ctx);
-    const review = await deps.engine.runPhase(
+    const review = await runPhase(
       {
         ...base,
         phase: "review",
@@ -681,7 +694,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
           "The token limit was reached before all required reviews completed. Increase the task cap or retry verification.",
         );
       phase("review", `Independent review ${reviewsCompleted + 1} of ${policy.reviewers}`);
-      const extra = await deps.engine.runPhase(
+      const extra = await runPhase(
         {
           ...base,
           phase: "review",

@@ -32,6 +32,16 @@ Checks and merge authority are always evaluated again. A completed successful ta
 
 One failed validation can invoke one repair. A flaky failed run can receive one automatic retry; rate limits and process interruptions allow at most two automatic retries. Counts survive a dispatcher restart. Explicit recovery resets the count. An interrupted run is retained as a failed attempt with a recovery explanation.
 
+Rate-limit cooldown deadlines and backoff history also survive a restart. The dispatcher waits out a saved cooldown before starting another task; an expired cooldown permits work again. Restarting the dashboard does not shorten the wait or reset its backoff step.
+
+## Agent usage by phase
+
+New local runs show **Agent usage by phase** in the run detail pane and activity page. Each plan, build, repair, research call and independent review records its requested model, outcome, elapsed time, input/output tokens, cost, turns and configured limits. Repeated reviews remain separate. Older runs keep their existing activity and totals; missing phase measurements are not reconstructed as zero usage.
+
+Input includes cache reads and writes. Reported tokens above a phase limit appear as an overshoot: provider usage arrives during or after a call, so cancellation cannot guarantee an exact ceiling. A partial stream retains observed tokens while missing cost and turn totals remain unknown; the run view labels its total tokens as partial. A phase interrupted before its result is saved remains visible, with unknown usage. Time limits appear separately from manual cancellation. Measurements contain numerical usage and execution metadata, without adding prompts, tool arguments, session handles or error text to the measurement records. Existing activity logs and artifacts retain their own content.
+
+A successful agent call is not task or mission acceptance. Use the checks, evidence and reviewer verdicts to judge the result. These measurements are a foundation for comparing resource use across attempts; they do not yet provide a mission-wide cost-per-accepted-outcome report or enforce an overall mission runtime.
+
 ## Mission controls and acceptance
 
 Set mission acceptance criteria, a token limit, priority (Normal through Urgent), and an optional start deadline when creating or editing a mission. The dashboard uses your browser’s local timezone and stores the deadline in UTC; the API accepts an ISO date with a timezone. New dashboard missions start paused by default so you can review the plan; API clients retain the active default unless they send `paused: true`. Higher priorities go first; deadlines break ties, followed by queue position. Dependencies, schedules, repository capacity and verification setup still apply. A passed start deadline holds new starts; it does not terminate an active agent. Pause has the same active-run behavior.

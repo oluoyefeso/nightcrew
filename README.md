@@ -100,7 +100,7 @@ See [Conductor operations](docs/operations.md) for configuration, command contra
 
 ## Tokens
 
-A small task uses about **100k tokens** end to end (build, check, review, commit). That's measured, not estimated. Each agent session runs isolated: no filesystem settings, MCP servers, skills or plugins from your machine, only the repo's own `CLAUDE.md` / `AGENTS.md`. The same tasks took 2.3M–4.4M tokens in a session that loaded everything on the machine, so that's 20–40× fewer, with the agent's tools kept to what the task needs. Every task has a token budget the agent stops at, and the daily token budget holds new agents back rather than letting them pass it.
+A small task uses about **100k tokens** end to end (build, check, review, commit). That's measured, not estimated. Each agent session runs isolated: no filesystem settings, MCP servers, skills or plugins from your machine, only the repo's own `CLAUDE.md` / `AGENTS.md`. The same tasks took 2.3M–4.4M tokens in a session that loaded everything on the machine, so that's 20–40× fewer, with the agent's tools kept to what the task needs. Each task has a token limit, and the daily budget holds new agents when their reservations would exceed it. Cancellation follows reported usage, so an in-flight call can overshoot. The run view shows per-phase tokens, cost, time, turns and limits; partial or interrupted calls leave missing accounting visible as unknown.
 
 ## More
 

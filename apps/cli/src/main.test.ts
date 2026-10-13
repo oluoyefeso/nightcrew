@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listRepos, listTasks, openDb } from "@nightcrew/db";
+import { createTask, getRun, getTask, listRepos, listTasks, openDb } from "@nightcrew/db";
 
 let root: string;
 let data: string;
@@ -26,9 +26,13 @@ function gitRepo(name: string) {
 
 /** The real CLI, with the pretend crew and a temp data folder. */
 async function nightcrew(cwd: string, ...args: string[]) {
-  const proc = Bun.spawn([process.execPath, join(import.meta.dir, "main.ts"), ...args, "--demo", "--data", data], {
+  return invoke(cwd, [...args, "--data", data]);
+}
+
+async function invoke(cwd: string, args: string[], env: Record<string, string> = {}) {
+  const proc = Bun.spawn([process.execPath, join(import.meta.dir, "main.ts"), ...args, "--demo"], {
     cwd,
-    env: { ...process.env, NIGHTCREW_DEMO_STEP_MS: "1" },
+    env: { ...process.env, NIGHTCREW_DEMO_STEP_MS: "1", ...env },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -39,6 +43,37 @@ async function nightcrew(cwd: string, ...args: string[]) {
   ]);
   return { stdout, stderr, code };
 }
+
+describe("relative data directories", () => {
+  test.each(["flag", "environment"])("runs a task using a relative %s path", async (source) => {
+    const repo = gitRepo("project");
+    const relativeData = "nested data/crew";
+    const args = source === "flag" ? ["--data", relativeData] : [];
+    const env: Record<string, string> = source === "environment" ? { NIGHTCREW_HOME: relativeData } : {};
+    expect((await invoke(root, ["repo", "add", repo, ...args], env)).code).toBe(0);
+    const db = openDb(join(root, relativeData, "nightcrew.db"));
+    try {
+      const registered = listRepos(db)[0]!;
+      const task = createTask(db, {
+        repoId: registered.id,
+        title: "Inspect the example repository",
+        type: "research",
+        status: "queued",
+      });
+      const result = await invoke(root, ["run", ...args], env);
+      expect(result.code).toBe(0);
+      const runId = getTask(db, task.id)?.lastRunId;
+      expect(runId).toBeTruthy();
+      const resultRun = getRun(db, runId!);
+      expect(resultRun?.run.status).toBe("complete");
+      expect(resultRun?.artifacts.find((artifact) => artifact.kind === "report")?.content).toContain("Demo report");
+      expect(existsSync(join(root, relativeData, "work", registered.id, task.id, ".git"))).toBe(true);
+      expect(existsSync(join(root, relativeData, "runs", runId!, "REPORT.md"))).toBe(true);
+    } finally {
+      db.$client.close();
+    }
+  });
+});
 
 describe("nightcrew add", () => {
   test("managed mode is coming soon and exits before creating local data", async () => {

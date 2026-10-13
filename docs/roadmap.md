@@ -10,6 +10,7 @@ NightCrew is the local station for dispatching agents, verifying their work and 
 - Human-attested mission acceptance with combined repository checks.
 - Opt-in check → deploy → release commands on pinned local commits.
 - Persistent operation progress, individual stops and interruption records.
+- Agent phase measurements for requested models, tokens, cost, elapsed time, turns and limits, with partial and unknown usage visible.
 
 ## Completed batches
 

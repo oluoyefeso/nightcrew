@@ -36,6 +36,8 @@ export interface PhaseResult {
   tokensIn: number;
   tokensOut: number;
   turns: number;
+  /** Successful results without a status are treated as reported; failures default to partial/unknown. */
+  usageStatus?: "reported" | "partial" | "unknown";
   /** Why the phase ended badly, in words a person can act on. */
   error: string | null;
   rateLimited: boolean;

@@ -356,6 +356,12 @@ export function updateSettings(db: Db, patch: Partial<Settings>): Settings {
   db.transaction((tx) => {
     for (const [key, value] of Object.entries(patch)) {
       if (!(key in DEFAULT_SETTINGS) || value === undefined) continue;
+      // The JSON column is NOT NULL. Removing an optional override restores
+      // its null default without attempting to store SQL NULL.
+      if (value === null) {
+        tx.delete(schema.settings).where(eq(schema.settings.key, key)).run();
+        continue;
+      }
       tx.insert(schema.settings)
         .values({ key, value })
         .onConflictDoUpdate({ target: schema.settings.key, set: { value } })

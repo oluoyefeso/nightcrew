@@ -24,7 +24,7 @@ Everything is set in the dashboard. This page explains what each setting does.
 | Type | Feature, Bug fix, UI, Tests, Refactor, Research. Decides the evidence required. |
 | Scope | Globs the crew may change. Writes elsewhere are refused as they happen, and the task's whole change against the default branch is checked again afterwards. Empty means the whole repo. |
 | Acceptance criteria | The Skeptic checks each one against evidence. |
-| Token budget | A hard cap on input, cache and output tokens for the task: 50k up to the daily budget (default 1M, or the daily budget if that's lower). Planning is capped, and the review always keeps a reserve. The agent stops when it reaches the cap. |
+| Token budget | A limit on reported input, cache and output tokens for the task: 50k up to the daily budget (default 1M, or the daily budget if that's lower). Planning is capped, and review keeps a reserve. Cancellation follows reported usage, so an in-flight call can overshoot. |
 | Time cap | 1 to 600 minutes. Default 45. |
 | Workflow | `auto` (default): small, scoped tasks build directly and bigger ones plan first. Force with `quick` or `planned`. |
 
@@ -59,7 +59,7 @@ Crew sessions are isolated: no filesystem settings, MCP servers, skills or plugi
 |---|---|
 | `ANTHROPIC_API_KEY` | Used by the crew when set; otherwise your Claude Code login. |
 | `TYPESAFE_API_KEY` | Turns on Jev (TypeSafe's System One model) for fast judgement calls: workflow choice, merge confidence, failure classification. Without it, rules decide. |
-| `NIGHTCREW_HOME` | Data folder (default `~/.nightcrew`). |
+| `NIGHTCREW_HOME` | Data folder (default `~/.nightcrew`). Relative paths, including `--data`, resolve from the directory where the CLI starts. |
 | `NIGHTCREW_PORT` | Dashboard port (default 3721). |
 
 ## Command line

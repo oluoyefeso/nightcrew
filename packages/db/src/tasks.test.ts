@@ -95,6 +95,15 @@ test("settings merge over defaults", () => {
   expect(getSettings(db).dailyTokenBudget).toBe(5_000_000);
 });
 
+test("clearing an optional setting persists without losing other settings", () => {
+  const { db } = setup();
+  expect(updateSettings(db, { slackWebhookUrl: null }).slackWebhookUrl).toBeNull();
+  updateSettings(db, { slackWebhookUrl: "https://hooks.slack.com/services/example", maxAgents: 2 });
+  expect(updateSettings(db, { slackWebhookUrl: null }).slackWebhookUrl).toBeNull();
+  expect(getSettings(db)).toMatchObject({ slackWebhookUrl: null, maxAgents: 2 });
+  expect(updateSettings(db, { slackWebhookUrl: null }).slackWebhookUrl).toBeNull();
+});
+
 test("night-era settings carry over", () => {
   const { db } = setup();
   db.insert(schema.settings).values({ key: "startAt", value: "21:00" }).run();

@@ -582,7 +582,7 @@ function Site() {
                 ],
                 [
                   "20M",
-                  "tokens a day by default. Agents wait rather than pass it, and every task has its own token cap.",
+                  "tokens a day by default. New agents wait when reservations would exceed it; in-flight usage can overshoot a task’s limit.",
                 ],
               ].map(([n, l]) => (
                 <div key={n} className="grid gap-2 bg-surface p-7">
@@ -591,6 +591,10 @@ function Site() {
                 </div>
               ))}
             </div>
+            <p className="mt-5 text-[14px] text-muted leading-relaxed">
+              Inspect tokens, cost, time and limits for each agent phase in the run view. Interrupted calls keep unknown
+              usage visible, and repeated reviews remain separate.
+            </p>
           </Reveal>
           <Reveal>
             <div className="grid gap-4 md:grid-cols-2">

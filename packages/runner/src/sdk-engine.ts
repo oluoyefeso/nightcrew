@@ -120,6 +120,7 @@ export class SdkEngine implements AgentEngine {
     };
 
     let gotResult = false;
+    let resultHasUsage = false;
     let lastText = "";
     // Count tokens per API call as they stream, and stop at the phase's cap.
     // One call can stream as several messages with the same id; keep the
@@ -182,6 +183,7 @@ export class SdkEngine implements AgentEngine {
             ]),
           );
           const usage = Object.values(msg.modelUsage ?? {});
+          resultHasUsage = usage.length > 0 && typeof msg.total_cost_usd === "number";
           result.tokensIn = usage.reduce(
             (n, u) => n + u.inputTokens + u.cacheReadInputTokens + u.cacheCreationInputTokens,
             0,
@@ -222,10 +224,17 @@ export class SdkEngine implements AgentEngine {
           : "The agent stopped without a result.";
     // Stopped, timed out, rate limited or crashed before the result: count
     // what streamed, so the task and daily budgets still see the spend.
-    if (result.tokensIn + result.tokensOut < liveIn + liveOut) {
+    const streamedMore = result.tokensIn + result.tokensOut < liveIn + liveOut;
+    if (streamedMore) {
       result.tokensIn = Math.max(result.tokensIn, liveIn);
       result.tokensOut = Math.max(result.tokensOut, liveOut);
     }
+    result.usageStatus =
+      gotResult && resultHasUsage && !streamedMore
+        ? "reported"
+        : calls.size > 0 || result.tokensIn + result.tokensOut > 0
+          ? "partial"
+          : "unknown";
     // Whatever it said last is still useful (a plan cut short by the budget).
     if (!result.text && lastText) result.text = lastText;
     return result;

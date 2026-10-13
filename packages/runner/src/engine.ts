@@ -51,6 +51,8 @@ export interface PhaseResult {
 }
 
 export type EngineEvent =
+  /** Cumulative phase totals, including cached input once. No prompts or tool contents. */
+  | { kind: "usage"; text: string; tokensIn: number; tokensOut: number }
   | { kind: "text"; text: string }
   | { kind: "tool"; text: string; tool: string; input: unknown }
   | { kind: "denied"; text: string; tool: string }

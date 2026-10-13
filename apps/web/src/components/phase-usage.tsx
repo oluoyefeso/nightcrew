@@ -62,8 +62,9 @@ export function PhaseUsage({ events, live }: { events: RunEvent[]; live: boolean
         </table>
       </div>
       <p className="text-[11.5px] leading-relaxed text-faint">
-        Input includes cached tokens. Partial or interrupted calls may leave usage and cost unknown. Model names are
-        those requested for each phase. A successful agent phase still needs the task’s checks and acceptance.
+        Input includes cached tokens. Live checkpoints retain observed tokens; partial or interrupted calls may still
+        leave usage and cost unknown. Model names are those requested for each phase. A successful agent phase still
+        needs the task’s checks and acceptance.
         {phases.some((p) => p.usageStatus !== "reported") &&
           " Run totals contain only recorded usage and may be incomplete."}
       </p>

@@ -2,6 +2,23 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.14] - 2026-10-13
+
+Keep observed token usage when an agent process is interrupted mid-phase.
+
+### Added
+- **Live usage checkpoints.** The local SDK emits cumulative token observations. Phase records and run totals are committed together at the first observation, then after one second or 10,000 additional tokens. No prompts, tool contents or session identifiers are added to these records.
+- **Crash accounting.** A killed worker retains its last saved token observation, including its mission and daily-budget charge. Recovered phases remain visibly interrupted with partial accounting; missing cost and turns stay unknown.
+
+### Fixed
+- Terminal totals replace streamed phase observations without double counting. Repeated or older observations cannot reduce saved phase totals, and retries keep earlier attempt charges.
+- An engine exception flushes the latest observed tokens before recording failure. Usage checkpoints avoid rewriting existing artifacts.
+
+### Upgrade and limits
+- No database migration is needed. Earlier runs remain readable; missing historical observations cannot be reconstructed.
+- Checkpoints retain reported observations, not a guarantee of complete provider billing. Unreported usage or progress since the last saved checkpoint can still be missing after abrupt process loss.
+- Managed remains **Coming soon**. Streamed usage is supported by the open-source local SDK runner.
+
 ## [1.0.0-alpha.13] - 2026-10-13
 
 Give a mission a saved time window for agent execution.

@@ -65,3 +65,19 @@ test("legacy and malformed measurements are ignored without breaking run history
   ].map((data) => ({ data }));
   expect(phaseMeasurements(events, true)).toEqual([start]);
 });
+
+test("an interrupted run keeps its latest usage checkpoint when older progress is replayed", () => {
+  const progress = { ...start, elapsedMs: 250, tokensIn: 500, tokensOut: 50, usageStatus: "partial" as const };
+  const rows = phaseMeasurements(
+    [{ data: start }, { data: progress }, { data: start }, { data: { ...progress, elapsedMs: 100, tokensIn: 100 } }],
+    false,
+  );
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({
+    status: "interrupted",
+    tokensIn: 500,
+    tokensOut: 50,
+    usageStatus: "partial",
+    costUsd: null,
+  });
+});

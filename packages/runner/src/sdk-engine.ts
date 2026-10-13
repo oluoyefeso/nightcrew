@@ -151,9 +151,12 @@ export class SdkEngine implements AgentEngine {
               ),
               out: Math.max(prev.out, u.output_tokens ?? 0),
             };
+            const changed = next.in > prev.in || next.out > prev.out || !calls.has(msg.message.id);
             calls.set(msg.message.id, next);
             liveIn += next.in - prev.in;
             liveOut += next.out - prev.out;
+            if (changed)
+              onEvent({ kind: "usage", text: "Observed phase token usage.", tokensIn: liveIn, tokensOut: liveOut });
             if (liveIn + liveOut > req.maxTokens && !overBudget) {
               overBudget = true;
               abort.abort();

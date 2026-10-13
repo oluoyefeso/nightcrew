@@ -110,11 +110,16 @@ test("mission creation saves all planning controls together and rejects invalid 
     tokenBudget: 150000,
     priority: 2,
     deadline: "2027-01-20T18:00:00+01:00",
+    stopAt: "2027-01-20T20:00:00+01:00",
   };
   const response = await send("POST", "/api/missions", plan);
   expect(response.status).toBe(201);
   const mission = (await response.json()) as { id: string };
-  expect(getMission(db, mission.id)).toMatchObject({ ...plan, deadline: "2027-01-20T17:00:00.000Z" });
+  expect(getMission(db, mission.id)).toMatchObject({
+    ...plan,
+    deadline: "2027-01-20T17:00:00.000Z",
+    stopAt: "2027-01-20T19:00:00.000Z",
+  });
   const before = ((await (await send("GET", "/api/missions")).json()) as unknown[]).length;
   for (const patch of [
     { criteria: ["Repeated", "Repeated"] },
@@ -203,4 +208,19 @@ test("composer links only current mission criteria and preserves unlinked work f
   });
   expect(engine.calls[0]?.prompt).toContain("Link each task to the exact mission criteria");
   expect(listTasks(db)).toHaveLength(0);
+});
+
+test("mission stop edits require a timezone, reject invalid changes atomically and can be cleared", async () => {
+  const mission = await create();
+  expect(getMission(db, mission.id)?.stopAt).toBeNull();
+  for (const stopAt of ["tomorrow", "2027-01-20T18:00", "2027-13-20T18:00:00Z", "", 42]) {
+    expect((await send("PATCH", `/api/missions/${mission.id}`, { stopAt, paused: true })).status).toBe(400);
+    expect(getMission(db, mission.id)).toMatchObject({ stopAt: null, paused: false });
+  }
+  expect((await send("PATCH", `/api/missions/${mission.id}`, { stopAt: "2027-01-20T20:00:00+01:00" })).status).toBe(
+    200,
+  );
+  expect(getMission(db, mission.id)?.stopAt).toBe("2027-01-20T19:00:00.000Z");
+  expect((await send("PATCH", `/api/missions/${mission.id}`, { stopAt: null })).status).toBe(200);
+  expect(getMission(db, mission.id)?.stopAt).toBeNull();
 });

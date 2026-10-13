@@ -2,13 +2,16 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { phaseMeasurements } from "@nightcrew/core";
 import {
   addRepo,
   createMission,
   createTask,
   type Db,
   getDispatchBackoff,
+  getRun,
   getTask,
+  listRunEvents,
   openDb,
   saveDispatchBackoff,
   updateMission,
@@ -61,6 +64,130 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 const crewWith = (engine: ScriptedEngine) => new Crew({ db, engine, dataDir: join(dir, "data"), publish: false });
 
 describe("dispatcher", () => {
+  test("an expired mission stays held after recovery while unrelated work can complete", async () => {
+    const r = await repo("restart-limit");
+    const mission = createMission(db, {
+      title: "Bounded",
+      objective: "Stop on time",
+      stopAt: new Date(0).toISOString(),
+    });
+    const held = createTask(db, {
+      repoId: r.id,
+      title: "Interrupted",
+      type: "research",
+      status: "running",
+      missionId: mission.id,
+    });
+    const free = createTask(db, { repoId: r.id, title: "Unrelated", type: "research", status: "queued" });
+    const engine = new ScriptedEngine({ research: () => ({ text: "Report" }) });
+    const crew = crewWith(engine);
+    expect(crew.recover()).toBe(1);
+    await crew.drain();
+    expect(getTask(db, held.id)?.status).toBe("queued");
+    expect(getTask(db, free.id)?.status).toBe("done");
+    expect(crew.getQueue().find((entry) => entry.taskId === held.id)).toMatchObject({ kind: "deadline" });
+    expect(crew.getQueue().find((entry) => entry.taskId === held.id)?.reason).toContain("stop deadline");
+    expect(engine.calls).toHaveLength(1);
+    const restarted = crewWith(engine);
+    await restarted.drain();
+    expect(engine.calls).toHaveLength(1);
+  });
+
+  test("tightening a mission stops active work even while dispatch is paused and saves unfinished code", async () => {
+    const r = await repo("tighten-limit");
+    const mission = createMission(db, { title: "Bounded", objective: "Keep unfinished progress" });
+    const task = createTask(db, {
+      repoId: r.id,
+      title: "Active",
+      missionId: mission.id,
+      status: "queued",
+      scope: ["src/**"],
+    });
+    const queued = createTask(db, { repoId: r.id, title: "Next", missionId: mission.id, status: "queued" });
+    let began = () => {};
+    const started = new Promise<void>((resolve) => {
+      began = resolve;
+    });
+    let signal: AbortSignal | undefined;
+    const engine = new ScriptedEngine({
+      implement: async (req) => {
+        signal = req.signal;
+        writeFileSync(join(req.cwd, "src/unfinished.ts"), "export const progress = true;\n");
+        began();
+        await new Promise<void>((resolve) => req.signal.addEventListener("abort", () => resolve(), { once: true }));
+        return { ok: false, error: "Stopped", tokensIn: 12, tokensOut: 3, usageStatus: "partial" };
+      },
+    });
+    const crew = crewWith(engine);
+    try {
+      await crew.pump();
+      await started;
+      updateSettings(db, { dispatch: false });
+      updateMission(db, mission.id, { stopAt: new Date(Date.now() + 100).toISOString() });
+      await crew.pump();
+      await crew.drain();
+      expect(signal?.aborted).toBe(true);
+      const runId = getTask(db, task.id)!.lastRunId!;
+      expect(getRun(db, runId)?.run).toMatchObject({
+        status: "timeout",
+        reason: expect.stringContaining("Mission stop deadline reached"),
+      });
+      expect(
+        phaseMeasurements(listRunEvents(db, runId), false).find((phase) => phase.phase === "implement")?.status,
+      ).toBe("timed_out");
+      expect((await git(r.path, "show", `refs/nightcrew/wip/${task.id}:src/unfinished.ts`)).stdout).toContain(
+        "progress = true",
+      );
+      expect(getTask(db, queued.id)?.status).toBe("queued");
+      expect(engine.calls.some((call) => call.phase === "review")).toBe(false);
+      updateSettings(db, { dispatch: true });
+      await crew.pump();
+      expect(getTask(db, queued.id)?.status).toBe("queued");
+    } finally {
+      await crew.shutdown();
+    }
+  });
+
+  for (const change of ["extend", "clear"] as const)
+    test(`${change} does not relax the earliest stop time of active work`, async () => {
+      const r = await repo(`retain-${change}`);
+      const mission = createMission(db, { title: "Bounded", objective: "Keep active limits" });
+      const task = createTask(db, {
+        repoId: r.id,
+        title: "Waiting",
+        missionId: mission.id,
+        status: "queued",
+        type: "research",
+      });
+      let began = () => {};
+      const started = new Promise<void>((resolve) => {
+        began = resolve;
+      });
+      const engine = new ScriptedEngine({
+        research: async (req) => {
+          began();
+          await new Promise<void>((resolve) => req.signal.addEventListener("abort", () => resolve(), { once: true }));
+          return { ok: false, error: "Stopped" };
+        },
+      });
+      const crew = crewWith(engine);
+      try {
+        await crew.pump();
+        await started;
+        updateMission(db, mission.id, { stopAt: new Date(Date.now() + 100).toISOString() });
+        await crew.pump();
+        updateMission(db, mission.id, {
+          stopAt: change === "clear" ? null : new Date(Date.now() + 60_000).toISOString(),
+        });
+        await crew.pump();
+        await crew.drain();
+        expect(getRun(db, getTask(db, task.id)!.lastRunId!)?.run.reason).toContain("Mission stop deadline reached");
+        expect(getTask(db, task.id)?.autoRetries).toBe(0);
+      } finally {
+        await crew.shutdown();
+      }
+    });
+
   test("pausing a mission lets active work finish, holds its next task and leaves other work runnable", async () => {
     const r = await repo("mission");
     const mission = createMission(db, { title: "Team invitations", objective: "Original mission objective" });

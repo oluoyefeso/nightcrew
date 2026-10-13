@@ -439,9 +439,10 @@ function Site() {
               rest="See what is moving, what is held and what needs your judgement."
             />
             <p className="max-w-[700px] text-[15px] text-muted leading-relaxed">
-              Plan paused missions across repos with acceptance criteria, priorities and token limits. Link tasks to
-              outcomes and see gaps before dispatch. Recover saved work, verify the combined result, and follow delivery
-              under the authority you choose. Failed and interrupted operations stay visible until reviewed.
+              Plan paused missions across repos with acceptance criteria, priorities, token limits and saved stop times.
+              Set when agents should stop, link tasks to outcomes and see gaps before dispatch. Recover saved work,
+              verify the combined result, and follow delivery under the authority you choose. Failed and interrupted
+              operations stay visible until reviewed.
             </p>
           </Reveal>
           <StationExample />

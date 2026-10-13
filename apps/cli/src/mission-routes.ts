@@ -53,7 +53,7 @@ export function mountMissionRoutes(app: Hono, { db, crew }: { db: Db; crew: Crew
     const error = validate(value, false);
     if (error) return c.json({ error }, 400);
     const input = value as Partial<
-      Pick<Mission, "title" | "objective" | "paused" | "criteria" | "tokenBudget" | "priority" | "deadline">
+      Pick<Mission, "title" | "objective" | "paused" | "criteria" | "tokenBudget" | "priority" | "deadline" | "stopAt">
     >;
     const patch = {
       ...(input.criteria !== undefined ? { criteria: input.criteria } : {}),
@@ -62,6 +62,7 @@ export function mountMissionRoutes(app: Hono, { db, crew }: { db: Db; crew: Crew
       ...(input.deadline !== undefined
         ? { deadline: input.deadline ? new Date(input.deadline).toISOString() : null }
         : {}),
+      ...(input.stopAt !== undefined ? { stopAt: input.stopAt ? new Date(input.stopAt).toISOString() : null } : {}),
       ...(input.title !== undefined ? { title: input.title.trim() } : {}),
       ...(input.objective !== undefined ? { objective: input.objective.trim() } : {}),
       ...(input.paused !== undefined ? { paused: input.paused } : {}),
@@ -88,7 +89,8 @@ function validate(value: unknown, creating: boolean): string | null {
   const input = value as Record<string, unknown>;
   if (
     Object.keys(input).some(
-      (key) => !["title", "objective", "paused", "criteria", "tokenBudget", "priority", "deadline"].includes(key),
+      (key) =>
+        !["title", "objective", "paused", "criteria", "tokenBudget", "priority", "deadline", "stopAt"].includes(key),
     )
   )
     return "Unknown mission field.";
@@ -127,5 +129,13 @@ function validate(value: unknown, creating: boolean): string | null {
       Number.isNaN(Date.parse(input.deadline)))
   )
     return "Use an ISO start deadline or null.";
+  if (
+    "stopAt" in input &&
+    input.stopAt !== null &&
+    (typeof input.stopAt !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/.test(input.stopAt) ||
+      !Number.isFinite(Date.parse(input.stopAt)))
+  )
+    return "Use an ISO stop time with a timezone, or null.";
   return null;
 }

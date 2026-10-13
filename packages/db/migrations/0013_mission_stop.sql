@@ -1,0 +1,1 @@
+ALTER TABLE `missions` ADD `stop_at` text;

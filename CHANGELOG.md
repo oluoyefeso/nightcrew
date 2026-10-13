@@ -2,6 +2,27 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.12] - 2026-10-13
+
+Inspect where agent runs spend their resources, and preserve rate-limit recovery across restarts.
+
+### Added
+- **Agent usage by phase.** Run details and activity show each agent call's requested model, elapsed time, input/output tokens, cost, turns, and configured limits. Independent reviews remain separate.
+- **Incomplete accounting stays visible.** Partial streams retain observed tokens without inventing missing cost or turn totals. Interrupted phases keep an unfinished record, run totals are labelled partial, and time limits are distinguished from manual cancellation.
+- **Reported overshoot.** Phase measurements show tokens reported beyond their limit. Cached input is included once; usage-based cancellation is not an exact financial ceiling.
+
+### Fixed
+- Relative `--data` and `NIGHTCREW_HOME` paths now remain anchored to the CLI's launch directory during workspace setup and artifact writing.
+- Optional notification settings can be cleared without violating the database's non-null storage constraint.
+- Rate-limit cooldown deadlines and backoff history survive dispatcher restarts. Expired cooldowns permit work again, and recovery resets the backoff history.
+- Local NightCrew clones are excluded from the project's lint configuration scan.
+
+### Upgrade and limits
+- Existing runs and settings remain readable; no database migration is required. Older runs do not gain measurements retroactively.
+- Phase measurements contain usage and execution metadata, without adding prompts, tool arguments, session handles, or error text. Existing activity logs and artifacts retain their content.
+- Agent phase success does not establish task or mission acceptance. Mission-wide efficiency reports and overall mission runtime limits remain future work.
+- Managed remains **Coming soon**. These improvements serve the open-source local runner.
+
 ## [1.0.0-alpha.11] - 2026-10-12
 
 Keep unresolved operation outcomes visible and find queued work that needs a conductor’s decision.

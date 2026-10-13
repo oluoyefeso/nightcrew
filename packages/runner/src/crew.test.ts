@@ -7,8 +7,10 @@ import {
   createMission,
   createTask,
   type Db,
+  getDispatchBackoff,
   getTask,
   openDb,
+  saveDispatchBackoff,
   updateMission,
   updateRepo,
   updateSettings,
@@ -716,7 +718,33 @@ describe("dispatcher", () => {
     const status = crew.getStatus();
     expect(status.state).toBe("waiting");
     expect(status.message).toContain("Rate limited");
+    expect(getDispatchBackoff(db).until).toBeGreaterThan(Date.now());
+    const restarted = crewWith(engine);
+    await restarted.drain();
+    expect(restarted.getStatus().state).toBe("waiting");
+    expect(started).toEqual(["Limited"]);
     crew.stopSchedule();
+  });
+
+  test("an expired saved cooldown permits work but keeps the next backoff step across restart", async () => {
+    const r = await repo("cooldown");
+    createTask(db, { repoId: r.id, title: "Limited research", type: "research", status: "queued" });
+    saveDispatchBackoff(db, { until: Date.now() - 1, strikes: 1 });
+    const before = Date.now();
+    const engine = new ScriptedEngine({ research: () => ({ ok: false, error: "Rate limited", rateLimited: true }) });
+    await crewWith(engine).drain();
+    expect(engine.calls).toHaveLength(1);
+    expect(getDispatchBackoff(db).strikes).toBe(2);
+    expect(getDispatchBackoff(db).until).toBeGreaterThanOrEqual(before + 10 * 60_000);
+    expect(getDispatchBackoff(db).until).toBeLessThanOrEqual(Date.now() + 10 * 60_000);
+  });
+
+  test("a completed run clears expired backoff history", async () => {
+    const r = await repo("recovered");
+    createTask(db, { repoId: r.id, title: "Research", type: "research", status: "queued" });
+    saveDispatchBackoff(db, { until: Date.now() - 1, strikes: 2 });
+    await crewWith(new ScriptedEngine({ research: () => ({ text: "Complete." }) })).drain();
+    expect(getDispatchBackoff(db)).toEqual({ until: 0, strikes: 0 });
   });
 
   test("a flaky failure gets exactly one more try that day", async () => {

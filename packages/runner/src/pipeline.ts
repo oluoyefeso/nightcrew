@@ -279,7 +279,10 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
 
   // The task's own time limit, on top of a stop from you or the crew.
   const timeout = new AbortController();
-  const timer = setTimeout(() => timeout.abort(), task.maxMinutes * 60_000);
+  const timer = setTimeout(
+    () => timeout.abort(new DOMException("Task time limit reached.", "TimeoutError")),
+    task.maxMinutes * 60_000,
+  );
   const stop = AbortSignal.any([signal, timeout.signal]);
   const stoppedReason = (when: string) => `${timeout.signal.aborted ? "Ran out of time" : "Stopped"} ${when}.`;
 

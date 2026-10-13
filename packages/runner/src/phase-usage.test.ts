@@ -122,3 +122,33 @@ test("a failed phase with no usage evidence is unknown, not a free attempt", asy
     tokenOvershoot: null,
   });
 });
+
+test("engines without usage metadata do not present failed zero-usage calls as complete accounting", async () => {
+  const rows: PhaseMeasurement[] = [];
+  const engine = new ScriptedEngine({ research: () => ({ ok: false, tokensIn: 0, tokensOut: 0, costUsd: 0 }) });
+  await measuredPhase(
+    engine,
+    request(),
+    () => {},
+    (row) => rows.push(row),
+  );
+  expect(rows[1]).toMatchObject({ usageStatus: "unknown", costUsd: null, tokensIn: null });
+});
+
+test("a time limit is distinguished from manual cancellation", async () => {
+  const stop = new AbortController();
+  const rows: PhaseMeasurement[] = [];
+  const engine = new ScriptedEngine({
+    research: () => {
+      stop.abort(new DOMException("Time limit", "TimeoutError"));
+      return { ok: false, usageStatus: "partial" };
+    },
+  });
+  await measuredPhase(
+    engine,
+    request(stop.signal),
+    () => {},
+    (row) => rows.push(row),
+  );
+  expect(rows[1]?.status).toBe("timed_out");
+});

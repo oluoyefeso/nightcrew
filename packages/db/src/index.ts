@@ -34,6 +34,7 @@ import { auditEvent } from "./operations";
 import * as schema from "./schema";
 import { listTasks } from "./tasks";
 
+export * from "./dispatch";
 export * from "./missions";
 export * from "./operations";
 export * from "./tasks";

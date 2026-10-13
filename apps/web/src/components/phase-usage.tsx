@@ -34,7 +34,7 @@ export function PhaseUsage({ events, live }: { events: RunEvent[]; live: boolean
                   {LABEL[p.phase] ?? p.phase}
                   <span className="block max-w-44 break-words text-[11px] font-normal text-faint">{p.model}</span>
                 </th>
-                <td className="px-3 py-2 capitalize">{p.status}</td>
+                <td className="px-3 py-2 capitalize">{p.status.replaceAll("_", " ")}</td>
                 <td className="whitespace-nowrap px-3 py-2 font-mono">
                   {p.elapsedMs === null ? "—" : p.elapsedMs < 1000 ? "<1s" : formatDuration(p.elapsedMs)}
                 </td>
@@ -64,6 +64,8 @@ export function PhaseUsage({ events, live }: { events: RunEvent[]; live: boolean
       <p className="text-[11.5px] leading-relaxed text-faint">
         Input includes cached tokens. Partial or interrupted calls may leave usage and cost unknown. Model names are
         those requested for each phase. A successful agent phase still needs the task’s checks and acceptance.
+        {phases.some((p) => p.usageStatus !== "reported") &&
+          " Run totals contain only recorded usage and may be incomplete."}
       </p>
     </section>
   );

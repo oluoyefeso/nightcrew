@@ -7,7 +7,7 @@ export interface PhaseMeasurement {
   model: string;
   startedAt: string;
   endedAt: string | null;
-  status: "running" | "succeeded" | "failed" | "cancelled";
+  status: "running" | "succeeded" | "failed" | "cancelled" | "timed_out";
   elapsedMs: number | null;
   tokenLimit: number;
   turnLimit: number;
@@ -34,7 +34,7 @@ function isMeasurement(value: unknown): value is PhaseMeasurement {
     v.version === 1 &&
     [v.id, v.phase, v.model, v.startedAt].every((s) => typeof s === "string" && s.length > 0) &&
     (v.endedAt === null || typeof v.endedAt === "string") &&
-    ["running", "succeeded", "failed", "cancelled"].includes(String(v.status)) &&
+    ["running", "succeeded", "failed", "cancelled", "timed_out"].includes(String(v.status)) &&
     ["reported", "partial", "unknown"].includes(String(v.usageStatus)) &&
     typeof v.tokenLimit === "number" &&
     typeof v.turnLimit === "number" &&

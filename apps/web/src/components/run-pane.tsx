@@ -5,6 +5,7 @@ import {
   formatTokens,
   interventionFor,
   needsDecision,
+  phaseMeasurements,
   type Run,
   type TriageAction,
 } from "@nightcrew/core";
@@ -69,6 +70,9 @@ export function RunPane({
   const artifact = artifacts.find((a) => a.kind === active);
   const dur = durationMs(run.startedAt, run.endedAt);
   const intervention = interventionFor(run, artifacts);
+  const incompleteUsage = phaseMeasurements(events.data ?? [], run.status === "running").some(
+    (p) => p.usageStatus !== "reported",
+  );
 
   return (
     <PaneFrame onClose={onClose}>
@@ -109,7 +113,10 @@ export function RunPane({
         </div>
 
         <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-line ring-1 ring-line sm:grid-cols-4">
-          <Stat label="Tokens" value={formatTokens(run.tokensIn + run.tokensOut)} />
+          <Stat
+            label={incompleteUsage ? "Tokens (partial)" : "Tokens"}
+            value={formatTokens(run.tokensIn + run.tokensOut)}
+          />
           <Stat label="Review score" value={run.confidence === null ? "—" : `${Math.round(run.confidence * 100)}%`} />
           <Stat label="Model" value={fmtModel(run.model)} />
           <Stat label="In / out" value={`${formatTokens(run.tokensIn)} · ${formatTokens(run.tokensOut)}`} />

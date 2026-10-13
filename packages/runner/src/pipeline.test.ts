@@ -650,6 +650,7 @@ describe("stopping", () => {
     expect(Date.now() - started).toBeLessThan(10_000);
     expect(out.status).toBe("timeout");
     expect(out.reason).toBe("Ran out of time while building.");
+    expect(phaseMeasurements(listRunEvents(db, out.runId), false).at(-1)?.status).toBe("timed_out");
     expect(engine.calls.map((c) => c.phase)).not.toContain("review");
     const wip = (await git(repoPath, "log", "-1", "--format=%s", `refs/nightcrew/wip/${task.id}`)).stdout;
     expect(wip).toContain("WIP: Add the feature");

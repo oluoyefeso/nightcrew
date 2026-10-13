@@ -6,11 +6,13 @@ import {
   addRepo,
   createTask,
   type Db,
+  getDispatchBackoff,
   getRepo,
   getSettings,
   getTask,
   listRepos,
   openDb,
+  saveDispatchBackoff,
   updateTask,
 } from "@nightcrew/db";
 import { Crew, ScriptedEngine } from "@nightcrew/runner";
@@ -36,6 +38,14 @@ const patch = (body: unknown) =>
   });
 
 describe("PATCH /api/settings", () => {
+  test("user settings cannot overwrite the dispatcher's saved cooldown", async () => {
+    const cooldown = { until: Date.now() + 300_000, strikes: 1 };
+    saveDispatchBackoff(db, cooldown);
+    expect((await patch({ "internal.dispatchBackoff": { until: 0, strikes: 0 } })).status).toBe(200);
+    expect(getDispatchBackoff(db)).toEqual(cooldown);
+    expect(getSettings(db)).not.toHaveProperty("internal.dispatchBackoff");
+  });
+
   test("an optional webhook can be cleared without losing other settings", async () => {
     expect((await patch({ slackWebhookUrl: "https://hooks.slack.com/services/example", maxAgents: 2 })).status).toBe(
       200,

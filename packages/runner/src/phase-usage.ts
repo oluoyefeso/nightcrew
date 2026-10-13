@@ -29,22 +29,25 @@ export async function measuredPhase(
     tokenOvershoot: null,
   };
   record(start);
+  const stoppedStatus = () =>
+    request.signal.reason?.name === "TimeoutError" ? ("timed_out" as const) : ("cancelled" as const);
   let result: PhaseResult;
   try {
     result = await engine.runPhase(request, onEvent);
   } catch (error) {
     record({
       ...start,
-      status: request.signal.aborted ? "cancelled" : "failed",
+      status: request.signal.aborted ? stoppedStatus() : "failed",
       endedAt: new Date().toISOString(),
       elapsedMs: Math.max(0, performance.now() - clock),
     });
     throw error;
   }
-  const usageStatus = result.usageStatus ?? "reported";
+  const usageStatus =
+    result.usageStatus ?? (result.ok ? "reported" : result.tokensIn + result.tokensOut > 0 ? "partial" : "unknown");
   record({
     ...start,
-    status: request.signal.aborted ? "cancelled" : result.ok ? "succeeded" : "failed",
+    status: request.signal.aborted ? stoppedStatus() : result.ok ? "succeeded" : "failed",
     endedAt: new Date().toISOString(),
     elapsedMs: Math.max(0, performance.now() - clock),
     tokensIn: usageStatus === "unknown" ? null : result.tokensIn,

@@ -67,8 +67,15 @@ const missionsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/mis
 const missionRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/missions/$missionId",
+  validateSearch,
   component: function Mission() {
-    return <MissionPage missionId={missionRoute.useParams().missionId} />;
+    return (
+      <MissionPage
+        key={missionRoute.useParams().missionId}
+        missionId={missionRoute.useParams().missionId}
+        runId={missionRoute.useSearch().run}
+      />
+    );
   },
 });
 // The night-only "Tonight" page became Agents.

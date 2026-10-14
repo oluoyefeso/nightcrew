@@ -437,9 +437,9 @@ function Site() {
               rest="See what is moving, what is held and what needs your judgement."
             />
             <p className="max-w-[700px] text-[15px] text-muted leading-relaxed">
-              Home and Goals keep everyday navigation simple. Open a goal to draft work, inspect task evidence and
-              verify the combined result. Agents, history and delivery stay reachable through More. Failed and
-              interrupted operations remain visible until reviewed.
+              Home and Goals keep everyday navigation simple. Each goal brings waiting decisions and run evidence
+              together, with an explicit outcome verification status. Agents, history and delivery stay reachable
+              through More. Failed and interrupted operations remain visible until reviewed.
             </p>
           </Reveal>
           <div className="grid gap-3">

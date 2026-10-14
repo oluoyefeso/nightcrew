@@ -85,4 +85,4 @@ Open **Goals** and describe the outcome. Optionally add checkable success criter
 
 Open **More → Operations** or use the command bar for delivery, repository setup, reliability and activity. Configure delivery commands in repository settings before using them. See [Conductor operations](operations.md) for the complete workflow and limits.
 
-Before your first agent run, use **Verify repository setup** in Settings to rehearse installation and tests against the local default branch without spending agent tokens. Save verification routes as named templates, or import a template to preview its rules before applying them. The [conductor roadmap](roadmap.md) tracks the next product batches.
+Before your first agent run, use **Verify repository setup** in Settings to rehearse installation and tests against the local default branch without spending agent tokens. Save verification routes as named templates, or import a template to preview its rules before applying them. The [product status](roadmap.md) describes available capabilities and current limits.

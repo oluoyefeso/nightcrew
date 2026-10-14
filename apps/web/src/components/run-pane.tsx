@@ -36,15 +36,19 @@ export function RunPane({
   runId,
   onClose,
   onToast,
+  allowedTaskIds,
+  navigationHint = true,
 }: {
   runId: string;
+  allowedTaskIds?: string[];
+  navigationHint?: boolean;
   onClose: () => void;
   onToast: (msg: string) => void;
 }) {
   const { data, isPending, error } = useQuery(runQuery(runId));
   const events = useQuery({
     ...eventsQuery(runId),
-    enabled: data?.run.source === "local",
+    enabled: data?.run.source === "local" && (!allowedTaskIds || allowedTaskIds.includes(data.run.taskId)),
     refetchInterval: data?.run.status === "running" ? 4000 : false,
   });
   const [tab, setTab] = useState<ArtifactKind | null>(null);
@@ -54,19 +58,37 @@ export function RunPane({
 
   if (isPending)
     return (
-      <PaneFrame onClose={onClose}>
+      <PaneFrame onClose={onClose} navigationHint={navigationHint}>
         <div className="p-6 text-muted">Loading…</div>
       </PaneFrame>
     );
   if (error || !data)
     return (
-      <PaneFrame onClose={onClose}>
+      <PaneFrame onClose={onClose} navigationHint={navigationHint}>
         <div className="p-6 text-bad">{error?.message ?? "Run not found."}</div>
       </PaneFrame>
     );
 
+  if (allowedTaskIds && !allowedTaskIds.includes(data.run.taskId))
+    return (
+      <PaneFrame onClose={onClose} navigationHint={navigationHint}>
+        <div className="grid gap-3 p-6 text-[13px]">
+          <p role="alert" className="text-muted">
+            This run is not attached to this goal.
+          </p>
+          <Link to="/" search={{ run: data.run.id }} className="text-dawn">
+            Open run outside this goal →
+          </Link>
+        </div>
+      </PaneFrame>
+    );
+
   const { run, artifacts, attempts } = data;
-  const active = tab ?? artifacts[0]?.kind ?? null;
+  const active =
+    tab ??
+    (["evidence", "report", "tests"] as const).find((kind) => artifacts.some((a) => a.kind === kind)) ??
+    artifacts[0]?.kind ??
+    null;
   const artifact = artifacts.find((a) => a.kind === active);
   const dur = durationMs(run.startedAt, run.endedAt);
   const intervention = interventionFor(run, artifacts);
@@ -75,7 +97,7 @@ export function RunPane({
   );
 
   return (
-    <PaneFrame onClose={onClose}>
+    <PaneFrame onClose={onClose} navigationHint={navigationHint}>
       <div className="grid gap-5 px-6 pt-5 pb-6 [&>*]:min-w-0">
         <div className="grid gap-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -111,18 +133,6 @@ export function RunPane({
             )}
           </div>
         </div>
-
-        <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-line ring-1 ring-line sm:grid-cols-4">
-          <Stat
-            label={incompleteUsage ? "Tokens (partial)" : "Tokens"}
-            value={formatTokens(run.tokensIn + run.tokensOut)}
-          />
-          <Stat label="Review score" value={run.confidence === null ? "—" : `${Math.round(run.confidence * 100)}%`} />
-          <Stat label="Model" value={fmtModel(run.model)} />
-          <Stat label="In / out" value={`${formatTokens(run.tokensIn)} · ${formatTokens(run.tokensOut)}`} />
-        </dl>
-
-        <PhaseUsage events={events.data ?? []} live={run.status === "running"} />
 
         {run.shipSha && (
           <Callout
@@ -192,9 +202,16 @@ export function RunPane({
             <ol className="grid gap-1.5">
               {attempts.map((a, i) => (
                 <li key={a.id} className="flex items-baseline gap-3 text-[13px]">
-                  <span className="w-14 shrink-0 font-mono text-[11.5px] text-faint">
+                  <Link
+                    to="."
+                    search={{ run: a.id }}
+                    resetScroll={false}
+                    aria-current={a.id === run.id ? "true" : undefined}
+                    className="w-14 shrink-0 font-mono text-[11.5px] text-dawn hover:underline"
+                    aria-label={`Inspect attempt ${i + 1}`}
+                  >
                     #{i + 1} {fmtTime(a.startedAt)}
-                  </span>
+                  </Link>
                   <span className={clsx(a.status === "complete" ? "text-fg" : "text-muted")}>
                     {a.status === "complete" ? "Completed" : a.status === "failed" ? "Failed" : a.status}
                     {a.reason && a.status !== "complete" ? ` · ${a.reason}` : ""}
@@ -227,7 +244,13 @@ export function RunPane({
             {artifact?.kind === "evidence" ? (
               (() => {
                 const ev = parseEvidence(artifact.content);
-                return ev ? <EvidenceView runId={run.id} evidence={ev} /> : null;
+                return ev ? (
+                  <EvidenceView runId={run.id} evidence={ev} />
+                ) : (
+                  <p role="alert" className="text-[13px] text-bad">
+                    This evidence could not be read. Inspect the checks and review before deciding.
+                  </p>
+                );
               })()
             ) : artifact ? (
               <div className="prose-nc">
@@ -236,13 +259,40 @@ export function RunPane({
             ) : null}
           </div>
         )}
+        <details className="border-t border-line pt-3">
+          <summary className="cursor-pointer text-[12.5px] text-muted">Execution details</summary>
+          <div className="mt-4 grid gap-4">
+            <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-line ring-1 ring-line sm:grid-cols-4">
+              <Stat
+                label={incompleteUsage ? "Tokens (partial)" : "Tokens"}
+                value={formatTokens(run.tokensIn + run.tokensOut)}
+              />
+              <Stat
+                label="Review score"
+                value={run.confidence === null ? "—" : `${Math.round(run.confidence * 100)}%`}
+              />
+              <Stat label="Model" value={fmtModel(run.model)} />
+              <Stat label="In / out" value={`${formatTokens(run.tokensIn)} · ${formatTokens(run.tokensOut)}`} />
+            </dl>
+
+            <PhaseUsage events={events.data ?? []} live={run.status === "running"} />
+          </div>
+        </details>
       </div>
       <TriageBar run={run} onToast={onToast} />
     </PaneFrame>
   );
 }
 
-function PaneFrame({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+function PaneFrame({
+  children,
+  onClose,
+  navigationHint,
+}: {
+  children: React.ReactNode;
+  onClose: () => void;
+  navigationHint: boolean;
+}) {
   return (
     <aside className="flex h-full min-h-0 flex-col bg-surface">
       <div className="flex h-11 shrink-0 items-center justify-between border-line border-b px-4">
@@ -254,8 +304,16 @@ function PaneFrame({ children, onClose }: { children: React.ReactNode; onClose: 
           <ArrowLeft className="size-3.5" /> Back
         </button>
         <span className="hidden items-center gap-1.5 text-[12px] text-faint lg:inline-flex">
-          <Kbd>J</Kbd>
-          <Kbd>K</Kbd> to move
+          {navigationHint ? (
+            <>
+              <Kbd>J</Kbd>
+              <Kbd>K</Kbd> to move
+            </>
+          ) : (
+            <>
+              <Kbd>Esc</Kbd> to close
+            </>
+          )}
         </span>
         <button
           type="button"

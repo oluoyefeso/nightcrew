@@ -4,7 +4,7 @@
 set -eu
 
 REPO="oluoyefeso/nightcrew"
-RELEASE_TAG="${NIGHTCREW_VERSION:-v1.0.0-alpha.14}"
+RELEASE_TAG="${NIGHTCREW_VERSION:-v1.0.0-alpha.15}"
 DEST="${NIGHTCREW_INSTALL_DIR:-$HOME/.nightcrew/bin}"
 
 os=$(uname -s | tr '[:upper:]' '[:lower:]')

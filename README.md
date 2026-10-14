@@ -1,6 +1,6 @@
 # NightCrew
 
-Your station for an agent crew.
+Set the goal. Conduct the work.
 
 NightCrew is an open-source conductor's station for coding agents. Set the direction, dispatch work across your repos, and choose how far the crew may go. Agents build, gather evidence, and pass their work to an independent Skeptic. Your repo settings determine whether they stop at a plan, open a PR, join an integration train, or merge to dev. Work starts whenever you need it; overnight is one scheduling option.
 
@@ -35,12 +35,12 @@ Agents start as soon as a slot is free: up to 3 at once and 1 per repo by defaul
 ## How it works
 
 1. **Dispatch.** Describe the work. NightCrew drafts task cards with scope, acceptance criteria, the evidence it will need and a token budget, and asks one question if something is unclear. Departure checks show missing setup, prerequisites, scope overlap and available budget before dispatch. Run now, schedule it, or park it in Later.
-2. **Agents work, in parallel.** The **Agents** page shows every agent live: its phase, its last step, and a Stop button.
+2. **Agents work, in parallel.** **More → Agents** shows every agent live: its phase, its last step, and a Stop button.
    - Each task gets its own clone of the repo (under `~/.nightcrew/work`) and an isolated Claude session, and lands by commit. Repos that use git-lfs, git-crypt or sparse checkout aren't supported yet.
    - Small tasks build directly; bigger ones plan first.
    - Every tool call passes a guard that refuses writes outside scope, pushes, publishing, secrets and protected branches.
    - NightCrew runs your tests itself and gives a failing task one repair attempt, then gathers evidence and hands it to the Skeptic.
-3. **Conduct from the Station.** Unresolved decisions stay visible across days. Inspect the evidence, answer a question, send work back, or make a merge decision. Next departures explains why queued work is waiting, and Routes & authority shows each repo's autonomy level. Resolved work becomes a recent outcome; daily reports and the Horizon timeline remain in **History**. Desktop and Slack notifications are optional.
+3. **Conduct from Home.** Unresolved decisions stay visible across days. Inspect the evidence, answer a question, send work back, or make a merge decision. Next departures explains why queued work is waiting, and Routes & authority shows each repo's autonomy level. Resolved work becomes a recent outcome; daily reports and the Horizon timeline remain in **More → History**. Desktop and Slack notifications are optional.
    - `1` merges.
    - `2` sends a task back with a note; an agent picks it up on the same branch.
    - `3` dismisses.
@@ -78,21 +78,21 @@ Each repo earns autonomy from its track record:
 
 **Decision briefs** explain a run's stop reason, missing evidence and next steps, with links to the relevant artifacts and settings. Retry uses saved work where available and reruns verification under current rules.
 
-## Missions
+## Goals
 
-Group related tasks around an objective, even across repositories. Create a mission from the Station or **Missions**, set its acceptance criteria, budget, priority, start deadline and stop time, then draft work for it or attach existing tasks. New missions in the dashboard start paused so you can review the plan before resuming. Agents receive the objective alongside their task; their scope and repository rules still apply. Edit prerequisites on individual tasks to control ordering.
+Start in **Goals** with the outcome you want, even across repositories. Success criteria are optional at creation. **Details & limits** holds a custom name, budget, priority, start deadline and stop time. A blank name uses the first line of your outcome. New goals start paused; draft work for the goal or attach existing tasks, then review before resuming. Existing mission records, URLs and API contracts remain compatible. Agents receive the objective alongside their task; their scope and repository rules still apply. Edit prerequisites on individual tasks to control ordering.
 
 Each mission shows queued and active work, setup holds, questions, decisions and token usage charged at dispatch. Moving or deleting tasks does not erase spent tokens. Link tasks to mission criteria to see planned coverage and missing outcomes. Changed criteria flag outdated links for repair. These links describe intent; record evidence and run combined repository checks before accepting the objective. Resolved task counts include dismissed work; dismissed tasks do not satisfy mission acceptance.
 
-**Pause mission** holds new starts while active agents finish, including landing allowed by their repository rules. Resume allows queued tasks to start when the crew's other limits permit. Objective edits apply to future attempts. An optional mission token limit includes recorded usage and running reservations, alongside the daily budget. Mission priority and start deadlines govern the order and eligibility of new starts. **Stop work at** adds a saved execution deadline: active agents stop, unfinished code is preserved where possible, and queued work stays held across restarts. Tightening applies to active work; extending or clearing applies to future attempts. Cleanup may continue after the stop time.
+**Pause goal** holds new starts while active agents finish, including landing allowed by their repository rules. Resume allows queued tasks to start when the crew's other limits permit. Objective edits apply to future attempts. An optional mission token limit includes recorded usage and running reservations, alongside the daily budget. Mission priority and start deadlines govern the order and eligibility of new starts. **Stop work at** adds a saved execution deadline: active agents stop, unfinished code is preserved where possible, and queued work stays held across restarts. Tightening applies to active work; extending or clearing applies to future attempts. Cleanup may continue after the stop time.
 
 ## Recovery and delivery
 
 Task recovery offers **Resume**, **Verify saved build**, and **Rebuild**. Compatible checkpoints avoid repeating planning or implementation; checks and evidence run again. Verification mode uses read-only agent review and never invokes an agent repair. Automatic retry limits persist across restarts.
 
-Save verification routes as reusable templates, including one to three independent reviewers. The repository autonomy ceiling still applies. **Operations** shows repository setup, recent reliability, action history, and delivery from check to deploy to release. Delivery commands use a pinned local branch commit in an isolated checkout; automatic stages require explicit repository configuration. Failed or interrupted external actions wait for inspection.
+Save verification routes as reusable templates, including one to three independent reviewers. The repository autonomy ceiling still applies. **More → Operations** shows repository setup, recent reliability, action history, and delivery from check to deploy to release. Delivery commands use a pinned local branch commit in an isolated checkout; automatic stages require explicit repository configuration. Failed or interrupted external actions wait for inspection.
 
-Mission checks and delivery run in the background. Follow saved progress in **Operations**, leave the page and return, or stop an individual operation. Delivery shows why each stage is ready or held for the current local commit and settings; saved-result links retain the exact evidence from earlier operations. Restarting the local runner marks unfinished work interrupted; it does not replay the action. Failed and interrupted operations stay in Station and the Operations attention list until marked reviewed. Review clears the attention item without changing retry guards or delivery authority. Filter queued departures by repository and hold reason to find the next action.
+Mission checks and delivery run in the background. Follow saved progress in **Operations**, leave the page and return, or stop an individual operation. Delivery shows why each stage is ready or held for the current local commit and settings; saved-result links retain the exact evidence from earlier operations. Restarting the local runner marks unfinished work interrupted; it does not replay the action. Failed and interrupted operations stay in Home and the Operations attention list until marked reviewed. Review clears the attention item without changing retry guards or delivery authority. Filter queued departures by repository and hold reason to find the next action.
 
 Before dispatch, **Verify repository setup** rehearses installation and tests on an isolated checkout of the local default branch. Results become outdated when the commit or commands change. Verification templates can be edited, exported and imported for preview; repository authority remains the ceiling. See the [open-source conductor roadmap](docs/roadmap.md) for completed batches and current scope.
 

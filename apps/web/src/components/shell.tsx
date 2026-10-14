@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link, Outlet } from "@tanstack/react-router";
+import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { clsx } from "clsx";
-import { Monitor, Moon, RefreshCw, Search, Settings2, Sun } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { ChevronDown, Monitor, Moon, RefreshCw, Search, Settings2, Sun } from "lucide-react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { crewQuery, tasksQuery, useCrewStream, useSync } from "../api";
 import { CommandBar } from "./command-bar";
 import { BrandMark, Kbd } from "./ui";
@@ -103,7 +103,7 @@ export function Shell() {
   const queued = tasks.data?.length ?? 0;
   return (
     <div className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-30 bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] backdrop-blur-xl">
+      <header className="sticky top-0 z-30 border-b border-line bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] backdrop-blur-xl">
         <div className="mx-auto flex h-14 max-w-[1440px] items-center gap-3 px-4 sm:gap-6 sm:px-6">
           <Link
             to="/"
@@ -113,28 +113,10 @@ export function Shell() {
             <BrandMark className="size-[22px]" />
             <span className="hidden sm:inline">NightCrew</span>
           </Link>
-          <nav className="flex items-center gap-0.5 overflow-x-auto text-[13px]">
-            <NavLink to="/">Station</NavLink>
-            <NavLink to="/agents">
-              Agents
-              {queued > 0 && (
-                <span className="rounded-full bg-[color-mix(in_srgb,var(--dawn)_18%,transparent)] px-1.5 font-mono text-[10.5px] text-dawn">
-                  {queued}
-                </span>
-              )}
-            </NavLink>
-            <NavLink to="/missions" className="max-sm:hidden">
-              Missions
-            </NavLink>
-            <NavLink to="/later" className="max-sm:hidden">
-              Later
-            </NavLink>
-            <NavLink to="/operations" className="max-lg:hidden">
-              Operations
-            </NavLink>
-            <NavLink to="/history" className="max-sm:hidden">
-              History
-            </NavLink>
+          <nav aria-label="Primary" className="flex items-center gap-0.5 text-[13px]">
+            <NavLink to="/">Home</NavLink>
+            <NavLink to="/missions">Goals</NavLink>
+            <MoreMenu queued={queued} />
           </nav>
           <div className="ml-auto flex items-center gap-1.5">
             <CrewPill />
@@ -145,7 +127,6 @@ export function Shell() {
             >
               <Search className="size-3.5" /> <Kbd>⌘K</Kbd>
             </button>
-            <SyncButton />
             <Link
               to="/settings"
               aria-label="Settings"
@@ -154,7 +135,6 @@ export function Shell() {
             >
               <Settings2 className="size-4" />
             </Link>
-            <ThemeToggle />
           </div>
         </div>
       </header>
@@ -167,6 +147,87 @@ export function Shell() {
   );
 }
 
+const AUX = [
+  { to: "/agents", label: "Agents" },
+  { to: "/later", label: "Later" },
+  { to: "/operations", label: "Operations" },
+  { to: "/history", label: "History" },
+] as const;
+
+/** Everything that is not Home or Goals, plus the quiet controls. */
+function MoreMenu({ queued }: { queued: number }) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  const [open, setOpen] = useState(false);
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const previousPath = useRef(pathname);
+  const activeAux = AUX.find((a) => pathname === a.to || pathname.startsWith(`${a.to}/`));
+
+  const close = useCallback(() => {
+    if (ref.current) ref.current.open = false;
+  }, []);
+
+  useEffect(() => {
+    if (previousPath.current !== pathname) close();
+    previousPath.current = pathname;
+  }, [pathname, close]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      close();
+      ref.current?.querySelector("summary")?.focus();
+    };
+    const onPointer = (e: PointerEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) close();
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onPointer);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onPointer);
+    };
+  }, [open, close]);
+
+  return (
+    <details ref={ref} className="relative" onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary
+        aria-label={activeAux ? `More destinations, current: ${activeAux.label}` : "More destinations"}
+        className={clsx(
+          "inline-flex cursor-pointer list-none items-center gap-1 whitespace-nowrap rounded-md px-2.5 py-1.5 transition-colors hover:text-fg [&::-webkit-details-marker]:hidden",
+          activeAux ? "bg-raised text-fg" : "text-muted",
+        )}
+      >
+        More
+        <ChevronDown className="size-3.5" />
+      </summary>
+      <div className="absolute top-full right-0 z-40 sm:right-auto sm:left-0 mt-1.5 w-56 rounded-lg bg-surface p-1 text-[13px] shadow-[var(--shadow)] ring-1 ring-line">
+        {AUX.map((a) => (
+          <Link
+            key={a.to}
+            to={a.to}
+            onClick={close}
+            className="flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-muted hover:bg-raised hover:text-fg data-[status=active]:bg-raised data-[status=active]:text-fg"
+          >
+            {a.label}
+            {a.to === "/agents" && queued > 0 && (
+              <span className="rounded-full bg-[color-mix(in_srgb,var(--dawn)_18%,transparent)] px-1.5 font-mono text-[10.5px] text-dawn">
+                {queued}
+              </span>
+            )}
+          </Link>
+        ))}
+        <div className="my-1 border-line border-t" />
+        <SyncButton />
+        <div className="flex items-center justify-between px-2.5 py-1">
+          <span className="text-muted">Theme</span>
+          <ThemeToggle />
+        </div>
+      </div>
+    </details>
+  );
+}
+
 function SyncButton() {
   const sync = useSync();
   return (
@@ -175,11 +236,11 @@ function SyncButton() {
       onClick={() => sync.mutate()}
       disabled={sync.isPending}
       aria-label="Sync"
-      className="hidden h-8 items-center gap-2 rounded-full px-3 text-[12.5px] text-muted transition-colors hover:bg-raised hover:text-fg disabled:opacity-60 sm:inline-flex"
+      className="flex h-8 w-full items-center justify-start gap-2 rounded-md px-2.5 text-[13px] text-muted transition-colors hover:bg-raised hover:text-fg disabled:opacity-60"
       title="Re-import runs and refresh PR state from GitHub"
     >
       <RefreshCw className={clsx("size-3.5", sync.isPending && "animate-spin")} strokeWidth={2} />
-      <span className="hidden sm:inline">{sync.isPending ? "Syncing" : sync.isError ? "Sync failed" : "Sync"}</span>
+      <span>{sync.isPending ? "Syncing" : sync.isError ? "Sync failed" : "Sync"}</span>
     </button>
   );
 }

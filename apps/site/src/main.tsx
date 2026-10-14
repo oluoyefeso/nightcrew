@@ -247,7 +247,7 @@ function currentTheme(): "light" | "dark" {
 
 const NAV = [
   ["#how", "How it works"],
-  ["#station", "Station"],
+  ["#station", "Goals"],
   ["#evidence", "Evidence"],
   ["#trust", "Trust"],
   ["#tokens", "Tokens"],
@@ -363,18 +363,19 @@ function Site() {
               </div>
             </nav>
           </header>
-          <div className="mx-auto grid max-w-[1120px] justify-items-center gap-14 px-5 pt-12 pb-16 text-center sm:pt-20">
-            <div className="grid max-w-[860px] justify-items-center gap-6">
+          <div className="mx-auto grid max-w-[1120px] gap-14 px-5 pt-16 pb-16 sm:pt-28">
+            <div className="grid max-w-[860px] justify-items-start gap-6">
               <Eyebrow>Open source · runs on your machine</Eyebrow>
               <h1 className="t-display">
-                Dispatch the work. <span className="text-faint">Judge the evidence.</span>
+                Set the goal.
+                <br />
+                <span className="text-muted">Conduct the work.</span>
               </h1>
               <p className="t-lede max-w-[560px]">
-                NightCrew is your conductor's station for coding agents. Dispatch work, set the crew's authority, and
-                inspect the evidence. Group related tasks into missions across your repos and see the decisions that
-                need you, day or night.
+                Bring goals across your repositories into one place. Put coding agents to work within your limits,
+                follow their progress, and review the evidence behind their results.
               </p>
-              <div className="flex flex-wrap items-center justify-center gap-3" id="start">
+              <div className="flex flex-wrap items-center gap-3" id="start">
                 <InstallButton />
                 <a
                   href={REPO}
@@ -383,13 +384,10 @@ function Site() {
                   Read the code
                 </a>
               </div>
-              <p className="font-mono text-[12px] text-faint">
-                A small task, end to end: <span className="text-fg">~100k tokens</span> · measured, not estimated
-              </p>
+              <p className="font-mono text-[12px] text-faint">Local runner · Claude Code today · Managed coming soon</p>
             </div>
-            <div className="grid w-full max-w-[920px] gap-2.5">
-              <Replay />
-              <p className="text-center font-mono text-[11px] text-faint">An example day in the daily report</p>
+            <div className="w-full">
+              <StationExample />
             </div>
           </div>
         </section>
@@ -408,7 +406,7 @@ function Site() {
                 [
                   "Any time · Dispatch",
                   "Tell the crew",
-                  "Give the crew an objective. Group tasks into a mission, describe the work in plain English, or pull in GitHub issues. Departure checks surface missing setup, prerequisites, possible scope overlap and available budget before an agent starts.",
+                  "Start with an outcome in Goals. Add success criteria when useful; naming, scheduling and limits are optional details. Goals start paused so you can draft and review the work before agents begin.",
                 ],
                 [
                   "In parallel · Agents work",
@@ -418,7 +416,7 @@ function Site() {
                 [
                   "As they finish · Report back",
                   "Judge the evidence",
-                  "The Station keeps unresolved decisions visible across days. Decision briefs explain stop reasons, missing evidence and next steps. Your repo settings decide whether the crew stops at a plan, opens a PR, joins a train, or merges to dev.",
+                  "Home keeps unresolved decisions visible across days. Decision briefs explain stop reasons, missing evidence and next steps. Your repo settings decide whether the crew stops at a plan, opens a PR, joins a train, or merges to dev.",
                 ],
               ].map(([time, title, body]) => (
                 <div key={title} className="grid content-start gap-3 bg-surface p-7">
@@ -439,13 +437,17 @@ function Site() {
               rest="See what is moving, what is held and what needs your judgement."
             />
             <p className="max-w-[700px] text-[15px] text-muted leading-relaxed">
-              Plan paused missions across repos with acceptance criteria, priorities, token limits and saved stop times.
-              Set when agents should stop, link tasks to outcomes and see gaps before dispatch. Recover saved work,
-              verify the combined result, and follow delivery under the authority you choose. Failed and interrupted
-              operations stay visible until reviewed.
+              Home and Goals keep everyday navigation simple. Open a goal to draft work, inspect task evidence and
+              verify the combined result. Agents, history and delivery stay reachable through More. Failed and
+              interrupted operations remain visible until reviewed.
             </p>
           </Reveal>
-          <StationExample />
+          <div className="grid gap-3">
+            <Replay />
+            <p className="text-[12px] text-muted">
+              Daily reports remain available in History. An example day is shown above.
+            </p>
+          </div>
           <p className="text-[13px] text-muted">
             Available in the local open-source runner. Verification templates support up to three independent reviews.
             Merge authority and delivery authority are configured separately; managed mode remains coming soon.

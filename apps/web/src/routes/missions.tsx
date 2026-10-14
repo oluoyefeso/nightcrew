@@ -1,7 +1,7 @@
 import { decisionFor, formatTokens, type Mission, type MissionSummary, needsDecision } from "@nightcrew/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, Flag, Pause, Play, Plus } from "lucide-react";
+import { ArrowLeft, Pause, Play, Plus } from "lucide-react";
 import { useState } from "react";
 import { api, missionQuery, missionsQuery, tasksQuery, useInvalidateTasks } from "../api";
 import { Field, Select, TextArea, TextInput } from "../components/form";
@@ -10,33 +10,30 @@ import { MissionControls, missionControlPatch, missionControlValues } from "../c
 import { Button } from "../components/ui";
 
 export function MissionCard({ mission }: { mission: MissionSummary }) {
+  const stopped = Boolean(mission.stopAt && Date.parse(mission.stopAt) <= Date.now());
   return (
     <Link
       to="/missions/$missionId"
       params={{ missionId: mission.id }}
-      className="grid gap-3 rounded-2xl bg-surface p-5 ring-1 ring-line hover:ring-dawn/50"
+      className="group grid gap-2 px-4 py-4 transition-colors hover:bg-raised/50 sm:px-5"
     >
-      <div className="flex items-start justify-between gap-3">
-        <h3 className="font-medium text-[16px]">{mission.title}</h3>
-        <span className="shrink-0 text-[12px] text-dawn">
-          {mission.stopAt && Date.parse(mission.stopAt) <= Date.now()
-            ? "Stop time reached"
-            : mission.paused
-              ? "Paused"
-              : "Active"}
+      <div className="flex items-start justify-between gap-4">
+        <h3 className="min-w-0 break-words font-medium text-[14px]">{mission.title}</h3>
+        <span className="shrink-0 text-[11px] text-muted">
+          {stopped ? "Stop time reached" : mission.paused ? "Paused" : "Active"}
         </span>
       </div>
-      <p className="line-clamp-2 whitespace-pre-wrap text-[13px] text-muted">{mission.objective}</p>
-      <p className="flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-muted">
-        <span>{mission.counts.total} tasks</span>
-        <span>{mission.counts.running} working</span>
-        <span>{mission.counts.needsYou} need review</span>
+      <p className="line-clamp-2 whitespace-pre-wrap break-words text-[13px] text-muted">{mission.objective}</p>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px] text-muted">
+        <span>
+          {mission.counts.total} {mission.counts.total === 1 ? "task" : "tasks"}
+        </span>
+        {mission.counts.running > 0 && <span>{mission.counts.running} working</span>}
+        {mission.counts.needsYou > 0 && <span className="text-dawn">{mission.counts.needsYou} need review</span>}
         <span>{formatTokens(mission.tokensUsed)} tokens used</span>
-      </p>
-      {mission.stopAt ? (
-        <p className="text-[12px] text-muted">Stop work at {new Date(mission.stopAt).toLocaleString()}</p>
-      ) : null}
-      <span className="text-[12px] text-dawn">Open mission →</span>
+        {mission.stopAt && <span>Stop work at {new Date(mission.stopAt).toLocaleString()}</span>}
+        <span className="ml-auto text-fg group-hover:text-dawn">Open goal →</span>
+      </div>
     </Link>
   );
 }
@@ -51,94 +48,134 @@ export function MissionsPage() {
   const navigate = useNavigate();
   const create = useMutation({
     mutationFn: () =>
-      api.post<Mission>("/api/missions", { title, objective, paused, ...missionControlPatch(controls) }),
+      api.post<Mission>("/api/missions", {
+        title: title.trim() || objective.trim().split(/\r?\n/)[0]?.slice(0, 80),
+        objective: objective.trim(),
+        paused,
+        ...missionControlPatch(controls),
+      }),
     onSuccess: (mission) => {
       invalidate();
       navigate({ to: "/missions/$missionId", params: { missionId: mission.id } });
     },
   });
   return (
-    <div className="mx-auto grid max-w-[1080px] gap-8 px-4 pt-8 pb-24 sm:px-8 lg:pt-12">
-      <header className="grid gap-3">
-        <span className="t-eyebrow inline-flex items-center gap-2">
-          <Flag className="size-4" /> Shared objectives
-        </span>
-        <h1 className="t-h1">Missions.</h1>
-        <p className="max-w-[680px] text-[14px] text-muted">
-          Give related tasks an objective, even across repositories. See their progress and decisions together, and
-          pause new starts for a whole mission.
+    <div className="mx-auto grid max-w-[920px] gap-10 px-4 pt-8 pb-24 sm:px-8 lg:pt-12">
+      <header className="grid gap-2">
+        <h1 className="text-[30px] font-medium tracking-[-0.03em]">Goals</h1>
+        <p className="max-w-[620px] text-[14px] text-muted">
+          Set the direction. Keep progress, decisions and evidence together.
         </p>
       </header>
       <form
-        className="grid gap-4 rounded-2xl bg-surface p-5 ring-1 ring-line"
+        id="new-goal"
+        aria-labelledby="new-goal-title"
+        className="grid scroll-mt-20 gap-5 rounded-xl border border-line bg-surface p-5 sm:p-6"
         onSubmit={(e) => {
           e.preventDefault();
           create.mutate();
         }}
       >
-        <h2 className="t-h3">Start a mission</h2>
-        <Field label="Mission name" htmlFor="mission-title">
-          <TextInput
-            id="mission-title"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            required
-            maxLength={200}
-            placeholder="Make onboarding effortless"
-          />
-        </Field>
-        <Field label="Objective" htmlFor="mission-objective">
+        <h2 id="new-goal-title" className="text-[16px] font-medium">
+          What do you want to achieve?
+        </h2>
+        <Field label="Outcome" htmlFor="mission-objective">
           <TextArea
             id="mission-objective"
             value={objective}
             onChange={(e) => setObjective(e.target.value)}
             required
             maxLength={10000}
-            placeholder="What should be true when the work succeeds?"
+            placeholder="Make onboarding effortless. New users should reach their first useful result without getting stuck."
             rows={3}
           />
         </Field>
-        <MissionControls values={controls} onChange={setControls} />
-        <label className="flex items-center gap-2 text-[13px]">
-          <input
-            type="checkbox"
-            checked={paused}
-            onChange={(e) => setPaused(e.target.checked)}
-            className="accent-dawn"
+        <Field
+          label="What does done look like?"
+          htmlFor="mission-criteria"
+          hint="Optional for now. Add one checkable outcome per line."
+        >
+          <TextArea
+            id="mission-criteria"
+            rows={2}
+            value={controls.criteria}
+            maxLength={30030}
+            placeholder="A new user can create a workspace and invite a teammate."
+            onChange={(e) => setControls({ ...controls, criteria: e.target.value })}
           />
-          Start paused while I plan
-        </label>
-        <p className="text-[12px] text-muted">
-          A paused mission can be drafted and reviewed. Resume it when new tasks may start.
-        </p>
-        <p className="text-[12.5px] text-muted">
-          Agents receive this objective alongside their task. Scope, verification and merge authority still come from
-          each task and repository.
-        </p>
-        <div className="flex flex-wrap items-center justify-end gap-3">
-          {create.error && (
-            <p role="alert" className="text-[13px] text-bad">
-              {create.error.message}
+        </Field>
+        <details className="border-y border-line py-3">
+          <summary className="cursor-pointer text-[13px] text-muted hover:text-fg">
+            Details & limits <span className="ml-2 text-[11px]">Optional</span>
+          </summary>
+          <div className="mt-5 grid gap-4">
+            <Field label="Goal name" htmlFor="mission-title" hint="Leave blank to use the first line of your outcome.">
+              <TextInput
+                id="mission-title"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                maxLength={200}
+                placeholder="Make onboarding effortless"
+              />
+            </Field>
+            <MissionControls values={controls} onChange={setControls} includeCriteria={false} />
+            <label className="flex items-center gap-2 text-[13px]">
+              <input
+                type="checkbox"
+                checked={paused}
+                onChange={(e) => setPaused(e.target.checked)}
+                className="accent-dawn"
+              />
+              Start paused while I review the work
+            </label>
+          </div>
+        </details>
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div className="grid max-w-[520px] gap-1 text-[12px] text-muted">
+            <p>
+              {controls.budget
+                ? `${formatTokens(Number(controls.budget))} goal token limit. `
+                : "Daily crew budget applies. "}
+              Repository authority stays in place.
             </p>
-          )}
-          <Button type="submit" variant="primary" disabled={create.isPending || !title.trim() || !objective.trim()}>
-            <Plus className="size-4" />
-            Create mission
+            <p>
+              {paused
+                ? "Saved paused. Next, draft and review the work before starting."
+                : "Next, draft the work. Queued tasks may start within your crew's limits."}
+            </p>
+          </div>
+          <Button type="submit" variant="primary" disabled={create.isPending || !objective.trim()}>
+            <Plus className="size-3.5" />
+            {create.isPending ? "Creating…" : "Create goal"}
           </Button>
         </div>
+        {create.error && (
+          <p role="alert" className="text-[13px] text-bad">
+            {create.error.message}
+          </p>
+        )}
       </form>
-      {missions.error && (
-        <p role="alert" className="text-bad">
-          Couldn't load missions. {missions.error.message}
-        </p>
-      )}
-      <section aria-label="Missions" className="grid gap-4 sm:grid-cols-2">
-        {missions.data?.map((mission) => (
-          <MissionCard key={mission.id} mission={mission} />
-        ))}
+      <section aria-label="Goals" className="grid gap-4">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-[14px] font-medium">Your goals</h2>
+          {missions.data && <span className="font-mono text-[12px] text-muted">{missions.data.length}</span>}
+        </div>
+        {missions.isPending && <p className="text-[13px] text-muted">Loading goals…</p>}
+        {missions.error && (
+          <p role="alert" className="text-bad">
+            Couldn't load goals. {missions.error.message}
+          </p>
+        )}
+        {Boolean(missions.data?.length) && (
+          <div className="divide-y divide-line overflow-hidden rounded-xl border border-line">
+            {missions.data?.map((mission) => (
+              <MissionCard key={mission.id} mission={mission} />
+            ))}
+          </div>
+        )}
         {missions.data?.length === 0 && (
-          <p className="text-[14px] text-muted">
-            Create your first mission, then draft new work or attach existing tasks.
+          <p className="text-[13px] text-muted">
+            Your first goal starts above. Its progress and evidence will stay together here.
           </p>
         )}
       </section>
@@ -182,7 +219,7 @@ export function MissionPage({ missionId }: { missionId: string }) {
         </p>
       </div>
     );
-  if (!detail.data) return <p className="p-8 text-muted">Loading mission…</p>;
+  if (!detail.data) return <p className="p-8 text-muted">Loading goal…</p>;
   const { mission, tasks } = detail.data;
   const holds = tasks.filter((entry) => entry.departure?.kind === "setup").length;
   const questions = tasks.filter((entry) => entry.task.question).length;
@@ -190,14 +227,14 @@ export function MissionPage({ missionId }: { missionId: string }) {
     <div className="mx-auto grid max-w-[1080px] gap-7 px-4 pt-8 pb-24 sm:px-8 lg:pt-12">
       <Link to="/missions" className="inline-flex items-center gap-2 text-[13px] text-muted">
         <ArrowLeft className="size-4" />
-        Missions
+        Goals
       </Link>
       <header className="grid gap-4">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <h1 className="t-h1 break-words min-w-0">{mission.title}</h1>
           <Button onClick={() => change.mutate(!mission.paused)} disabled={change.isPending}>
             {mission.paused ? <Play className="size-4" /> : <Pause className="size-4" />}
-            {mission.paused ? "Resume mission" : "Pause mission"}
+            {mission.paused ? "Resume goal" : "Pause goal"}
           </Button>
         </div>
         <p className="whitespace-pre-wrap text-[15px] text-muted leading-relaxed">{mission.objective}</p>
@@ -221,7 +258,7 @@ export function MissionPage({ missionId }: { missionId: string }) {
             search={{ mission: mission.id }}
             className="rounded-full bg-dawn px-4 py-2 text-[13px] font-medium text-on-dawn"
           >
-            Draft work for this mission
+            Draft work for this goal
           </Link>
           <Button variant="ghost" onClick={() => setEditing(!editing)}>
             {editing ? "Cancel editing" : "Edit objective"}
@@ -404,7 +441,7 @@ export function MissionPage({ missionId }: { missionId: string }) {
       {!tasks.length && (
         <div>
           <Button variant="ghost" onClick={() => remove.mutate()} disabled={remove.isPending}>
-            Delete empty mission
+            Delete empty goal
           </Button>
           {remove.error && (
             <p role="alert" className="text-bad">
@@ -438,7 +475,7 @@ function MissionEditor({ mission, onSaved }: { mission: Mission; onSaved: () => 
         save.mutate();
       }}
     >
-      <Field label="Mission name" htmlFor="mission-title">
+      <Field label="Goal name" htmlFor="mission-title">
         <TextInput
           id="mission-title"
           value={title}

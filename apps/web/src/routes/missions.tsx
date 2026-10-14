@@ -1,13 +1,16 @@
-import { decisionFor, formatTokens, type Mission, type MissionSummary, needsDecision } from "@nightcrew/core";
+import { decisionFor, formatTokens, type Mission, type MissionSummary, needsDecision, type Run } from "@nightcrew/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
+import { clsx } from "clsx";
 import { ArrowLeft, Pause, Play, Plus } from "lucide-react";
-import { useState } from "react";
-import { api, missionQuery, missionsQuery, tasksQuery, useInvalidateTasks } from "../api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, missionQuery, missionsQuery, tasksQuery, toast, useInvalidateTasks } from "../api";
 import { Field, Select, TextArea, TextInput } from "../components/form";
 import { MissionAcceptancePanel } from "../components/mission-acceptance";
 import { MissionControls, missionControlPatch, missionControlValues } from "../components/mission-controls";
+import { RunPane } from "../components/run-pane";
 import { Button } from "../components/ui";
+import { isTypingTarget } from "../lib";
 
 export function MissionCard({ mission }: { mission: MissionSummary }) {
   const stopped = Boolean(mission.stopAt && Date.parse(mission.stopAt) <= Date.now());
@@ -183,13 +186,25 @@ export function MissionsPage() {
   );
 }
 
-export function MissionPage({ missionId }: { missionId: string }) {
+export function MissionPage({ missionId, runId }: { missionId: string; runId?: string }) {
   const detail = useQuery(missionQuery(missionId));
   const available = useQuery(tasksQuery([]));
   const invalidate = useInvalidateTasks();
   const [selected, setSelected] = useState("");
   const [editing, setEditing] = useState(false);
   const navigate = useNavigate();
+  const opener = useRef<HTMLElement | null>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const previousRun = useRef(runId);
+  const closeEvidence = useCallback(() => {
+    void navigate({ to: "/missions/$missionId", params: { missionId }, search: {}, resetScroll: false });
+  }, [missionId, navigate]);
+  useEffect(() => {
+    if (previousRun.current && !runId) {
+      (opener.current?.isConnected ? opener.current : heading.current)?.focus();
+    }
+    previousRun.current = runId;
+  }, [runId]);
   const change = useMutation({
     mutationFn: (paused: boolean) => api.patch(`/api/missions/${missionId}`, { paused }),
     onSuccess: invalidate,
@@ -205,14 +220,14 @@ export function MissionPage({ missionId }: { missionId: string }) {
     mutationFn: () => api.del(`/api/missions/${missionId}`),
     onSuccess: () => {
       invalidate();
-      navigate({ to: "/missions" });
+      void navigate({ to: "/missions" });
     },
   });
   if (detail.error)
     return (
       <div className="grid gap-4 p-8">
         <Link to="/missions" className="text-dawn">
-          ← Missions
+          ← Goals
         </Link>
         <p role="alert" className="text-bad">
           {detail.error.message}
@@ -221,236 +236,364 @@ export function MissionPage({ missionId }: { missionId: string }) {
     );
   if (!detail.data) return <p className="p-8 text-muted">Loading goal…</p>;
   const { mission, tasks } = detail.data;
-  const holds = tasks.filter((entry) => entry.departure?.kind === "setup").length;
-  const questions = tasks.filter((entry) => entry.task.question).length;
+  const decisions = tasks.filter(
+    ({ task, run, departure }) =>
+      task.question || departure?.kind === "setup" || (task.status === "done" && (!run || needsDecision(run))),
+  );
+  const evidenceLink = (run: Run, label = "Inspect evidence") => (
+    <Link
+      to="/missions/$missionId"
+      params={{ missionId }}
+      search={{ run: run.id }}
+      resetScroll={false}
+      onClick={(event) => {
+        opener.current = event.currentTarget;
+      }}
+      className="text-[12.5px] text-dawn hover:underline"
+    >
+      {label} →
+    </Link>
+  );
   return (
-    <div className="mx-auto grid max-w-[1080px] gap-7 px-4 pt-8 pb-24 sm:px-8 lg:pt-12">
-      <Link to="/missions" className="inline-flex items-center gap-2 text-[13px] text-muted">
-        <ArrowLeft className="size-4" />
-        Goals
-      </Link>
-      <header className="grid gap-4">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <h1 className="t-h1 break-words min-w-0">{mission.title}</h1>
-          <Button onClick={() => change.mutate(!mission.paused)} disabled={change.isPending}>
-            {mission.paused ? <Play className="size-4" /> : <Pause className="size-4" />}
-            {mission.paused ? "Resume goal" : "Pause goal"}
-          </Button>
-        </div>
-        <p className="whitespace-pre-wrap text-[15px] text-muted leading-relaxed">{mission.objective}</p>
-        <p className="text-[13px] text-muted">
-          Priority: {["Normal", "Raised", "High", "Urgent"][mission.priority]} · Token limit:{" "}
-          {mission.tokenBudget === null ? "Daily budget only" : formatTokens(mission.tokenBudget)}
-          {mission.stopAt
-            ? ` · Stop work at ${new Date(mission.stopAt).toLocaleString()}${Date.parse(mission.stopAt) <= Date.now() ? " (reached)" : ""}`
-            : ""}
-          {mission.deadline ? ` · New starts before ${new Date(mission.deadline).toLocaleString()}` : ""}
-        </p>
-        <p className="text-[12.5px] text-muted">
-          {mission.paused
-            ? "New starts are paused. Agents already working finish their current run."
-            : "Queued tasks may start when departure checks, dependencies and crew limits allow."}{" "}
-          Pausing does not change repository merge authority.
-        </p>
-        <div className="flex flex-wrap gap-3">
-          <Link
-            to="/agents"
-            search={{ mission: mission.id }}
-            className="rounded-full bg-dawn px-4 py-2 text-[13px] font-medium text-on-dawn"
-          >
-            Draft work for this goal
+    <div className={clsx("mx-auto grid max-w-[1440px]", runId && "lg:grid-cols-[minmax(0,1fr)_minmax(420px,560px)]")}>
+      <div className={clsx("min-w-0 px-4 pt-8 pb-24 sm:px-8 lg:pt-12", runId && "hidden lg:block")}>
+        <div className="mx-auto grid max-w-[980px] gap-8 [&>*]:min-w-0">
+          <Link to="/missions" className="inline-flex w-fit items-center gap-2 text-[13px] text-muted hover:text-fg">
+            <ArrowLeft className="size-4" /> Goals
           </Link>
-          <Button variant="ghost" onClick={() => setEditing(!editing)}>
-            {editing ? "Cancel editing" : "Edit objective"}
-          </Button>
-        </div>
-        {change.error && (
-          <p role="alert" className="text-bad">
-            {change.error.message}
-          </p>
-        )}
-      </header>
-      {editing && (
-        <MissionEditor
-          mission={mission}
-          onSaved={() => {
-            setEditing(false);
-            invalidate();
-          }}
-        />
-      )}
-      <section aria-label="Mission progress" className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {[
-          ["Working", mission.counts.running],
-          ["Queued", mission.counts.queued],
-          ["Need review", mission.counts.needsYou],
-          ["Resolved", mission.counts.resolved],
-        ].map(([label, value]) => (
-          <div key={label} className="rounded-2xl bg-surface p-4 ring-1 ring-line">
-            <p className="text-[12px] text-muted">{label}</p>
-            <p className="mt-1 font-mono text-[24px]">{value}</p>
-          </div>
-        ))}
-      </section>
-      <p className="text-[12.5px] text-muted">
-        {mission.counts.parked} draft or parked · {holds} setup holds · {questions} unanswered questions. Resolved
-        includes merged, shipped and dismissed work; it does not certify the mission objective.
-      </p>
-      <div className="flex flex-wrap gap-x-8 gap-y-3 rounded-2xl bg-surface p-5 text-[13px] ring-1 ring-line">
-        <span>
-          <b className="font-mono">{formatTokens(mission.tokensUsed)}</b> tokens charged across all attempts dispatched
-          for this mission
-        </span>
-        <span>
-          <b className="font-mono">{formatTokens(mission.taskCaps)}</b> combined caps for queued and running tasks
-        </span>
-        <p className="w-full text-[12px] text-muted">
-          Caps are limits, not forecasts or extra reservations. The crew's daily budget still governs dispatch.
-        </p>
-      </div>
-      <section
-        aria-label="Mission criterion coverage"
-        className="grid gap-3 rounded-2xl bg-surface p-5 ring-1 ring-line"
-      >
-        <h2 className="t-h3">Planned criterion coverage</h2>
-        <p className="text-[12px] text-muted">
-          See which tasks are intended to support each outcome. Links are planning metadata; acceptance still needs your
-          evidence and passing combined checks.
-        </p>
-        {!mission.criteria.length && (
-          <p className="text-[13px] text-dawn">Add acceptance criteria before reviewing coverage.</p>
-        )}
-        {mission.criteria.map((criterion) => {
-          const linked = tasks.filter(({ task }) => task.missionCriteria?.includes(criterion));
-          return (
-            <div key={criterion} className="grid gap-2 rounded-xl bg-raised/40 p-3">
-              <h3 className="text-[13px] font-medium break-words">{criterion}</h3>
-              {!linked.length ? (
-                <p className="text-[12px] text-dawn">No task linked yet</p>
-              ) : (
-                linked.map(({ task }) => (
-                  <Link
-                    key={task.id}
-                    to="/task/$taskId"
-                    params={{ taskId: task.id }}
-                    className="text-[12px] text-dawn break-words"
-                  >
-                    {task.title} · {task.status}
-                  </Link>
-                ))
-              )}
-            </div>
-          );
-        })}
-        {tasks.some(({ task }) => task.missionCriteria?.some((c) => !mission.criteria.includes(c))) && (
-          <p className="text-[12px] text-dawn">
-            Some task links refer to changed or removed criteria. Open those tasks to review their links.
-          </p>
-        )}
-      </section>
-      <section aria-label="Mission tasks" className="grid gap-3">
-        <h2 className="t-h3">Tasks · {mission.counts.total}</h2>
-        {tasks.map(({ task, run, departure }) => (
-          <article key={task.id} className="grid gap-2 rounded-2xl bg-surface p-5 ring-1 ring-line">
-            <div className="flex flex-wrap justify-between gap-2">
-              <Link to="/task/$taskId" params={{ taskId: task.id }} className="font-medium hover:text-dawn">
-                {task.title}
-              </Link>
+          <header className="grid gap-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <span className="text-[12px] text-muted">
-                {task.repoName} ·{" "}
-                {task.status === "done"
-                  ? run
-                    ? needsDecision(run)
-                      ? decisionFor(run).label
-                      : "Resolved"
-                    : "Needs review"
-                  : { queued: "Queued", running: "Working", draft: "Draft", later: "Parked", archived: "Archived" }[
-                      task.status
-                    ]}
+                {mission.stopAt && Date.parse(mission.stopAt) <= Date.now()
+                  ? "Stop time reached"
+                  : mission.paused
+                    ? "New starts paused"
+                    : "Active goal"}
               </span>
+              <Button onClick={() => change.mutate(!mission.paused)} disabled={change.isPending}>
+                {mission.paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
+                {mission.paused ? "Resume goal" : "Pause goal"}
+              </Button>
             </div>
-            {departure && <p className="text-[13px] text-dawn">{departure.reason}</p>}
-            {task.question && <p className="text-[13px] text-dawn">Question: {task.question}</p>}
-            {task.status === "done" && run && needsDecision(run) && (
-              <p className="text-[13px] text-dawn">{decisionFor(run).reason}</p>
-            )}
-            {task.dependsOn.length > 0 && (
-              <p className="text-[12px] text-muted">
-                Prerequisites:{" "}
-                {task.dependsOn
-                  .map((id) => available.data?.find((t) => t.id === id)?.title ?? "Missing task")
-                  .join(", ")}
+            <h1
+              ref={heading}
+              tabIndex={-1}
+              className="break-words text-[30px] font-medium tracking-[-0.03em] leading-tight outline-none"
+            >
+              {mission.title}
+            </h1>
+            <p className="whitespace-pre-wrap break-words text-[15px] text-muted leading-relaxed">
+              {mission.objective}
+            </p>
+            <section
+              aria-label="Goal progress"
+              className="flex flex-wrap gap-x-5 gap-y-2 border-y border-line py-3 text-[12px] text-muted"
+            >
+              <span>{mission.counts.running} working</span>
+              <span>{mission.counts.queued} queued</span>
+              <span>{mission.counts.parked} draft or parked</span>
+              <span>{mission.counts.resolved} resolved tasks</span>
+              <span>{formatTokens(mission.tokensUsed)} tokens used</span>
+            </section>
+            <p className="text-[12px] text-muted">
+              {mission.paused
+                ? "New starts are paused. Agents already working finish their current run."
+                : "Queued tasks start when departure checks, dependencies and crew limits allow."}
+            </p>
+            {change.error && (
+              <p role="alert" className="text-bad">
+                {change.error.message}
               </p>
             )}
-            <div className="flex flex-wrap gap-4 text-[12.5px] text-dawn">
-              <Link to="/task/$taskId" params={{ taskId: task.id }}>
-                Edit task & departure checks →
-              </Link>
-              {run &&
-                (run.status === "running" ? (
-                  <Link to="/run/$runId" params={{ runId: run.id }}>
-                    Watch active run →
-                  </Link>
-                ) : (
-                  <Link to="/" search={{ run: run.id }}>
-                    Inspect latest run →
-                  </Link>
+          </header>
+
+          <section aria-label="Goal decisions" className="grid gap-3">
+            <h2 className="text-[15px] font-medium">
+              {decisions.length ? `Needs your decision · ${decisions.length}` : "No decisions waiting"}
+            </h2>
+            {decisions.length ? (
+              <div className="divide-y divide-line border-y border-line">
+                {decisions.map(({ task, run, departure }) => (
+                  <article key={task.id} className="grid gap-2 py-4">
+                    <h3 className="break-words text-[14px] font-medium">{task.title}</h3>
+                    <p className="whitespace-pre-wrap break-words text-[13px] text-muted">
+                      {task.question
+                        ? `Question: ${task.question}`
+                        : departure?.kind === "setup"
+                          ? departure.reason
+                          : run
+                            ? decisionFor(run).reason
+                            : "This task finished without an inspectable run. Review the task before accepting its result."}
+                    </p>
+                    <div className="flex flex-wrap gap-x-5 gap-y-2">
+                      {run && evidenceLink(run, "Review decision")}
+                      {(task.question || departure?.kind === "setup" || !run) && (
+                        <Link to="/task/$taskId" params={{ taskId: task.id }} className="text-[12.5px] text-dawn">
+                          {task.question ? "Answer question" : "Review task"} →
+                        </Link>
+                      )}
+                    </div>
+                  </article>
                 ))}
+              </div>
+            ) : (
+              <p className="text-[13px] text-muted">
+                {tasks.length
+                  ? "Work and outcome verification remain visible below."
+                  : "Draft work for this objective to get started. Saving a goal does not create or run tasks."}
+              </p>
+            )}
+          </section>
+
+          <MissionAcceptancePanel key={`${mission.id}:${JSON.stringify(mission.criteria)}`} mission={mission} />
+
+          <section aria-label="Goal work and evidence" className="grid gap-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-[15px] font-medium">
+                Work & evidence <span className="ml-2 font-mono text-[12px] text-muted">{tasks.length}</span>
+              </h2>
+              <Link
+                to="/agents"
+                search={{ mission: mission.id }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-fg px-3 py-2 text-[12px] font-medium text-bg"
+              >
+                <Plus className="size-3.5" />
+                Draft work
+              </Link>
             </div>
-          </article>
-        ))}
-        {!tasks.length && (
-          <p className="text-[14px] text-muted">
-            No tasks yet. Draft work for this objective or attach an existing task below.
-          </p>
-        )}
-      </section>
-      <section className="grid gap-3 rounded-2xl bg-surface p-5 ring-1 ring-line">
-        <h2 className="text-[14px] font-medium">Attach an existing task</h2>
-        <p className="text-[12.5px] text-muted">
-          Unassigned tasks keep their current status, scope and dependencies. Move tasks between missions in the task
-          editor; running tasks stay in their mission until they stop.
-        </p>
-        <div className="flex flex-wrap gap-3">
-          <Select
-            aria-label="Task to attach"
-            value={selected}
-            onChange={(e) => setSelected(e.target.value)}
-            className="min-w-0 flex-1"
-          >
-            <option value="">Choose a task…</option>
-            {available.data
-              ?.filter((t) => !t.missionId && t.status !== "running")
-              .map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.repoName} · {t.title}
-                </option>
-              ))}
-          </Select>
-          <Button disabled={!selected || attach.isPending} onClick={() => attach.mutate()}>
-            Attach task
-          </Button>
-        </div>
-        {attach.error && (
-          <p role="alert" className="text-bad">
-            {attach.error.message}
-          </p>
-        )}
-      </section>
-      <MissionAcceptancePanel key={`${mission.id}:${JSON.stringify(mission.criteria)}`} mission={mission} />
-      {!tasks.length && (
-        <div>
-          <Button variant="ghost" onClick={() => remove.mutate()} disabled={remove.isPending}>
-            Delete empty goal
-          </Button>
-          {remove.error && (
-            <p role="alert" className="text-bad">
-              {remove.error.message}
+            <p className="text-[12px] text-muted">
+              Resolved includes merged, shipped and dismissed tasks. It does not establish that the goal is achieved.
             </p>
-          )}
+            <div className="divide-y divide-line border-y border-line">
+              {tasks.map(({ task, run, departure }) => (
+                <article key={task.id} className="grid gap-2 py-4">
+                  <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                    <Link
+                      to="/task/$taskId"
+                      params={{ taskId: task.id }}
+                      className="min-w-0 break-words text-[14px] font-medium hover:text-dawn"
+                    >
+                      {task.title}
+                    </Link>
+                    <span className="text-[12px] text-muted">
+                      {task.status === "done"
+                        ? run
+                          ? needsDecision(run)
+                            ? decisionFor(run).label
+                            : "Resolved"
+                          : "Needs review"
+                        : {
+                            queued: "Queued",
+                            running: "Working",
+                            draft: "Draft",
+                            later: "Parked",
+                            archived: "Archived",
+                          }[task.status]}
+                    </span>
+                  </div>
+                  <span className="break-words text-[12px] text-muted">{task.repoName}</span>
+                  {departure && <p className="break-words text-[12px] text-muted">{departure.reason}</p>}
+                  {run?.summary && (
+                    <p className="line-clamp-2 whitespace-pre-wrap break-words text-[13px] text-muted">{run.summary}</p>
+                  )}
+                  <div className="flex flex-wrap gap-x-5 gap-y-2">
+                    {run && evidenceLink(run)}
+                    {run?.status === "running" && (
+                      <Link to="/run/$runId" params={{ runId: run.id }} className="text-[12.5px] text-dawn">
+                        Watch live activity →
+                      </Link>
+                    )}
+                    <Link
+                      to="/task/$taskId"
+                      params={{ taskId: task.id }}
+                      className="text-[12.5px] text-muted hover:text-fg"
+                    >
+                      Task details →
+                    </Link>
+                  </div>
+                  {task.dependsOn.length > 0 && (
+                    <p className="break-words text-[12px] text-muted">
+                      Prerequisites:{" "}
+                      {task.dependsOn
+                        .map((id) => available.data?.find((t) => t.id === id)?.title ?? "Missing task")
+                        .join(", ")}
+                    </p>
+                  )}
+                </article>
+              ))}
+              {!tasks.length && <p className="py-4 text-[13px] text-muted">No work attached yet.</p>}
+            </div>
+          </section>
+
+          <details className="border-y border-line py-4">
+            <summary className="cursor-pointer text-[13px] text-muted hover:text-fg">Details & limits</summary>
+            <div className="mt-5 grid gap-6 [&>*]:min-w-0">
+              <p className="text-[13px] text-muted">
+                Priority: {["Normal", "Raised", "High", "Urgent"][mission.priority]} · Token limit:{" "}
+                {mission.tokenBudget === null ? "Daily budget only" : formatTokens(mission.tokenBudget)}
+                {mission.stopAt ? ` · Stop work at ${new Date(mission.stopAt).toLocaleString()}` : ""}
+                {mission.deadline ? ` · New starts before ${new Date(mission.deadline).toLocaleString()}` : ""}
+              </p>
+              <p className="text-[12px] text-muted">
+                {formatTokens(mission.tokensUsed)} tokens charged across all attempts dispatched for this goal.{" "}
+                {formatTokens(mission.taskCaps)} combined caps for queued and running tasks. Caps are limits, not
+                forecasts or extra reservations. Daily crew budget and repository authority still apply.
+              </p>
+              <div>
+                <Button variant="ghost" onClick={() => setEditing(!editing)}>
+                  {editing ? "Cancel editing" : "Edit objective & limits"}
+                </Button>
+              </div>
+              {editing && (
+                <MissionEditor
+                  key={mission.id}
+                  mission={mission}
+                  onSaved={() => {
+                    setEditing(false);
+                    invalidate();
+                  }}
+                />
+              )}
+              <section aria-label="Goal criterion coverage" className="grid gap-3">
+                <h2 className="text-[14px] font-medium">Planned criterion coverage</h2>
+                <p className="text-[12px] text-muted">
+                  Task links describe intended coverage. Acceptance needs your evidence and passing combined checks.
+                </p>
+                {!mission.criteria.length && (
+                  <p className="text-[13px] text-muted">Add success criteria to review coverage.</p>
+                )}
+                {mission.criteria.map((criterion) => {
+                  const linked = tasks.filter(({ task }) => task.missionCriteria?.includes(criterion));
+                  return (
+                    <div key={criterion} className="grid gap-2 border-l border-line pl-3">
+                      <h3 className="break-words text-[13px] font-medium">{criterion}</h3>
+                      {!linked.length ? (
+                        <p className="text-[12px] text-dawn">No task linked yet</p>
+                      ) : (
+                        linked.map(({ task }) => (
+                          <Link
+                            key={task.id}
+                            to="/task/$taskId"
+                            params={{ taskId: task.id }}
+                            className="break-words text-[12px] text-dawn"
+                          >
+                            {task.title} · {task.status}
+                          </Link>
+                        ))
+                      )}
+                    </div>
+                  );
+                })}
+                {tasks.some(({ task }) => task.missionCriteria?.some((c) => !mission.criteria.includes(c))) && (
+                  <p className="text-[12px] text-dawn">
+                    Some task links refer to changed or removed criteria. Open those tasks to review their links.
+                  </p>
+                )}
+              </section>
+              <section className="grid gap-3">
+                <h2 className="text-[14px] font-medium">Attach an existing task</h2>
+                <p className="text-[12px] text-muted">
+                  Unassigned tasks keep their status, scope and dependencies. Move tasks between goals in the task
+                  editor; running tasks stay in their goal until they stop.
+                </p>
+                <div className="flex flex-wrap gap-3">
+                  <Select
+                    aria-label="Task to attach"
+                    value={selected}
+                    onChange={(e) => setSelected(e.target.value)}
+                    className="min-w-0 flex-1"
+                  >
+                    <option value="">Choose a task…</option>
+                    {available.data
+                      ?.filter((t) => !t.missionId && t.status !== "running")
+                      .map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.repoName} · {t.title}
+                        </option>
+                      ))}
+                  </Select>
+                  <Button disabled={!selected || attach.isPending} onClick={() => attach.mutate()}>
+                    Attach task
+                  </Button>
+                </div>
+                {available.error && (
+                  <p role="alert" className="text-bad">
+                    Couldn't load tasks. {available.error.message}
+                  </p>
+                )}
+                {attach.error && (
+                  <p role="alert" className="text-bad">
+                    {attach.error.message}
+                  </p>
+                )}
+              </section>
+              {!tasks.length && (
+                <div>
+                  <Button variant="ghost" onClick={() => remove.mutate()} disabled={remove.isPending}>
+                    Delete empty goal
+                  </Button>
+                  {remove.error && (
+                    <p role="alert" className="text-bad">
+                      {remove.error.message}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          </details>
         </div>
+      </div>
+      {runId && (
+        <GoalEvidence
+          key={missionId}
+          mission={mission}
+          runId={runId}
+          taskIds={tasks.map(({ task }) => task.id)}
+          onClose={closeEvidence}
+        />
       )}
     </div>
+  );
+}
+
+function GoalEvidence({
+  mission,
+  runId,
+  taskIds,
+  onClose,
+}: {
+  mission: Mission;
+  runId: string;
+  taskIds: string[];
+  onClose: () => void;
+}) {
+  const panel = useRef<HTMLDivElement>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: move focus when a different attempt opens
+  useEffect(() => {
+    panel.current?.querySelector<HTMLButtonElement>('button[aria-label="Close"]')?.focus({ preventScroll: true });
+    if (window.matchMedia("(max-width: 1023px)").matches) panel.current?.scrollIntoView({ block: "start" });
+  }, [runId]);
+  useEffect(() => {
+    const close = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || isTypingTarget(event.target)) return;
+      event.preventDefault();
+      onClose();
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [onClose]);
+  return (
+    <section
+      aria-label="Goal evidence"
+      className="min-w-0 lg:sticky lg:top-14 lg:h-[calc(100dvh-3.5rem)] lg:border-l lg:border-line"
+    >
+      <div ref={panel} className="flex h-[calc(100dvh-3.5rem)] flex-col lg:h-full">
+        <p className="truncate border-b border-line px-4 py-3 text-[12px] text-muted">Evidence for {mission.title}</p>
+        <div className="min-h-0 flex-1">
+          <RunPane runId={runId} allowedTaskIds={taskIds} navigationHint={false} onClose={onClose} onToast={toast} />
+        </div>
+      </div>
+    </section>
   );
 }
 

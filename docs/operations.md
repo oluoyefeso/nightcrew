@@ -55,7 +55,9 @@ The dashboard uses the browser's timezone. Authenticated mission creation and pa
 
 Mission token usage is charged at dispatch, across retries. Changing membership or deleting a task does not refund it. Running tasks reserve their remaining task caps. Migration assigns historical local attempts to each task's mission at upgrade time. Unassigned and classic work is not retroactively charged. Token limits govern dispatch capacity; provider token accounting can arrive after a model turn, so they are not financial guarantees. Command execution has timeouts rather than a token cost.
 
-Draft work from the mission to have the composer propose tasks, prerequisites and a final integration check using its objective and criteria. Review drafts before dispatch. Each draft can link to the exact mission criteria it supports; the batch shows missing links, and the mission page shows coverage across saved tasks. Links describe planned work, not proof of completion or a dispatch gate. If criteria change, outdated links remain visible until repaired in the task editor. Moving a task to another mission clears its old links.
+On the goal page, review waiting decisions and open run evidence without losing the objective. Attempt links retain the exact run; closing the pane restores the goal view. **Outcome** shows verification status and links to the latest saved result. **Review and verify** contains the evidence inputs and combined-check action. **Details & limits** contains execution controls, criterion coverage and task attachment.
+
+Draft work from the goal to have the composer propose tasks, prerequisites and a final integration check using its objective and criteria. Review drafts before dispatch. Each draft can link to the exact mission criteria it supports; the batch shows missing links, and the mission page shows coverage across saved tasks. Links describe planned work, not proof of completion or a dispatch gate. If criteria change, outdated links remain visible until repaired in the task editor. Moving a task to another mission clears its old links.
 
 Task counts do not certify the objective. Acceptance requires:
 

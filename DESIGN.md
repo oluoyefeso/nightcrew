@@ -6,19 +6,16 @@ Railway already owns the violet night sky. NightCrew sits at dawn instead. Never
 
 The tokens live in `apps/web/src/styles.css`. This file explains how to use them.
 
-## Product direction: conducting toward a goal
+## Goals and evidence
 
-Design for people whose role is increasingly to set goals and conduct agents. The person supplies intent, defines success and makes consequential judgments. NightCrew should take on more of the planning, coordination, execution and verification as its capabilities improve. This is the intended direction; the current local edition still requires explicit task planning and human-attested mission acceptance.
+The local edition starts with an objective, explicit task planning and human-attested acceptance. The interface brings the goal, decisions and evidence together while keeping execution detail reachable.
 
-- **Make the goal the centre of the experience.** Progress, decisions and results should be understandable in the context of the goal. Agents, tasks, branches and worktrees are available for inspection without requiring the person to manage each one.
-- **Keep ordinary use simple.** Use sensible defaults and reveal detailed controls when needed. New execution capabilities should not automatically create new primary tabs or mandatory settings. The person should be able to understand the scope, resource limits and authority they have given the crew, and redirect or stop it.
-- **Make delegation inspectable.** Attach evidence to the work and decisions it supports. Start with the outcome and concise rationale; let the person open checks, previews, changes and execution details as needed. Distinguish verified results, unresolved assumptions and failed attempts.
-- **Use sources purposefully.** Link to an article or concept when it materially informed a decision and helps the person assess it. External references explain an approach; evidence from the actual work establishes whether it succeeded. Routine actions do not need an article attached.
-- **Let agent capacity grow without growing the user's workload.** More or cheaper agents should help achieve the goal through useful parallel work, verification and recovery. Agent count is an implementation detail by default. Evaluate the experience by accepted outcomes and the attention required from the person, rather than activity volume.
-- **Let people bring their models.** People should be able to make models available through local runtimes, direct provider credentials or gateways such as OpenRouter. NightCrew can select from that available pool within the person's preferences, resource limits and data boundaries; an explicit override remains available. Keep goal and evidence views independent of provider-specific concepts. Support is determined by tested model/runtime capabilities; an arbitrary endpoint does not imply every phase works. These connections and automatic selection are planned, not shipped.
-- **Build the website from concrete references.** [Linear](https://linear.app/) and its [agent experience](https://linear.app/ai) are the approved primary references for clean, crisp presentation. Follow concrete hierarchy, compact navigation, quiet dividers, restrained surfaces and product demonstrations; compare rendered desktop/mobile screens against references. Aster remains a secondary reference pending its exact URL. A vague stylistic resemblance is insufficient.
+- **Keep ordinary use simple.** Home and Goals are the primary destinations. Reveal naming, scheduling and resource controls when needed. Keep pause state and authority understandable.
+- **Make delegation inspectable.** Start with the outcome and concise rationale; let the person open checks, previews, changes and execution details. Distinguish verified results, unresolved assumptions and failed attempts.
+- **Use sources purposefully.** Link an article or concept when it materially supports a decision. Evidence from the actual work establishes whether it succeeded.
+- **Use concrete visual references.** [Linear](https://linear.app/) and its [agent presentation](https://linear.app/ai) inform the type hierarchy, compact navigation, quiet dividers, restrained surfaces and product demonstrations. Check both themes and mobile layouts.
 
-The delivery sequence is a simpler goal entry and navigation, a coherent goal workspace with decisions and evidence, then user-owned model connections and routing. Keep operational detail reachable. Existing mission records and URLs remain compatible as the interface adopts goal language. Track delivered slices separately from planned autonomy in [the roadmap](docs/roadmap.md). The open-source local edition remains the focus and Managed mode remains Coming soon.
+Existing mission records, URLs and API names remain compatible with goal language in the interface. The [product status](docs/roadmap.md) describes current capabilities and limits.
 
 ## Themes
 

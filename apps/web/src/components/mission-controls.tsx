@@ -36,30 +36,34 @@ export function missionControlPatch(values: MissionControlValues) {
 export function MissionControls({
   values,
   onChange,
+  includeCriteria = true,
 }: {
   values: MissionControlValues;
+  includeCriteria?: boolean;
   onChange: (values: MissionControlValues) => void;
 }) {
   return (
     <>
-      <Field
-        label="Mission acceptance criteria (one per line)"
-        htmlFor="mission-criteria"
-        hint="Checkable outcomes that define success for the whole mission."
-      >
-        <TextArea
-          id="mission-criteria"
-          rows={4}
-          value={values.criteria}
-          maxLength={30030}
-          onChange={(e) => onChange({ ...values, criteria: e.target.value })}
-        />
-      </Field>
+      {includeCriteria && (
+        <Field
+          label="Success criteria (one per line)"
+          htmlFor="mission-criteria"
+          hint="Checkable outcomes that define success for the whole goal."
+        >
+          <TextArea
+            id="mission-criteria"
+            rows={4}
+            value={values.criteria}
+            maxLength={30030}
+            onChange={(e) => onChange({ ...values, criteria: e.target.value })}
+          />
+        </Field>
+      )}
       <div className="grid gap-3 sm:grid-cols-2">
         <Field
-          label="Mission token limit"
+          label="Goal token limit"
           htmlFor="mission-budget"
-          hint="Blank means no separate limit. Includes all attempts charged to this mission."
+          hint="Blank means no separate limit. Includes all attempts charged to this goal."
         >
           <TextInput
             id="mission-budget"

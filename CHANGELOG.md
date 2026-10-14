@@ -2,6 +2,21 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.15] - 2026-10-14
+
+Start with a goal and keep everyday controls simple.
+
+### Changed
+- **Home and Goals.** Two primary navigation destinations replace the six-link header. More keeps Agents, Later, Operations, History, Sync and Theme available on desktop and phones. Search includes New goal and retains the old mission/station search terms.
+- **Outcome-first goal creation.** Describe the desired outcome and optionally add success criteria. A name is generated from the outcome unless supplied. Naming, resource limits, scheduling and the pause override live under Details & limits; new goals still start paused by default.
+- **Calmer presentation.** Neutral light/dark surfaces, compact goal rows, quieter Home metrics and expandable active-agent detail. The landing page leads with a goal walkthrough and a focused, reference-based layout.
+- **Revised roadmap.** Goal workspaces and evidence lead the next product work. User-provided local models, direct providers and gateways such as OpenRouter are planned first-class model connections.
+
+### Compatibility and limits
+- Existing mission records, URLs, API contracts, authority and dispatch behaviour are preserved. No database migration is required.
+- Creating a goal saves it; drafting work and starting execution remain separate steps. Task completion does not establish objective acceptance.
+- Additional model connections and automatic model selection are roadmap items, not part of this release. The current local runner uses Claude Code. Managed remains **Coming soon**.
+
 ## [1.0.0-alpha.14] - 2026-10-13
 
 Keep observed token usage when an agent process is interrupted mid-phase.

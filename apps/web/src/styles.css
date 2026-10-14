@@ -6,15 +6,15 @@
  * applies when the system prefers light or the user picks it.
  */
 :root {
-  --bg: #0a0e16;
-  --surface: #111723;
-  --raised: #18202f;
-  --sunken: #070a10;
-  --line: rgb(236 232 225 / 0.09);
-  --line-strong: rgb(236 232 225 / 0.16);
-  --fg: #ece8e1;
-  --muted: #8b92a3;
-  --faint: #6b7386;
+  --bg: #101012;
+  --surface: #171719;
+  --raised: #232326;
+  --sunken: #0b0b0d;
+  --line: rgb(240 240 242 / 0.09);
+  --line-strong: rgb(240 240 242 / 0.16);
+  --fg: #f0f0f2;
+  --muted: #a0a0a8;
+  --faint: #81818b;
   --dawn: #f2a65a;
   --dawn-soft: #f7c995;
   --on-dawn: #1b1206;
@@ -28,15 +28,15 @@
 
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
-    --bg: #f3f5f8;
+    --bg: #fafafa;
     --surface: #ffffff;
-    --raised: #eaeef3;
-    --sunken: #e6eaf0;
-    --line: rgb(20 26 38 / 0.1);
-    --line-strong: rgb(20 26 38 / 0.18);
-    --fg: #141a26;
-    --muted: #5e6676;
-    --faint: #7d8494;
+    --raised: #ededf0;
+    --sunken: #e7e7eb;
+    --line: rgb(25 25 29 / 0.1);
+    --line-strong: rgb(25 25 29 / 0.18);
+    --fg: #19191d;
+    --muted: #64646f;
+    --faint: #767681;
     --dawn: #b65a12;
     --dawn-soft: #d9873f;
     --on-dawn: #fff8f0;
@@ -44,21 +44,21 @@
     --bad: #b93a30;
     --sky: #2d6ba8;
     --horizon-from: #c9d3e2;
-    --shadow: 0 1px 2px rgb(20 26 38 / 0.06), 0 24px 64px rgb(20 26 38 / 0.12);
+    --shadow: 0 1px 2px rgb(25 25 29 / 0.06), 0 24px 64px rgb(25 25 29 / 0.12);
     color-scheme: light;
   }
 }
 
 :root[data-theme="light"] {
-  --bg: #f3f5f8;
+  --bg: #fafafa;
   --surface: #ffffff;
-  --raised: #eaeef3;
-  --sunken: #e6eaf0;
-  --line: rgb(20 26 38 / 0.1);
-  --line-strong: rgb(20 26 38 / 0.18);
-  --fg: #141a26;
-  --muted: #5e6676;
-  --faint: #7d8494;
+  --raised: #ededf0;
+  --sunken: #e7e7eb;
+  --line: rgb(25 25 29 / 0.1);
+  --line-strong: rgb(25 25 29 / 0.18);
+  --fg: #19191d;
+  --muted: #64646f;
+  --faint: #767681;
   --dawn: #b65a12;
   --dawn-soft: #d9873f;
   --on-dawn: #fff8f0;
@@ -66,7 +66,7 @@
   --bad: #b93a30;
   --sky: #2d6ba8;
   --horizon-from: #c9d3e2;
-  --shadow: 0 1px 2px rgb(20 26 38 / 0.06), 0 24px 64px rgb(20 26 38 / 0.12);
+  --shadow: 0 1px 2px rgb(25 25 29 / 0.06), 0 24px 64px rgb(25 25 29 / 0.12);
   color-scheme: light;
 }
 

@@ -2,10 +2,10 @@ import { AUTONOMY_LABEL, decisionFor, type Run } from "@nightcrew/core";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { clsx } from "clsx";
-import { ArrowRight, CheckCheck, CircleHelp, History, Plus, Route, Signal, TrainFront } from "lucide-react";
+import { ArrowRight, CheckCheck, CircleHelp, History, Plus, Route, TrainFront } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { crewQuery, missionsQuery, reposQuery, stationQuery, tasksQuery, toast } from "../api";
-import { AgentBoard, CrewSummary } from "../components/agent-board";
+import { AgentBoard } from "../components/agent-board";
 import { Select } from "../components/form";
 import { AttentionCard, operationAttentionQuery } from "../components/operation-attention";
 import { RunPane } from "../components/run-pane";
@@ -67,21 +67,20 @@ export function StationPage({ runId }: { runId?: string }) {
     <div className={clsx("mx-auto grid max-w-[1440px]", runId && "lg:grid-cols-[minmax(0,1fr)_minmax(420px,560px)]")}>
       <section className={clsx("min-w-0 px-4 pt-8 pb-24 sm:px-8 lg:pt-12", runId && "hidden lg:block")}>
         <div className="mx-auto grid max-w-[980px] gap-8">
-          <header className="grid gap-5">
+          <header className="grid gap-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <span className="t-eyebrow inline-flex items-center gap-2">
-                <Signal className="size-3.5" /> Your station
-              </span>
+              <span className="text-[13px] font-medium text-muted">Home</span>
               <Link
-                to="/agents"
-                className="inline-flex items-center gap-2 rounded-full bg-dawn px-4 py-2 font-medium text-[13px] text-on-dawn"
+                to="/missions"
+                hash="new-goal"
+                className="inline-flex items-center gap-2 rounded-lg bg-fg px-3 py-2 font-medium text-[12px] text-bg"
               >
-                <Plus className="size-3.5" /> Dispatch work
+                <Plus className="size-3.5" /> New goal
               </Link>
             </div>
-            <h1 className="t-h1">
+            <h1 className="text-[30px] font-medium tracking-[-0.03em] leading-tight">
               {!station.data || !drafts.data || !attention.data || station.error || drafts.error || attention.error
-                ? "Your station."
+                ? "Your work, in view."
                 : needsYou
                   ? `${needsYou} ${needsYou === 1 ? "decision needs" : "decisions need"} you.`
                   : active
@@ -89,12 +88,8 @@ export function StationPage({ runId }: { runId?: string }) {
                     : "Ready when you are."}
             </h1>
             <p className="max-w-[620px] text-[14px] text-muted leading-relaxed">
-              Set the direction, inspect the evidence, and decide how far your crew can go.
+              Follow your goals. Resolve what needs you. Inspect the evidence when you need it.
             </p>
-            <CrewSummary />
-            <Link to="/operations" className="text-[13px] text-dawn">
-              Delivery, setup & activity →
-            </Link>
           </header>
 
           {station.error && (
@@ -105,7 +100,7 @@ export function StationPage({ runId }: { runId?: string }) {
               </button>
             </p>
           )}
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-3 divide-x divide-line border-y border-line py-4">
             <Metric
               label="Need you"
               value={
@@ -136,24 +131,29 @@ export function StationPage({ runId }: { runId?: string }) {
             </div>
           )}
 
-          <section className="grid gap-3" aria-label="Missions">
+          <section className="grid gap-3" aria-label="Goals">
             <div className="flex items-baseline justify-between gap-3">
-              <h2 className="t-h3">Missions</h2>
+              <h2 className="text-[14px] font-medium">Goals</h2>
               <Link to="/missions" className="text-[13px] text-dawn">
-                {missions.data?.length ? "All missions" : "Create a mission"} →
+                {missions.data?.length ? "All goals" : "Create a goal"} →
               </Link>
             </div>
             {missions.error && (
               <p role="alert" className="text-[13px] text-bad">
-                Couldn't load missions. {missions.error.message}
+                Couldn't load goals. {missions.error.message}
               </p>
             )}
             {missions.data?.length === 0 && (
               <p className="text-[13px] text-muted">
-                Group related tasks around an objective and control their departures together.
+                Describe an outcome to create your first goal, then draft the work to get there.
               </p>
             )}
-            <div className="grid gap-3 xl:grid-cols-2">
+            <div
+              className={clsx(
+                "divide-y divide-line",
+                Boolean(missions.data?.length) && "overflow-hidden rounded-xl border border-line",
+              )}
+            >
               {missions.data?.slice(0, 4).map((mission) => (
                 <MissionCard key={mission.id} mission={mission} />
               ))}
@@ -248,10 +248,12 @@ export function StationPage({ runId }: { runId?: string }) {
           </section>
 
           {active > 0 && (
-            <section className="grid gap-3">
-              <h2 className="t-h3">Crew at work</h2>
-              <AgentBoard compact={Boolean(runId)} />
-            </section>
+            <details className="border-y border-line py-4">
+              <summary className="cursor-pointer text-[13px] text-muted">Crew at work · {active} active</summary>
+              <div className="mt-4">
+                <AgentBoard compact={Boolean(runId)} />
+              </div>
+            </details>
           )}
 
           <TrainCards onOpen={select} />
@@ -427,8 +429,8 @@ export function StationPage({ runId }: { runId?: string }) {
 
 function Metric({ label, value, tone = "text-fg" }: { label: string; value: number | string; tone?: string }) {
   return (
-    <div className="grid gap-2 rounded-2xl bg-surface p-4 ring-1 ring-line sm:p-5">
-      <span className={clsx("font-mono text-[28px] tabular", tone)}>{value}</span>
+    <div className="grid gap-1 px-4 first:pl-0 sm:px-5">
+      <span className={clsx("font-mono text-[20px] tabular", tone)}>{value}</span>
       <span className="text-[12px] text-muted">{label}</span>
     </div>
   );

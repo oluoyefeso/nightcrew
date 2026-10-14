@@ -11,6 +11,7 @@ interface Command {
   label: string;
   hint?: string;
   group: string;
+  keywords?: string;
   run: () => void;
 }
 
@@ -50,6 +51,13 @@ export function CommandBar() {
     const go = (to: string) => () => navigate({ to });
     const base: Command[] = [
       {
+        id: "new-goal",
+        label: "New goal",
+        group: "Actions",
+        keywords: "mission objective",
+        run: () => navigate({ to: "/missions", hash: "new-goal" }),
+      },
+      {
         id: "new",
         label: "New task",
         hint: "N",
@@ -72,10 +80,10 @@ export function CommandBar() {
             },
           ]
         : []),
-      { id: "station", label: "Station and decisions", group: "Go to", run: go("/") },
+      { id: "station", label: "Home", group: "Go to", keywords: "station decisions", run: go("/") },
       { id: "report", label: "Daily reports", group: "Go to", run: go("/history") },
       { id: "agents", label: "Agents", group: "Go to", run: go("/agents") },
-      { id: "missions", label: "Missions and objectives", group: "Go to", run: go("/missions") },
+      { id: "missions", label: "Goals", group: "Go to", keywords: "missions objectives", run: go("/missions") },
       { id: "later", label: "Later", group: "Go to", run: go("/later") },
       { id: "operations", label: "Delivery, reliability and activity", group: "Go to", run: go("/operations") },
       { id: "settings", label: "Settings and repos", group: "Go to", run: go("/settings") },
@@ -104,7 +112,9 @@ export function CommandBar() {
     }));
     const all = [...base, ...taskCmds];
     const needle = q.trim().toLowerCase();
-    return needle ? all.filter((c) => `${c.label} ${c.hint ?? ""}`.toLowerCase().includes(needle)) : all.slice(0, 14);
+    return needle
+      ? all.filter((c) => `${c.label} ${c.hint ?? ""} ${c.keywords ?? ""}`.toLowerCase().includes(needle))
+      : all.slice(0, 14);
   }, [q, tasks.data, crew.data?.state, crew.data?.active.length, navigate, resume, pause, stopAll]);
 
   if (!open) return null;

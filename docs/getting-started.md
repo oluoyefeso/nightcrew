@@ -37,7 +37,7 @@ While it runs, agents pick up work as soon as it's queued. Your data lives in `~
 
 ## 4. Give the agents work
 
-On **Agents**, describe the work like you'd brief a contractor. Several things at once is fine:
+Open **More → Agents** to describe individual tasks, or start in **Goals** to keep related work together. Describe the work like you'd brief a contractor. Several things at once is fine:
 
 > Dark mode that follows the system. Also the crash when a widget has no title. Don't touch billing.
 
@@ -51,15 +51,15 @@ From a terminal: `nightcrew add "…"` (add `--schedule` or `--later`).
 
 ## 5. Watch, or don't
 
-**Agents** shows every agent working: phase, last step, elapsed time, and a Stop button. Stop one and its work so far stays on its branch. **Pause dispatch** lets running agents finish but starts nothing new. Turn on desktop or Slack notifications in Settings to hear when an agent finishes or needs you.
+**More → Agents** shows every agent working: phase, last step, elapsed time, and a Stop button. Stop one and its work so far stays on its branch. **Pause dispatch** lets running agents finish but starts nothing new. Turn on desktop or Slack notifications in Settings to hear when an agent finishes or needs you.
 
-## 6. Direct work from the Station
+## 6. Follow goals and decisions from Home
 
-The **Station** is your home screen. Decisions stay visible across days until you resolve them. Open a decision to inspect evidence, merge, send instructions, retry, or dismiss. Briefs awaiting an answer appear here too.
+**Home** shows your goals and decisions. **New goal** opens a short outcome form; naming and execution limits are optional details. Decisions stay visible across days until you resolve them. Open a decision to inspect evidence, merge, send instructions, retry, or dismiss. Briefs awaiting an answer appear here too.
 
-**Crew at work** shows active agents. **Next departures** explains what queued tasks are waiting for: dependencies, capacity, budget, a schedule, or paused dispatch. **Routes & authority** shows each repo's current autonomy level and links to its settings. Filter Next departures by repository or reason, then open a task to resolve its hold. Station also surfaces failed and interrupted operations; inspect their exact saved outcomes and mark them reviewed in Operations.
+Expand **Crew at work** to inspect active agents. **Next departures** explains what queued tasks are waiting for: dependencies, capacity, budget, a schedule, or paused dispatch. **Routes & authority** shows each repo's current autonomy level and links to its settings. Filter Next departures by repository or reason, then open a task to resolve its hold. Home also surfaces failed and interrupted operations; inspect their exact saved outcomes and mark them reviewed in Operations.
 
-Resolved work appears in **Recent outcomes**. **History** keeps the daily reports and their Horizon timeline.
+Resolved work appears in **Recent outcomes**. **More → History** keeps the daily reports and their Horizon timeline.
 
 | Key | Does |
 |---|---|
@@ -81,8 +81,8 @@ The demo crew narrates believable steps and writes a small file inside each task
 
 ## Conducting an objective
 
-Create a Mission with acceptance criteria, limits, priority and an optional start deadline in your local timezone. Leave “Start paused while I plan” checked while drafting work. Review which criteria each task supports and fill gaps before resuming the mission. Inspect departure checks and approve the proposed task breakdown. If a run fails, its task's Recovery panel offers Resume, Verify saved build, and Rebuild. After tasks succeed, record criterion evidence and verify the combined result in Mission acceptance.
+Open **Goals** and describe the outcome. Optionally add checkable success criteria. **Details & limits** contains a custom name, token limit, priority, start deadline and stop time. Leaving the name blank uses the first line of the outcome. New goals are saved paused by default; creating one does not start agents. The existing mission records, URLs and API remain compatible. Review which criteria each task supports and fill gaps before resuming the mission. Inspect departure checks and approve the proposed task breakdown. If a run fails, its task's Recovery panel offers Resume, Verify saved build, and Rebuild. After tasks succeed, record criterion evidence and verify the combined result in Mission acceptance.
 
-Open **Operations** from the navigation or command bar for delivery, repository setup, reliability and activity. Configure delivery commands in repository settings before using them. See [Conductor operations](operations.md) for the complete workflow and limits.
+Open **More → Operations** or use the command bar for delivery, repository setup, reliability and activity. Configure delivery commands in repository settings before using them. See [Conductor operations](operations.md) for the complete workflow and limits.
 
 Before your first agent run, use **Verify repository setup** in Settings to rehearse installation and tests against the local default branch without spending agent tokens. Save verification routes as named templates, or import a template to preview its rules before applying them. The [conductor roadmap](roadmap.md) tracks the next product batches.

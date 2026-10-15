@@ -33,6 +33,7 @@ import {
   backstopUsd,
   checkGuard,
   describeTool,
+  ENGINE_PHASES,
   type EngineEvent,
   type PhaseRequest,
   type PhaseResult,
@@ -101,6 +102,7 @@ type PhaseKind = "write" | "read-only" | "no-tools";
 
 export class ManagedEngine implements AgentEngine {
   readonly name = "managed";
+  readonly capabilities = { phases: ENGINE_PHASES, structuredOutput: true, sessionContinuation: false };
   private readonly client: ManagedAgentsClient;
   private environment: Promise<string> | null = null;
   private readonly agents = new Map<string, Promise<string>>();

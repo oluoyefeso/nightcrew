@@ -2,6 +2,7 @@
 // happens through the local Agent SDK, Claude Managed Agents (M4) or a script
 // in tests.
 
+import type { AutonomyLevel, Task } from "@nightcrew/core";
 import { type GuardContext, guardToolCall } from "@nightcrew/core/guard";
 
 export interface PhaseRequest {
@@ -60,7 +61,77 @@ export type EngineEvent =
 
 export interface AgentEngine {
   readonly name: string;
+  readonly capabilities: EngineCapabilities;
   runPhase(req: PhaseRequest, onEvent: (e: EngineEvent) => void): Promise<PhaseResult>;
+}
+
+/** Adapter behavior, not a model competence score or a grant of repository authority. */
+export interface EngineCapabilities {
+  readonly phases: readonly PhaseRequest["phase"][];
+  readonly structuredOutput: boolean;
+  readonly sessionContinuation: boolean;
+}
+export const ENGINE_PHASES = ["plan", "implement", "repair", "review", "compose", "research"] as const;
+
+/** A missing declaration fails closed, including adapters loaded from older integrations. */
+function capabilityError(
+  engine: AgentEngine,
+  phases: readonly PhaseRequest["phase"][],
+  structured: boolean,
+): string | null {
+  const capabilities = engine.capabilities;
+  if (!capabilities || !Array.isArray(capabilities.phases)) return "The engine has not declared its supported phases.";
+  if (phases.some((phase) => !capabilities.phases.includes(phase)))
+    return "The engine does not support every phase required for this work.";
+  if (structured && capabilities.structuredOutput !== true)
+    return "The engine does not support the structured result required for this work.";
+  return null;
+}
+
+/** Hold the entire possible route before setup, rather than discovering a missing reviewer after building. */
+export function taskEngineError(
+  engine: AgentEngine,
+  task: Pick<Task, "type"> & Partial<Pick<Task, "workflow">>,
+  authority: AutonomyLevel,
+): string | null {
+  const phases: PhaseRequest["phase"][] =
+    task.type === "research"
+      ? ["research"]
+      : authority === "propose"
+        ? ["plan"]
+        : task.workflow === "quick"
+          ? ["implement", "repair", "review"]
+          : ["plan", "implement", "repair", "review"];
+  return capabilityError(engine, phases, phases.includes("review"));
+}
+
+export function phaseAdmissionError(engine: AgentEngine, req: PhaseRequest): string | null {
+  if (!ENGINE_PHASES.includes(req.phase)) return "The requested agent phase is unsupported.";
+  const error = capabilityError(engine, [req.phase], Boolean(req.outputSchema));
+  if (error) return error;
+  if (req.resumeSession && engine.capabilities.sessionContinuation !== true)
+    return "The engine cannot continue the requested session.";
+  if (["plan", "research", "compose"].includes(req.phase) && req.guard.readOnly !== true)
+    return "Planning, research and task drafting require a read-only guard.";
+  if (["review", "compose"].includes(req.phase) && !req.outputSchema)
+    return "Review and task drafting require a structured result schema.";
+  if (!Number.isFinite(req.maxTokens) || req.maxTokens <= 0 || !Number.isSafeInteger(req.maxTurns) || req.maxTurns <= 0)
+    return "An agent phase requires positive token and turn limits.";
+  return null;
+}
+
+/** Zero usage here is known: admission happens before any provider call. */
+export function admissionResult(error: string): PhaseResult {
+  return { ...stoppedResult(), error, usageStatus: "reported" };
+}
+export async function runEnginePhase(
+  engine: AgentEngine,
+  req: PhaseRequest,
+  onEvent: (e: EngineEvent) => void,
+): Promise<PhaseResult> {
+  if (req.signal.aborted) return stoppedResult();
+  const error = phaseAdmissionError(engine, req);
+  return error ? admissionResult(error) : engine.runPhase(req, onEvent);
 }
 
 /** Short human description of a tool call for the live run view. */
@@ -127,6 +198,11 @@ export type Script = (
 
 export class ScriptedEngine implements AgentEngine {
   readonly name = "scripted";
+  readonly capabilities: EngineCapabilities = {
+    phases: ENGINE_PHASES,
+    structuredOutput: true,
+    sessionContinuation: true,
+  };
   readonly calls: PhaseRequest[] = [];
   constructor(private readonly scripts: Partial<Record<PhaseRequest["phase"], Script>>) {}
 

@@ -1,5 +1,13 @@
 import type { PhaseMeasurement } from "@nightcrew/core";
-import type { AgentEngine, EngineEvent, PhaseRequest, PhaseResult } from "./engine";
+import {
+  type AgentEngine,
+  admissionResult,
+  type EngineEvent,
+  type PhaseRequest,
+  type PhaseResult,
+  phaseAdmissionError,
+  runEnginePhase,
+} from "./engine";
 
 /** Record before execution so a process crash leaves an explicit unfinished attempt. */
 export async function measuredPhase(
@@ -28,6 +36,22 @@ export async function measuredPhase(
     usageStatus: "unknown",
     tokenOvershoot: null,
   };
+  const denied = phaseAdmissionError(engine, request);
+  if (denied) {
+    record({
+      ...start,
+      status: "failed",
+      endedAt: start.startedAt,
+      elapsedMs: 0,
+      tokensIn: 0,
+      tokensOut: 0,
+      turns: 0,
+      costUsd: 0,
+      usageStatus: "reported",
+      tokenOvershoot: 0,
+    });
+    return admissionResult(denied);
+  }
   record(start);
   let liveIn = 0;
   let liveOut = 0;
@@ -62,7 +86,7 @@ export async function measuredPhase(
     request.signal.reason?.name === "TimeoutError" ? ("timed_out" as const) : ("cancelled" as const);
   let result: PhaseResult;
   try {
-    result = await engine.runPhase(request, onEngine);
+    result = await runEnginePhase(engine, request, onEngine);
   } catch (error) {
     record({
       ...start,

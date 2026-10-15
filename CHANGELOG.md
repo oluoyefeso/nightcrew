@@ -2,6 +2,19 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.18] - 2026-10-15
+
+Check engine support before dispatching work.
+
+### Fixed
+- The queue and departure preview hold tasks when an engine does not declare every phase their route may need, including repair and structured review. Supported research can proceed independently.
+- Phase calls reject unsupported structured results, session continuation, writable planning/research requests, and invalid limits before contacting the engine. Denied phases record known zero usage without an agent-start event.
+- Engines without session continuation receive the written plan in the implementation request without an opaque session handle. Task drafting retains its local fallback when the engine cannot supply structured results.
+
+### Compatibility and limits
+- No database migration is needed. The shipped local and demo engines retain their existing task routes.
+- Engine declarations describe adapter behavior; they do not establish model competence or grant repository authority. Saved connection checks remain diagnostics. Coding still uses Claude Code and managed mode remains **Coming soon**.
+
 ## [1.0.0-alpha.17] - 2026-10-15
 
 Inspect compatible model connections from one optional section in Settings.

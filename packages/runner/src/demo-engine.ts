@@ -3,7 +3,14 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { type AgentEngine, type EngineEvent, type PhaseRequest, type PhaseResult, stoppedResult } from "./engine";
+import {
+  type AgentEngine,
+  ENGINE_PHASES,
+  type EngineEvent,
+  type PhaseRequest,
+  type PhaseResult,
+  stoppedResult,
+} from "./engine";
 
 const wait = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve) => {
@@ -20,6 +27,7 @@ const wait = (ms: number, signal: AbortSignal) =>
 
 export class DemoEngine implements AgentEngine {
   readonly name = "demo";
+  readonly capabilities = { phases: ENGINE_PHASES, structuredOutput: true, sessionContinuation: false };
   constructor(private readonly stepMs = 900) {}
 
   async runPhase(req: PhaseRequest, onEvent: (e: EngineEvent) => void): Promise<PhaseResult> {

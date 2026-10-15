@@ -12,7 +12,7 @@
     },
     "apps/cli": {
       "name": "@nightcrew/cli",
-      "version": "1.0.0-alpha.17",
+      "version": "1.0.0-alpha.18",
       "bin": {
         "nightcrew": "./src/main.ts",
       },
@@ -27,7 +27,7 @@
     },
     "apps/site": {
       "name": "@nightcrew/site",
-      "version": "1.0.0-alpha.17",
+      "version": "1.0.0-alpha.18",
       "dependencies": {
         "@fontsource-variable/inter": "5.3.0",
         "@nightcrew/core": "workspace:*",
@@ -47,7 +47,7 @@
     },
     "apps/web": {
       "name": "@nightcrew/web",
-      "version": "1.0.0-alpha.17",
+      "version": "1.0.0-alpha.18",
       "dependencies": {
         "@fontsource-variable/inter": "5.3.0",
         "@nightcrew/core": "workspace:*",
@@ -71,11 +71,11 @@
     },
     "packages/core": {
       "name": "@nightcrew/core",
-      "version": "1.0.0-alpha.17",
+      "version": "1.0.0-alpha.18",
     },
     "packages/db": {
       "name": "@nightcrew/db",
-      "version": "1.0.0-alpha.17",
+      "version": "1.0.0-alpha.18",
       "dependencies": {
         "@nightcrew/core": "workspace:*",
         "drizzle-orm": "0.45.4",
@@ -86,7 +86,7 @@
     },
     "packages/runner": {
       "name": "@nightcrew/runner",
-      "version": "1.0.0-alpha.17",
+      "version": "1.0.0-alpha.18",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.296",
         "@anthropic-ai/sdk": "0.133.0",

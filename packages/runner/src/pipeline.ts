@@ -552,7 +552,12 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
       if (stop.aborted) return await halt("while planning");
       // Build in the planner's session so what it already read stays in context.
       // Only when planner and builder are the same model; otherwise start fresh.
-      session = plan.sessionId && deps.models.plan === (task.model ?? deps.models.build) ? plan.sessionId : undefined;
+      session =
+        deps.engine.capabilities?.sessionContinuation &&
+        plan.sessionId &&
+        deps.models.plan === (task.model ?? deps.models.build)
+          ? plan.sessionId
+          : undefined;
       if (plan.text.trim()) {
         ctx.plan = plan.text;
         artifact("plan", "PLAN.md", plan.text);
@@ -602,7 +607,7 @@ export async function runTask(deps: PipelineDeps, taskId: string, signal: AbortS
         onEngine,
       );
 
-      session = impl.sessionId ?? session;
+      session = deps.engine.capabilities?.sessionContinuation ? (impl.sessionId ?? session) : undefined;
       if (stop.aborted) return await halt("while building");
       if (!impl.ok) return await finish("failed", impl.error);
       state.summary = firstSentence(impl.text);

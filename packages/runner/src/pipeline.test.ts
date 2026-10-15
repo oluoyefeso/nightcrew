@@ -83,6 +83,24 @@ function setupTask(over: Parameters<typeof createTask>[1] extends infer T ? Part
 }
 
 describe("runTask", () => {
+  test("engines without continuation receive the written plan without an opaque session handle", async () => {
+    const task = setupTask();
+    const engine = new ScriptedEngine({
+      plan: () => ({ text: "Use a small feature module.", sessionId: "synthetic-session" }),
+      implement: (req) => {
+        expect(req.resumeSession).toBeUndefined();
+        expect(req.prompt).toContain("Use a small feature module.");
+        writeFileSync(join(req.cwd, "src", "feature.ts"), "export const feature = true;\n");
+        return { text: "Built the feature.", sessionId: "another-session" };
+      },
+      review: () => ({ structured: READY }),
+    });
+    Object.defineProperty(engine, "capabilities", { value: { ...engine.capabilities, sessionContinuation: false } });
+    const options = deps(engine);
+    options.models.plan = options.models.build;
+    expect((await runTask(options, task.id, new AbortController().signal)).status).toBe("complete");
+    expect(engine.calls.map((call) => call.phase)).toEqual(["plan", "implement", "review"]);
+  });
   test("an expired mission stops direct execution before creating a workspace or spending tokens", async () => {
     const mission = createMission(db, {
       title: "Bounded",

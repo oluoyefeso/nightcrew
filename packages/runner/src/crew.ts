@@ -26,6 +26,7 @@ import {
   nightIdFor,
   planQueue,
   type QueueEntry,
+  type Repo,
   scopesMayOverlap,
   type Task,
 } from "@nightcrew/core";
@@ -52,7 +53,7 @@ import {
   updateTask,
   updateTrain,
 } from "@nightcrew/db";
-import type { AgentEngine } from "./engine";
+import { type AgentEngine, taskEngineError } from "./engine";
 import { publishTrain } from "./landing";
 import { waitForOperations } from "./operation-progress";
 import { automaticDelivery, stopOperations } from "./operations";
@@ -201,7 +202,7 @@ export class Crew {
       .filter((t) => t.status === "queued")
       .map((task): QueueEntry => {
         const entry = { taskId: task.id, title: task.title, repoName: task.repoName, runAt: task.runAt };
-        const holds = departureChecks(task, getRepo(db, task.repoId)).signals.filter((s) => s.kind === "hold");
+        const holds = this.departure(task, getRepo(db, task.repoId)).signals.filter((s) => s.kind === "hold");
         if (holds.length) return { ...entry, kind: "setup", reason: holds.map((s) => s.message).join(" ") };
         const mission = task.missionId ? getMission(db, task.missionId) : null;
         if (mission?.paused)
@@ -274,7 +275,7 @@ export class Crew {
         requested: candidates.reduce((sum, t) => sum + t.tokenBudget, 0),
       },
       tasks: candidates.map((task) => {
-        const check = departureChecks(task, repos.get(task.repoId) ?? null);
+        const check = this.departure(task, repos.get(task.repoId) ?? null);
         const mission = task.missionId ? getMission(db, task.missionId) : null;
         if (task.missionId && !mission)
           check.signals.push({
@@ -465,7 +466,7 @@ export class Crew {
       if (!t || this.running.has(id) || skip.has(id)) continue;
       if (t.missionId && getMission(db, t.missionId)?.paused) continue;
       if (this.missionHold(t)) continue;
-      if (departureChecks(t, getRepo(db, t.repoId)).signals.some((s) => s.kind === "hold")) continue;
+      if (this.departure(t, getRepo(db, t.repoId)).signals.some((s) => s.kind === "hold")) continue;
       if (t.runAt && new Date(t.runAt).getTime() > now) continue;
       // Dependencies must have finished and succeeded, not just started or stopped.
       if (t.dependsOn.some((d) => byId.has(d) && !this.satisfied(byId.get(d) as Task))) continue;
@@ -473,6 +474,13 @@ export class Crew {
       return t;
     }
     return null;
+  }
+
+  private departure(task: DepartureTask, repo: Repo | null) {
+    const check = departureChecks(task, repo);
+    const error = check.route ? taskEngineError(this.deps.engine, task, check.route.authority) : null;
+    if (error) check.signals.push({ code: "engine-capability", kind: "hold", target: "settings", message: error });
+    return check;
   }
 
   /**

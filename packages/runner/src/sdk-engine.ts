@@ -17,6 +17,7 @@ import {
   backstopUsd,
   checkGuard,
   describeTool,
+  ENGINE_PHASES,
   type EngineEvent,
   type PhaseRequest,
   type PhaseResult,
@@ -29,6 +30,7 @@ const TOOLS = ["Read", "Write", "Edit", "MultiEdit", "Bash", "Glob", "Grep", "We
 
 export class SdkEngine implements AgentEngine {
   readonly name = "agent-sdk";
+  readonly capabilities = { phases: ENGINE_PHASES, structuredOutput: true, sessionContinuation: true };
   constructor(private readonly opts: { claudePath?: string } = {}) {}
 
   async runPhase(req: PhaseRequest, onEvent: (e: EngineEvent) => void): Promise<PhaseResult> {

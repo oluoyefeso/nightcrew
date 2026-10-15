@@ -173,6 +173,38 @@ describe("discoverModels", () => {
 });
 
 describe("checkConnection", () => {
+  test("HTTP failures give fixed actionable reasons without exposing provider details", async () => {
+    for (const [status, reason] of [
+      [401, "credential"],
+      [403, "permissions"],
+      [404, "API route or selected model"],
+      [429, "rate or quota limit"],
+    ] as const) {
+      const s = serve(() => json({ error: { message: `private provider details ${SECRET}` } }, { status }));
+      const check = await checkConnection({ baseUrl: s.url, model: "example" });
+      expect(check.status).toBe("failed");
+      expect(check.summary).toContain(reason);
+      expect(JSON.stringify(check)).not.toContain(SECRET);
+      expect(check.usage.status).toBe("unknown");
+    }
+  });
+
+  test("an unsupported-tool response reports the provider claim without its private text", async () => {
+    const s = serve(() =>
+      json({ error: { message: `${SECRET} example model does not support tools` } }, { status: 400 }),
+    );
+    const check = await checkConnection({ baseUrl: s.url, model: "example" });
+    expect(check.summary).toContain("endpoint reports that this model does not support tool calls");
+    expect(check.summary).not.toContain(SECRET);
+    expect(check.turns).toBe(0);
+    expect(s.count()).toBe(1);
+    const malformed = serve(() => new Response(`secret ${SECRET}`, { status: 400 }));
+    expect((await checkConnection({ baseUrl: malformed.url, model: "example" })).summary).toBe(
+      "The endpoint refused the request.",
+    );
+    const huge = serve(() => new Response("x".repeat(70 * 1024), { status: 400 }));
+    expect((await checkConnection({ baseUrl: huge.url, model: "example" })).summary).toContain("too large");
+  });
   test("passes a full round trip with exactly two requests and reports usage", async () => {
     const seen: Record<string, unknown>[] = [];
     let auth = "";

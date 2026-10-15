@@ -2,6 +2,19 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.19] - 2026-10-15
+
+Make connection failures actionable without exposing provider responses.
+
+### Fixed
+- Model discovery and tool checks distinguish refused credentials, rate or quota limits, and missing API routes or models with fixed messages.
+- A bounded, recognized unsupported-tool response explains that the endpoint reports no tool support and suggests choosing another model. Unrecognized responses keep a generic refusal; provider text and credentials are never returned or saved as evidence.
+- Failure-response reads retain the same time and size limits, cancellation, and no-retry behavior.
+
+### Compatibility and limits
+- No database migration is needed. Connection checks remain diagnostics and do not enable task execution. Missing usage remains unknown, including refusals before a model response.
+- Coding still uses Claude Code; managed remains **Coming soon**.
+
 ## [1.0.0-alpha.18] - 2026-10-15
 
 Check engine support before dispatching work.

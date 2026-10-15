@@ -26,6 +26,10 @@ type Failure =
   | "timeout"
   | "network"
   | "rejected"
+  | "credentials"
+  | "rate-limit"
+  | "not-found"
+  | "unsupported-tools"
   | "too-large"
   | "malformed"
   | "no-tool-call"
@@ -43,6 +47,11 @@ const MESSAGES: Record<Failure, string> = {
   timeout: "The endpoint did not answer in time.",
   network: "The endpoint could not be reached, or tried to redirect.",
   rejected: "The endpoint refused the request.",
+  credentials: "The endpoint refused access. Check the credential and its permissions.",
+  "rate-limit": "The endpoint reported a rate or quota limit. Check the provider limit before trying again.",
+  "not-found": "The endpoint could not find the API route or selected model. Check the base URL and model ID.",
+  "unsupported-tools":
+    "The endpoint reports that this model does not support tool calls. Choose a model with tool support.",
   "too-large": "The endpoint response was too large.",
   malformed: "The endpoint response was not in the expected format.",
   "no-tool-call": "The model answered without using the synthetic tool.",
@@ -200,8 +209,31 @@ async function exchange(
     throw scope.failure(err, "network");
   }
   if (!res.ok) {
+    if (res.status === 400 || res.status === 422) {
+      // Recognize one bounded provider claim, but never return its text, model name or details.
+      const body = await readLimited(res, Math.min(limit, CHECK_LIMIT_BYTES), scope);
+      let unsupported = false;
+      try {
+        const value: unknown = JSON.parse(body);
+        const detail = isRecord(value) && isRecord(value.error) ? value.error.message : null;
+        unsupported =
+          typeof detail === "string" &&
+          /\bdoes not support tools\b|\btool (?:use|calling|calls) (?:is|are) not supported\b/i.test(detail);
+      } catch {
+        /* Unrecognized provider responses keep the fixed generic refusal. */
+      }
+      throw new ConnectionError(unsupported ? "unsupported-tools" : "rejected");
+    }
     res.body?.cancel().catch(() => {});
-    throw new ConnectionError("rejected");
+    throw new ConnectionError(
+      res.status === 401 || res.status === 403
+        ? "credentials"
+        : res.status === 429
+          ? "rate-limit"
+          : res.status === 404
+            ? "not-found"
+            : "rejected",
+    );
   }
   const text = await readLimited(res, limit, scope);
   try {

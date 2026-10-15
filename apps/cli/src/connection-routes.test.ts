@@ -134,6 +134,27 @@ test("missing credentials, models, and stale revisions cannot contact an endpoin
   expect(calls).toBe(0);
 });
 
+test("discovery exposes only the fixed failure category, while tool refusals persist as evidence", async () => {
+  let checking = false;
+  const c = await create({
+    baseUrl: serve(() =>
+      Response.json(
+        { error: { message: checking ? `${credential} does not support tools` : credential } },
+        { status: checking ? 400 : 401 },
+      ),
+    ),
+  });
+  const discovery = await send("POST", `${path(c)}/models`, { revision: 1 });
+  expect(discovery.status).toBe(400);
+  expect(await discovery.json()).toEqual({
+    error: "The endpoint refused access. Check the credential and its permissions.",
+  });
+  checking = true;
+  expect((await send("POST", `${path(c)}/check`, { revision: 1 })).status).toBe(200);
+  expect(getConnection(db, c.id)?.lastCheck?.summary).toContain("does not support tool calls");
+  expect(JSON.stringify(getConnection(db, c.id))).not.toContain(credential);
+});
+
 test("stop settles a pending check and saves cancellation evidence", async () => {
   const started = Promise.withResolvers<void>();
   const c = await create({

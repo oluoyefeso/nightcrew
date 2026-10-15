@@ -2,6 +2,13 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.20] - 2026-10-15
+
+### Fixed
+
+- Connection checks mark observed token usage as partial when a later request fails or is cancelled before its usage arrives. Earlier observations stay visible.
+- Provider usage is retained when a response contains a malformed assistant message.
+
 ## [1.0.0-alpha.19] - 2026-10-15
 
 Make connection failures actionable without exposing provider responses.

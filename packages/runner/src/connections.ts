@@ -290,14 +290,17 @@ interface Turn {
 }
 
 class Counters {
-  private responses = 0;
+  private requests = 0;
   private withInput = 0;
   private withOutput = 0;
   private input = 0;
   private output = 0;
 
+  beginRequest() {
+    this.requests++;
+  }
+
   record(usage: unknown) {
-    this.responses++;
     if (!isRecord(usage)) return;
     const { prompt_tokens: p, completion_tokens: c } = usage;
     if (typeof p === "number" && Number.isSafeInteger(p) && p >= 0) {
@@ -313,7 +316,7 @@ class Counters {
   snapshot(): ConnectionUsage {
     const seen = this.withInput + this.withOutput;
     if (seen === 0) return { status: "unknown", inputObserved: null, outputObserved: null };
-    const full = this.withInput === this.responses && this.withOutput === this.responses;
+    const full = this.withInput === this.requests && this.withOutput === this.requests;
     return {
       status: full ? "reported" : "partial",
       inputObserved: this.withInput > 0 ? this.input : null,
@@ -323,11 +326,12 @@ class Counters {
 }
 
 function parseTurn(body: unknown, counters: Counters): Turn {
+  // Invalid assistant output can still carry real provider usage.
+  if (isRecord(body)) counters.record(body.usage);
   if (!isRecord(body) || !Array.isArray(body.choices) || body.choices.length === 0)
     throw new ConnectionError("malformed");
   const choice: unknown = body.choices[0];
   if (!isRecord(choice) || !isRecord(choice.message)) throw new ConnectionError("malformed");
-  counters.record(body.usage);
   return { message: choice.message };
 }
 
@@ -403,6 +407,7 @@ export async function checkConnection(
   const marker = `nc-${randomBytes(12).toString("hex")}`;
   const url = `${base}/chat/completions`;
   const send = async (messages: unknown[]): Promise<Turn> => {
+    if (scope.controller.signal.aborted) throw scope.failure(null, "cancelled");
     const payload = JSON.stringify({
       model,
       messages,
@@ -411,6 +416,9 @@ export async function checkConnection(
       stream: false,
       max_tokens: 256,
     });
+    // Count attempted requests, including those whose response never arrives.
+    // Otherwise a failed second request makes the first one's usage look complete.
+    counters.beginRequest();
     const body = await exchange(url, { method: "POST", body: payload }, key, CHECK_LIMIT_BYTES, scope);
     const turn = parseTurn(body, counters);
     turns++;

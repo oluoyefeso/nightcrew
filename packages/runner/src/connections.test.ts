@@ -335,7 +335,7 @@ describe("checkConnection", () => {
     expect(check.usage).toEqual({ status: "partial", inputObserved: 16, outputObserved: 2 });
   });
 
-  test("keeps earlier counters when a later request fails", async () => {
+  test("keeps earlier counters as partial when a later request fails", async () => {
     const s = serve((_req, n) =>
       n === 1
         ? reply(
@@ -347,7 +347,39 @@ describe("checkConnection", () => {
     const check = await checkConnection({ baseUrl: s.url, model: "m" });
     expect(check.status).toBe("failed");
     expect(check.turns).toBe(1);
+    expect(check.usage).toEqual({ status: "partial", inputObserved: 5, outputObserved: 1 });
+  });
+
+  test("keeps usage reported in an otherwise malformed assistant response", async () => {
+    const s = serve(() => json({ choices: [], usage: { prompt_tokens: 5, completion_tokens: 1 } }));
+    const check = await checkConnection({ baseUrl: s.url, model: "m" });
+    expect(check.status).toBe("failed");
+    expect(check.turns).toBe(0);
     expect(check.usage).toEqual({ status: "reported", inputObserved: 5, outputObserved: 1 });
+  });
+
+  test("marks usage partial when cancellation interrupts a later response body", async () => {
+    const ctrl = new AbortController();
+    const s = serve((_req, n) => {
+      if (n === 1) {
+        return reply(
+          { content: null, tool_calls: [toolCall({ file_path: "probe.txt" })] },
+          { prompt_tokens: 5, completion_tokens: 1 },
+        );
+      }
+      setTimeout(() => ctrl.abort(), 20);
+      return new Response(
+        new ReadableStream({
+          start(c) {
+            c.enqueue(new TextEncoder().encode('{"choices":['));
+          },
+        }),
+      );
+    });
+    const check = await checkConnection({ baseUrl: s.url, model: "m" }, { signal: ctrl.signal });
+    expect(check.status).toBe("cancelled");
+    expect(s.count()).toBe(2);
+    expect(check.usage).toEqual({ status: "partial", inputObserved: 5, outputObserved: 1 });
   });
 
   test("bounds each response at 64KiB", async () => {

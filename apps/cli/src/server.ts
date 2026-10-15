@@ -232,7 +232,7 @@ function isLocalHost(host: string): boolean {
   return name !== undefined && LOCAL_HOSTS.has(name.toLowerCase());
 }
 
-export const VERSION = "1.0.0-alpha.19";
+export const VERSION = "1.0.0-alpha.20";
 
 // ── Static dashboard ────────────────────────────────────────────────────────
 // The compiled binary carries the built dashboard (see scripts/embed-web.ts).

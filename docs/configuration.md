@@ -10,6 +10,8 @@ In **Settings → Model connections**, save an API base URL and optionally a mod
 
 Checks may incur provider charges and are separate from task and mission budgets. Check evidence records the result, response count, elapsed time and observed token counters; missing usage stays unknown. **Stop check** cancels NightCrew's request but cannot guarantee the provider stops inference. Editing a connection clears its previous result and prevents an in-flight result from certifying the changed profile.
 
+Failures distinguish refused credentials, rate or quota limits, missing API routes or models, and recognized reports that a model does not support tools. These are fixed diagnostic messages; raw provider responses are not displayed or stored in check evidence.
+
 Saved connections are diagnostics only. Passing the synthetic exchange does not verify coding ability or enable task execution. The local coding runner still uses Claude Code; managed mode remains Coming soon.
 
 Before dispatch, NightCrew checks that its engine declares the phases the task route may need, including repair and structured review. Unsupported work stays held while supported tasks can proceed. These declarations describe the adapter's supported operations, not a model's competence; repository authority and tool guards still apply. Engines without session continuation receive the written plan instead of an opaque session handle.

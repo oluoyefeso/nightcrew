@@ -9,7 +9,7 @@ import {
   saveConnectionCheck,
   updateConnection,
 } from "@nightcrew/db";
-import { checkConnection, discoverModels, normalizeConnectionUrl } from "@nightcrew/runner";
+import { ConnectionError, checkConnection, discoverModels, normalizeConnectionUrl } from "@nightcrew/runner";
 import type { Hono } from "hono";
 
 const INVALIDATED = "The connection changed. Reload it before checking again.";
@@ -97,13 +97,16 @@ export function mountConnectionRoutes(app: Hono, { db }: { db: Db }) {
         const saved = saveConnectionCheck(db, current.id, revision, result);
         if (!saved) return c.json({ error: INVALIDATED }, 409);
         return c.json({ check: result });
-      } catch {
+      } catch (error) {
         // Transport errors are sanitized, but never propagate unexpected error text from a provider or credential.
         return c.json(
           {
-            error: signal.aborted
-              ? "Connection check stopped."
-              : "Could not complete the connection request. Check its endpoint and credential configuration.",
+            error:
+              error instanceof ConnectionError
+                ? error.message
+                : signal.aborted
+                  ? "Connection check stopped."
+                  : "Could not complete the connection request. Check its endpoint and credential configuration.",
           },
           400,
         );

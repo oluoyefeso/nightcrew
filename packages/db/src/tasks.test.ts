@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { Task } from "@nightcrew/core";
 import {
   addNote,
   addRepo,
@@ -40,6 +41,24 @@ describe("repos", () => {
 });
 
 describe("tasks", () => {
+  test("invalid routing fields are rejected before a create or update writes anything", () => {
+    const { db, repo } = setup();
+    try {
+      for (const invalid of [{ type: "feature" }, { workflow: "unbounded" }, { status: "unknown" }]) {
+        expect(() => createTask(db, { repoId: repo.id, title: "Invalid", ...(invalid as Partial<Task>) })).toThrow(
+          "Choose",
+        );
+      }
+      expect(listTasks(db)).toEqual([]);
+      const task = createTask(db, { repoId: repo.id, title: "Unchanged" });
+      expect(() => updateTask(db, task.id, { title: "Should not save", type: "feature" as Task["type"] })).toThrow(
+        "supported task type",
+      );
+      expect(listTasks(db)[0]).toMatchObject({ title: "Unchanged", type: "implementation" });
+    } finally {
+      db.$client.close();
+    }
+  });
   test("create, queue at the end of the list, reorder", () => {
     const { db, repo } = setup();
     const a = createTask(db, { repoId: repo.id, title: "Add pagination", status: "queued" });

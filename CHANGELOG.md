@@ -2,6 +2,24 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.17] - 2026-10-15
+
+Inspect compatible model connections from one optional section in Settings.
+
+### Added
+- Save a local or hosted API endpoint, discover its model IDs, and check one synthetic Read exchange. Profiles reference environment variable names; credential values are not stored in profiles or results.
+- Check evidence shows the observed result, response count, duration and token counters, including unknown or partial usage. Stop checks in progress; editing or removing a connection aborts old work and discards stale results.
+- Provider requests have time, response-size and concurrency limits, refuse redirects, and never retry automatically. The synthetic tool has no filesystem or command access.
+
+### Fixed
+- Unsupported task routing metadata is rejected before storage. Existing invalid task records receive a dispatch hold instead of crashing the runner.
+- Malformed evidence artifacts show an unreadable-evidence message instead of crashing the run pane. Missing or invalid checks are not replaced with passing defaults.
+
+### Compatibility and limits
+- A database migration adds saved model connections. Existing goals, tasks and evidence remain compatible.
+- Connections are diagnostics, not coding engines. Passing the tool check does not enable task execution. Coding still uses Claude Code; managed remains **Coming soon**.
+- Checks may use provider tokens outside task and mission budgets. Cancelling ends NightCrew's request; provider inference may continue. Credential-free synthetic fixtures validate the protocol and UI; no additional live provider or model is certified by this release.
+
 ## [1.0.0-alpha.16] - 2026-10-14
 
 Review decisions and evidence without leaving the goal.

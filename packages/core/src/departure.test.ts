@@ -32,6 +32,15 @@ const task: DepartureTask = {
   runAt: null,
 };
 
+test("unsupported routing metadata produces a hold without constructing a policy", () => {
+  for (const invalid of [{ type: "feature" }, { workflow: "unbounded" }]) {
+    const check = departureChecks({ ...task, ...invalid } as DepartureTask, repo);
+    expect(check.route).toBeNull();
+    expect(check.evidence).toEqual([]);
+    expect(check.signals).toMatchObject([{ code: "task-routing", kind: "hold", target: "task" }]);
+  }
+});
+
 test("required verification holds before dispatch; task command overrides the repository default", () => {
   const configured: Repo = {
     ...repo,

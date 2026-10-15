@@ -56,6 +56,20 @@ export interface Repo {
 
 export type Workflow = "auto" | "quick" | "planned";
 
+/** Validate routing metadata before storage or dispatch, including records from older integrations. */
+export function taskRoutingError(value: { type?: unknown; workflow?: unknown; status?: unknown }): string | null {
+  if (value.type !== undefined && !TASK_TYPES.includes(value.type as TaskType))
+    return "Choose a supported task type before dispatch.";
+  if (value.workflow !== undefined && !["auto", "quick", "planned"].includes(value.workflow as string))
+    return "Choose an automatic, quick or planned workflow before dispatch.";
+  if (
+    value.status !== undefined &&
+    !["draft", "queued", "later", "running", "done", "archived"].includes(value.status as string)
+  )
+    return "Choose a supported task status.";
+  return null;
+}
+
 export interface TrainCar {
   runId: string;
   taskId: string;

@@ -31,10 +31,12 @@ import readinessMigration from "../migrations/0010_repository_readiness.sql" wit
 import planningMigration from "../migrations/0011_mission_planning.sql" with { type: "text" };
 import attentionMigration from "../migrations/0012_operation_attention.sql" with { type: "text" };
 import missionStopMigration from "../migrations/0013_mission_stop.sql" with { type: "text" };
+import connectionsMigration from "../migrations/0014_model_connections.sql" with { type: "text" };
 import { auditEvent } from "./operations";
 import * as schema from "./schema";
 import { listTasks } from "./tasks";
 
+export * from "./connections";
 export * from "./dispatch";
 export * from "./missions";
 export * from "./operations";
@@ -59,6 +61,7 @@ const MIGRATIONS: [name: string, sql: string][] = [
   ["0011_mission_planning", planningMigration],
   ["0012_operation_attention", attentionMigration],
   ["0013_mission_stop", missionStopMigration],
+  ["0014_model_connections", connectionsMigration],
 ];
 
 export type Db = BunSQLiteDatabase<typeof schema> & { $client: Database };

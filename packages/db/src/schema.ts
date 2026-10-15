@@ -1,4 +1,4 @@
-import type { DeliveryPolicy, TaskPolicies } from "@nightcrew/core";
+import type { ConnectionCheck, DeliveryPolicy, TaskPolicies } from "@nightcrew/core";
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const runs = sqliteTable(
@@ -325,3 +325,15 @@ export const repositoryChecks = sqliteTable(
   },
   (t) => [index("repository_checks_repo_idx").on(t.repoId, t.at)],
 );
+
+export const modelConnections = sqliteTable("model_connections", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  baseUrl: text("base_url").notNull(),
+  model: text("model").notNull(),
+  apiKeyEnv: text("api_key_env"),
+  revision: integer("revision").notNull().default(1),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  lastCheck: text("last_check", { mode: "json" }).$type<ConnectionCheck>(),
+});

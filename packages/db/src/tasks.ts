@@ -11,6 +11,7 @@ import {
   type TaskNote,
   type TaskStatus,
   type TaskType,
+  taskRoutingError,
 } from "@nightcrew/core";
 import { and, asc, eq, gt, inArray, max, sql } from "drizzle-orm";
 import type { Db } from "./index";
@@ -138,6 +139,8 @@ export interface NewTask {
 }
 
 export function createTask(db: Db, input: NewTask): Task {
+  const routingError = taskRoutingError(input);
+  if (routingError) throw new Error(routingError);
   const type = input.type ?? "implementation";
   const status = input.status ?? "draft";
   const row = {
@@ -199,6 +202,8 @@ export type TaskPatch = Partial<
 >;
 
 export function updateTask(db: Db, id: string, patch: TaskPatch): Task | null {
+  const routingError = taskRoutingError(patch);
+  if (routingError) throw new Error(routingError);
   const current = getTask(db, id);
   if (!current) return null;
   const set: Partial<typeof schema.tasks.$inferInsert> = { ...patch, updatedAt: now() };

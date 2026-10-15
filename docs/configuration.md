@@ -1,6 +1,16 @@
 # Configuration
 
-Everything is set in the dashboard. This page explains what each setting does.
+Configure the crew in the dashboard. Credentials referenced by model connections are set in the environment before starting NightCrew.
+
+## Model connections (optional)
+
+In **Settings → Model connections**, save an API base URL and optionally a model ID and credential environment variable name. Use HTTPS for hosted endpoints or HTTP on loopback for a local runtime. Keep key values out of the profile; NightCrew reads the named variable from its own process environment.
+
+**Discover models** requests the endpoint's `/models` list. Choose a model and save, then **Check tools** sends at most two non-streaming `/chat/completions` requests for one synthetic Read exchange. The file exists only in memory; the check cannot read your repository or run commands. Discovery waits up to 15 seconds and a tool check up to 30 seconds. Redirects and automatic retries are refused.
+
+Checks may incur provider charges and are separate from task and mission budgets. Check evidence records the result, response count, elapsed time and observed token counters; missing usage stays unknown. **Stop check** cancels NightCrew's request but cannot guarantee the provider stops inference. Editing a connection clears its previous result and prevents an in-flight result from certifying the changed profile.
+
+Saved connections are diagnostics only. Passing the synthetic exchange does not verify coding ability or enable task execution. The local coding runner still uses Claude Code; managed mode remains Coming soon.
 
 ## Agents (Settings)
 

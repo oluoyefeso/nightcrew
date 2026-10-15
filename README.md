@@ -16,6 +16,8 @@ curl -fsSL https://raw.githubusercontent.com/oluoyefeso/nightcrew/main/install.s
 
 NightCrew needs `git`, the GitHub CLI (`gh auth login`), and either Claude Code (logged in) or `ANTHROPIC_API_KEY`.
 
+Optional [model connections](docs/configuration.md#model-connections-optional) in Settings can discover models and check a synthetic tool exchange on local or hosted endpoints. These checks do not enable task execution with those models.
+
 ```bash
 cd ~/code/my-app
 nightcrew repo add        # detects the test, install and preview commands

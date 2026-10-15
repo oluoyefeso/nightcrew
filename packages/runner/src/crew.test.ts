@@ -64,6 +64,24 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 const crewWith = (engine: ScriptedEngine) => new Crew({ db, engine, dataDir: join(dir, "data"), publish: false });
 
 describe("dispatcher", () => {
+  test("an unsupported stored task type stays held without crashing or spending model tokens", async () => {
+    const r = await repo("invalid-routing");
+    const task = createTask(db, { repoId: r.id, title: "Repair metadata", status: "queued" });
+    // Simulate a database created by an older integration that skipped domain validation.
+    db.$client.query("UPDATE tasks SET type = ? WHERE id = ?").run("feature", task.id);
+    const engine = new ScriptedEngine({});
+    const crew = crewWith(engine);
+    expect(crew.preflight([getTask(db, task.id)!]).tasks[0]?.signals).toContainEqual(
+      expect.objectContaining({ code: "task-routing", kind: "hold" }),
+    );
+    await crew.drain();
+    expect(engine.calls).toHaveLength(0);
+    expect(getTask(db, task.id)?.status).toBe("queued");
+    updateTask(db, task.id, { type: "implementation" });
+    expect(crew.preflight([getTask(db, task.id)!]).tasks[0]?.signals.some((s) => s.code === "task-routing")).toBe(
+      false,
+    );
+  });
   test("an expired mission stays held after recovery while unrelated work can complete", async () => {
     const r = await repo("restart-limit");
     const mission = createMission(db, {

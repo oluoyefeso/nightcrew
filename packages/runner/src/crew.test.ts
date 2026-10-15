@@ -64,6 +64,24 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 const crewWith = (engine: ScriptedEngine) => new Crew({ db, engine, dataDir: join(dir, "data"), publish: false });
 
 describe("dispatcher", () => {
+  test("a limited engine holds unsupported work while admitted research can finish", async () => {
+    const r = await repo("engine-admission");
+    const code = createTask(db, { repoId: r.id, title: "Build a feature", status: "queued", workflow: "quick" });
+    const research = createTask(db, { repoId: r.id, title: "Inspect behavior", type: "research", status: "queued" });
+    const engine = new ScriptedEngine({ research: () => ({ text: "Synthetic research result." }) });
+    Object.defineProperty(engine, "capabilities", {
+      value: { phases: ["research"], structuredOutput: false, sessionContinuation: false },
+    });
+    const crew = crewWith(engine);
+    expect(crew.preflight([code]).tasks[0]?.signals).toContainEqual(
+      expect.objectContaining({ code: "engine-capability", kind: "hold" }),
+    );
+    expect(crew.getQueue().find((entry) => entry.taskId === code.id)?.kind).toBe("setup");
+    await crew.drain();
+    expect(getTask(db, code.id)).toMatchObject({ status: "queued", lastRunId: null });
+    expect(getTask(db, research.id)?.status).toBe("done");
+    expect(engine.calls.map((call) => call.phase)).toEqual(["research"]);
+  });
   test("an unsupported stored task type stays held without crashing or spending model tokens", async () => {
     const r = await repo("invalid-routing");
     const task = createTask(db, { repoId: r.id, title: "Repair metadata", status: "queued" });

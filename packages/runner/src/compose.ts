@@ -4,7 +4,7 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { type Mission, type Repo, TASK_TYPES, type TaskType } from "@nightcrew/core";
-import type { AgentEngine } from "./engine";
+import { type AgentEngine, runEnginePhase } from "./engine";
 
 export interface DraftTask {
   repoId: string;
@@ -91,7 +91,8 @@ export async function draftTasks(
     .map((r) => `### ${r.name}${r.id === input.defaultRepoId ? " (default)" : ""}\n${fileTree(r.path)}`)
     .join("\n\n");
 
-  const result = await engine.runPhase(
+  const result = await runEnginePhase(
+    engine,
     {
       phase: "compose",
       cwd: (repos.find((r) => r.id === input.defaultRepoId) ?? (repos[0] as Repo)).path,

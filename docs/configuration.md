@@ -12,6 +12,8 @@ Checks may incur provider charges and are separate from task and mission budgets
 
 Saved connections are diagnostics only. Passing the synthetic exchange does not verify coding ability or enable task execution. The local coding runner still uses Claude Code; managed mode remains Coming soon.
 
+Before dispatch, NightCrew checks that its engine declares the phases the task route may need, including repair and structured review. Unsupported work stays held while supported tasks can proceed. These declarations describe the adapter's supported operations, not a model's competence; repository authority and tool guards still apply. Engines without session continuation receive the written plan instead of an opaque session handle.
+
 ## Agents (Settings)
 
 | Setting | Default | What it does |

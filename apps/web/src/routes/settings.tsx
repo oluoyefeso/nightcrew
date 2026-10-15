@@ -6,6 +6,7 @@ import { api, crewQuery, infoQuery, reposQuery, settingsQuery } from "../api";
 import { AddRepo } from "../components/add-repo";
 import { DeliveryEditor } from "../components/delivery-editor";
 import { ChipsEditor, Field, Select, TextInput } from "../components/form";
+import { ModelConnections } from "../components/model-connections";
 import { PolicyEditor } from "../components/policy-editor";
 import { RepositoryReadinessPanel } from "../components/repository-readiness";
 
@@ -52,6 +53,8 @@ export function SettingsPage() {
         </p>
         <p className="text-[12px] text-faint">Managed mode · Coming soon</p>
       </div>
+
+      <ModelConnections />
 
       {s && (
         <section className="grid gap-5">

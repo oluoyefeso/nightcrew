@@ -6,48 +6,23 @@
 
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, extname, isAbsolute, join, normalize } from "node:path";
-import { policyEvidence, type Repo, type ResolvedPolicy, resolvePolicy, slugify, type Task } from "@nightcrew/core";
+import {
+  type A11yIssue,
+  type Evidence,
+  policyEvidence,
+  type Repo,
+  type ResolvedPolicy,
+  resolvePolicy,
+  slugify,
+  type Task,
+} from "@nightcrew/core";
 import { matchesAny } from "@nightcrew/core/guard";
 import axeSource from "axe-core/axe.min.js" with { type: "text" };
 import { baseWorktree, type Exec, lastLine, terminateTree, trackTree } from "./git";
 import { checkEnv, runCheck, sandboxed } from "./sandbox";
 import { cloneChangedFiles } from "./workspace";
 
-interface A11yIssue {
-  id: string;
-  impact: string;
-  help: string;
-  count: number;
-}
-
-export interface Shot {
-  path: string;
-  viewport: "desktop" | "mobile";
-  theme: "light" | "dark";
-  before: string | null;
-  after: string;
-  diff: string | null;
-  /** Share of pixels that changed, 0–100. Null without a before shot. */
-  changedPct: number | null;
-}
-
-export interface Evidence {
-  required: string[];
-  screenshots: Shot[];
-  a11y: { before: number | null; after: number; newIssues: A11yIssue[] } | null;
-  consoleErrors: string[];
-  testProof: {
-    testFiles: string[];
-    failsOnBase: boolean | null;
-    passesOnBranch: boolean;
-    log: string;
-    /** Why the base run proves nothing either way (setup failed, the runner couldn't start, timed out). */
-    unavailable?: string;
-  } | null;
-  /** What was asked for but couldn't be gathered, in plain words. */
-  missing: string[];
-  notes: string[];
-}
+export type { Evidence, Shot } from "@nightcrew/core";
 
 export const TEST_FILE_GLOBS = [
   "**/*.test.*",

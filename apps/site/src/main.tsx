@@ -608,6 +608,10 @@ function Site() {
                   your own key or Claude Code login. You control the repos, evidence requirements, budgets, and merge
                   authority.
                 </p>
+                <p className="text-[13px] text-muted leading-relaxed">
+                  Optional model connections let you discover models and check a synthetic tool exchange on a local or
+                  hosted endpoint. These checks do not enable coding with that endpoint.
+                </p>
               </div>
               <div className="grid gap-2 rounded-2xl bg-surface p-6 ring-1 ring-line">
                 <b className="font-medium text-[15px]">Managed · Coming soon</b>

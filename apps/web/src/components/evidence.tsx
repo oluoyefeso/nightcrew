@@ -1,39 +1,11 @@
+import type { Evidence, Shot } from "@nightcrew/core";
 import { clsx } from "clsx";
 import { Check, CircleAlert, X } from "lucide-react";
 import { type ImgHTMLAttributes, useEffect, useState } from "react";
 import { authFetch } from "../api";
 
-interface Shot {
-  path: string;
-  viewport: "desktop" | "mobile";
-  theme: "light" | "dark";
-  before: string | null;
-  after: string;
-  diff: string | null;
-  changedPct: number | null;
-}
-
-export interface Evidence {
-  required: string[];
-  screenshots: Shot[];
-  a11y: {
-    before: number | null;
-    after: number;
-    newIssues: { id: string; impact: string; help: string; count: number }[];
-  } | null;
-  consoleErrors: string[];
-  testProof: { testFiles: string[]; failsOnBase: boolean | null; passesOnBranch: boolean; log: string } | null;
-  missing: string[];
-  notes: string[];
-}
-
-export function parseEvidence(content: string): Evidence | null {
-  try {
-    return JSON.parse(content) as Evidence;
-  } catch {
-    return null;
-  }
-}
+export type { Evidence } from "@nightcrew/core";
+export { parseEvidence } from "@nightcrew/core";
 
 type View = "after" | "before" | "diff";
 

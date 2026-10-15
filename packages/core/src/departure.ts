@@ -1,5 +1,5 @@
 import { policyEvidence, type ResolvedPolicy, resolvePolicy } from "./policy";
-import type { Repo, Task } from "./tasks";
+import { type Repo, type Task, taskRoutingError } from "./tasks";
 
 export type DepartureTask = Pick<
   Task,
@@ -14,7 +14,8 @@ export type DepartureTask = Pick<
   | "question"
   | "runAt"
   | "missionId"
->;
+> &
+  Partial<Pick<Task, "workflow" | "status">>;
 export interface DepartureSignal {
   code: string;
   kind: "hold" | "wait" | "notice";
@@ -45,7 +46,9 @@ export function departureChecks(task: DepartureTask, repo: Repo | null): TaskDep
     target: DepartureSignal["target"] = "settings",
     kind: DepartureSignal["kind"] = "hold",
   ) => signals.push({ code, kind, message, target });
-  const route = repo ? resolvePolicy(repo, task.type) : null;
+  const routingError = taskRoutingError(task);
+  const route = repo && !routingError ? resolvePolicy(repo, task.type) : null;
+  if (routingError) add("task-routing", routingError, "task");
   if (!repo) add("repo", "Choose a repository before dispatch.");
   if (task.question?.trim()) add("question", "Answer the crew's question before dispatch.", "task");
   if (!task.title.trim()) add("title", "Give this task a title before dispatch.", "task");

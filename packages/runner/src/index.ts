@@ -1,4 +1,5 @@
 export * from "./compose";
+export { checkConnection, discoverModels, normalizeConnectionUrl } from "./connections";
 export * from "./crew";
 export { deliveryReadiness } from "./delivery-readiness";
 export { DemoEngine } from "./demo-engine";

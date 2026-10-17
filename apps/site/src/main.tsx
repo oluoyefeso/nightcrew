@@ -575,17 +575,17 @@ function Site() {
           <Reveal className="grid gap-4">
             <Eyebrow>Tokens</Eyebrow>
             <H2
-              claim="Lean on tokens."
-              rest="Each agent runs in a clean, isolated harness with only the tools its task needs."
+              claim="Know what was spent."
+              rest="Inspect observed usage for work and reviews, including failed attempts."
             />
           </Reveal>
           <Reveal>
             <div className="grid gap-px overflow-hidden rounded-[18px] bg-line ring-1 ring-line sm:grid-cols-3">
               {[
-                ["~100k", "tokens for a small task, end to end: build, check, review, commit"],
+                ["Per phase", "tokens, reported cost, time and limits for each implementation and review attempt."],
                 [
-                  "20–40×",
-                  "fewer tokens than the same task in a session that loads every skill, plugin and connector on the machine (2.3M–4.4M measured)",
+                  "Isolated",
+                  "each task works in its own clone with repository instructions, guarded tools and independent checks.",
                 ],
                 [
                   "20M",

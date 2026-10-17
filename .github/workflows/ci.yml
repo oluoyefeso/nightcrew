@@ -18,6 +18,10 @@ jobs:
       - run: bun run typecheck
       - run: bunx playwright@1.64.0 install --with-deps chromium
       - run: bun test
+      - name: Compiled credential-loading smoke check
+        run: |
+          bun run build
+          bun --no-env-file apps/cli/scripts/check-compiled-env.ts apps/cli/dist/nightcrew
       - name: Classic suite
         env:
           GIT_AUTHOR_NAME: NightCrew CI

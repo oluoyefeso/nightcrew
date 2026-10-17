@@ -34,10 +34,12 @@ jobs:
         working-directory: apps/cli
         run: |
           bun scripts/embed-web.ts
-          bun build src/main.ts --compile --minify --external "chromium-bidi/*" --target=${{ matrix.target }} --outfile dist/${{ matrix.asset }}
+          bun build src/main.ts --compile --no-compile-autoload-dotenv --minify --external "chromium-bidi/*" --target=${{ matrix.target }} --outfile dist/${{ matrix.asset }}
       - name: Smoke test Linux binary
         if: matrix.target == 'bun-linux-x64'
-        run: test "$(apps/cli/dist/${{ matrix.asset }} --version)" = "${GITHUB_REF_NAME#v}"
+        run: |
+          test "$(apps/cli/dist/${{ matrix.asset }} --version)" = "${GITHUB_REF_NAME#v}"
+          bun --no-env-file apps/cli/scripts/check-compiled-env.ts apps/cli/dist/${{ matrix.asset }}
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}

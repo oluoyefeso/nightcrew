@@ -29,7 +29,7 @@ const indexRoute = createRoute({
   validateSearch,
   component: function Latest() {
     const { run } = indexRoute.useSearch();
-    return <StationPage runId={run} />;
+    return <ReportPage runId={run} />;
   },
 });
 
@@ -37,9 +37,18 @@ const historyRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/history",
   validateSearch,
-  component: function History() {
-    const { run } = historyRoute.useSearch();
-    return <ReportPage runId={run} />;
+  beforeLoad: ({ search }) => {
+    throw redirect({ to: "/", search, replace: true });
+  },
+});
+
+const workRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/work",
+  validateSearch,
+  component: function Work() {
+    const { run } = workRoute.useSearch();
+    return <StationPage runId={run} />;
   },
 });
 
@@ -134,6 +143,7 @@ const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
     historyRoute,
+    workRoute,
     nightRoute,
     agentsRoute,
     missionsRoute,
@@ -166,7 +176,12 @@ if (!root) throw new Error("Missing #root");
 /** The dashboard once the API takes our key; the locked page when it doesn't. */
 function Gate() {
   const lock = useSyncExternalStore(lockStore.subscribe, lockStore.get);
-  if (lock === "checking") return null;
+  if (lock === "checking")
+    return (
+      <p role="status" className="p-8 text-muted">
+        Opening NightCrew…
+      </p>
+    );
   if (lock === "locked") return <LockedPage />;
   return (
     <QueryClientProvider client={queryClient}>

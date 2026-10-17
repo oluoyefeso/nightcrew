@@ -53,6 +53,7 @@ import {
   updateTask,
   updateTrain,
 } from "@nightcrew/db";
+import { Conductor } from "./conductor";
 import { type AgentEngine, taskEngineError } from "./engine";
 import { publishTrain } from "./landing";
 import { waitForOperations } from "./operation-progress";
@@ -73,6 +74,7 @@ export interface ActiveAgent {
 }
 
 export interface CrewStatus {
+  coordinating: number;
   /** working: agents running. idle: nothing to do. paused: you paused dispatch. waiting: backing off. */
   state: "working" | "idle" | "paused" | "waiting";
   active: ActiveAgent[];
@@ -106,6 +108,7 @@ interface Running {
 }
 
 export class Crew {
+  readonly conductor: Conductor;
   private running = new Map<string, Running>();
   private listeners = new Set<(e: CrewEvent) => void>();
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -113,6 +116,8 @@ export class Crew {
   private rateLimitStrikes = 0;
   private message: string | null = null;
   private pumping = false;
+  private pumpDone: Promise<void> | null = null;
+  private pumpAgain = false;
   private halted = false;
 
   constructor(
@@ -124,6 +129,14 @@ export class Crew {
       reflexes?: Reflexes;
     },
   ) {
+    this.conductor = new Conductor({
+      ...deps,
+      running: () => this.running.size,
+      reservations: () => this.inFlightBudget(),
+      changed: () => {
+        void this.pump();
+      },
+    });
     const backoff = getDispatchBackoff(deps.db);
     this.pausedUntil = backoff.until;
     this.rateLimitStrikes = backoff.strikes;
@@ -137,6 +150,7 @@ export class Crew {
    * would steal tasks a live dispatcher is running.
    */
   recover(): number {
+    this.conductor.recover();
     recoverDeliveries(this.deps.db);
     recoverOperationJobs(this.deps.db);
     const orphans = listTasks(this.deps.db, ["running"]);
@@ -173,10 +187,11 @@ export class Crew {
       ? "paused"
       : this.pausedUntil > now
         ? "waiting"
-        : active.length
+        : active.length || this.conductor.active
           ? "working"
           : "idle";
     return {
+      coordinating: this.conductor.active,
       state,
       active,
       queued: queuedTasks.length - scheduled.length,
@@ -202,6 +217,12 @@ export class Crew {
       .filter((t) => t.status === "queued")
       .map((task): QueueEntry => {
         const entry = { taskId: task.id, title: task.title, repoName: task.repoName, runAt: task.runAt };
+        if (!this.conductor.permits(task))
+          return {
+            ...entry,
+            kind: "paused",
+            reason: this.conductor.get(task.missionId!)?.detail ?? "The goal coordinator is holding this work.",
+          };
         const holds = this.departure(task, getRepo(db, task.repoId)).signals.filter((s) => s.kind === "hold");
         if (holds.length) return { ...entry, kind: "setup", reason: holds.map((s) => s.message).join(" ") };
         const mission = task.missionId ? getMission(db, task.missionId) : null;
@@ -235,7 +256,7 @@ export class Crew {
         const inRepo = [...this.running.values()].filter((r) => r.agent.repoId === task.repoId).length;
         if (inRepo >= settings.maxPerRepo)
           return { ...entry, kind: "capacity", reason: "Waiting for an agent slot in this repo." };
-        if (this.running.size >= settings.maxAgents)
+        if (this.running.size + this.conductor.active >= settings.maxAgents)
           return { ...entry, kind: "capacity", reason: "Waiting for an agent slot across the crew." };
         return {
           ...entry,
@@ -414,12 +435,29 @@ export class Crew {
    * Fill free agent slots with the next runnable tasks. Safe to call any
    * time: when a task is added, when an agent finishes, on the timer.
    */
-  async pump(): Promise<void> {
+  pump(): Promise<void> {
+    if (this.pumpDone) {
+      this.pumpAgain = true;
+      return this.pumpDone;
+    }
+    this.pumpDone = (async () => {
+      do {
+        this.pumpAgain = false;
+        await this.pumpOnce();
+      } while (this.pumpAgain);
+    })().finally(() => {
+      this.pumpDone = null;
+    });
+    return this.pumpDone;
+  }
+
+  private async pumpOnce(): Promise<void> {
     if (this.pumping) return;
     this.pumping = true;
     try {
       const { db } = this.deps;
       for (const running of this.running.values()) this.refreshMissionStop(running);
+      if (!this.halted) await this.conductor.tick();
       materializeRoutines(db);
       const s = getSettings(db);
       if (this.halted || !s.dispatch || this.pausedUntil > Date.now()) return this.emitStatus();
@@ -430,7 +468,7 @@ export class Crew {
       let tooBigNote: string | null = null;
       let holdNote: string | null = null;
       for (;;) {
-        if (this.running.size >= s.maxAgents) break;
+        if (this.running.size + this.conductor.active >= s.maxAgents) break;
         const next = this.nextRunnable(s.maxPerRepo, tooBig);
         if (!next) break;
         if (next.tokenBudget > s.dailyTokenBudget) {
@@ -464,6 +502,7 @@ export class Crew {
     for (const id of planQueue(this.prioritized(all).map((task, position) => ({ ...task, position }))).order) {
       const t = byId.get(id);
       if (!t || this.running.has(id) || skip.has(id)) continue;
+      if (!this.conductor.permits(t)) continue;
       if (t.missionId && getMission(db, t.missionId)?.paused) continue;
       if (this.missionHold(t)) continue;
       if (this.departure(t, getRepo(db, t.repoId)).signals.some((s) => s.kind === "hold")) continue;
@@ -735,6 +774,7 @@ export class Crew {
 
   /** Stop every agent. */
   stopAll() {
+    this.conductor.stop();
     for (const r of this.running.values()) r.abort.abort();
   }
 
@@ -749,8 +789,10 @@ export class Crew {
   /** Resolves when no agent is working and nothing runnable is left (for `nightcrew run` and tests). */
   async drain(): Promise<void> {
     await this.pump();
-    while (this.running.size) {
-      await Promise.race([...this.running.values()].map((r) => r.done));
+    while (this.running.size || this.conductor.active) {
+      await Promise.race(
+        [...this.running.values()].map((r) => r.done).concat(this.conductor.active ? [this.conductor.wait()] : []),
+      );
       await this.pump();
     }
     if (this.deps.publish && getSettings(this.deps.db).dispatch && !this.halted)

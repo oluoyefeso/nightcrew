@@ -1,5 +1,6 @@
 import { type Mission, type MissionSummary, needsDecision } from "@nightcrew/core";
 import { asc, eq } from "drizzle-orm";
+import { getConductor } from "./conductor";
 import { type Db, getRunSummaries } from "./index";
 import { missionTokens } from "./operations";
 import * as schema from "./schema";
@@ -84,6 +85,7 @@ export function listMissions(db: Db): MissionSummary[] {
       }
       return {
         ...mission,
+        conductor: getConductor(db, mission.id),
         counts,
         tokensUsed: missionTokens(db, mission.id),
         taskCaps: members

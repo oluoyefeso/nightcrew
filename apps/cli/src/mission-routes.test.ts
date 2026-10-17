@@ -3,7 +3,9 @@ import {
   addRepo,
   createTask,
   type Db,
+  getConductor,
   getMission,
+  getSettings,
   getTask,
   listTasks,
   openDb,
@@ -53,6 +55,32 @@ test("composer receives mission context while fallback drafts retain the request
   expect(listTasks(db)).toHaveLength(0);
 });
 
+test("goal planning reads only the selected project and rejects invalid project scope before model use", async () => {
+  const excluded = addRepo(db, { name: "Excluded project", path: "/demo/excluded", defaultBranch: "main" });
+  const selected = addRepo(db, { name: "Selected project", path: "/demo/selected", defaultBranch: "main" });
+  const mission = await create();
+  const response = await send("POST", "/api/compose", {
+    text: "Make invitations reliable",
+    missionId: mission.id,
+    repoId: selected.id,
+    repoIds: [selected.id],
+  });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({
+    fallback: true,
+    drafts: [{ repoId: selected.id, missionId: mission.id }],
+  });
+  expect(engine.calls[0]?.cwd).toBe("/demo/selected");
+  expect(engine.calls[0]?.prompt).toContain("### Selected project");
+  expect(engine.calls[0]?.prompt).not.toContain("### Excluded project");
+  const calls = engine.calls.length;
+  for (const repoIds of [[], null, "all", ["missing"], [selected.id, 7], [excluded.id]]) {
+    expect((await send("POST", "/api/compose", { text: "Plan work", repoId: selected.id, repoIds })).status).toBe(400);
+  }
+  expect(engine.calls).toHaveLength(calls);
+  expect(listTasks(db)).toHaveLength(0);
+});
+
 test("mission API enforces authentication, validates changes and preserves tasks on deletion", async () => {
   expect((await app.request("/api/missions")).status).toBe(401);
   for (const value of [null, [], { title: "Empty objective" }, { title: "A", objective: "B", paused: "yes" }])
@@ -68,6 +96,33 @@ test("mission API enforces authentication, validates changes and preserves tasks
   expect(getTask(db, task.id)?.missionId).toBe(mission.id);
   expect((await send("PATCH", `/api/tasks/${task.id}`, { missionId: null })).status).toBe(200);
   expect((await send("DELETE", `/api/missions/${mission.id}`)).status).toBe(200);
+});
+
+test("starting a goal is atomic, scoped and authenticated, and never resumes a paused crew", async () => {
+  const repo = addRepo(db, { name: "Fixture", path: "/demo/project", defaultBranch: "main" });
+  for (const conductor of [null, {}, { repoId: "missing" }, { repoId: repo.id, authority: "ship" }])
+    expect(
+      (await send("POST", "/api/missions", { title: "Goal", objective: "Do the requested work", conductor })).status,
+    ).toBe(400);
+  expect(await (await send("GET", "/api/missions")).json()).toEqual([]);
+  const response = await send("POST", "/api/missions", {
+    title: "Goal",
+    objective: "Do the requested work",
+    paused: true,
+    conductor: { repoId: repo.id },
+  });
+  expect(response.status).toBe(201);
+  const mission = (await response.json()) as { id: string; paused: boolean; criteria: string[] };
+  expect(mission.paused).toBe(false);
+  expect(mission.criteria).toEqual(["Do the requested work"]);
+  expect(getConductor(db, mission.id)?.repoId).toBe(repo.id);
+  expect(getSettings(db).dispatch).toBe(false);
+  expect(engine.calls).toHaveLength(0);
+  expect((await app.request(`/api/missions/${mission.id}/conductor`, { method: "POST" })).status).toBe(401);
+  expect((await send("POST", `/api/missions/${mission.id}/conductor`, { repoId: "missing" })).status).toBe(409);
+  expect((await send("GET", `/api/missions/${mission.id}/conductor`)).status).toBe(200);
+  expect((await send("DELETE", `/api/missions/${mission.id}/conductor`)).status).toBe(200);
+  expect(getMission(db, mission.id)?.paused).toBe(true);
 });
 
 test("membership validates whole batches and cannot change on a running task", async () => {

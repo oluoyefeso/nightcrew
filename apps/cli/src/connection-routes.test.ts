@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { ModelConnection } from "@nightcrew/core";
-import { type Db, getConnection, listConnections, openDb, updateSettings } from "@nightcrew/db";
+import { type Db, getConnection, getSettings, listConnections, openDb, updateSettings } from "@nightcrew/db";
 import { Crew, ScriptedEngine } from "@nightcrew/runner";
 import { createApp } from "./server";
 
@@ -211,4 +211,44 @@ test("limits simultaneous provider requests across connections", async () => {
   await send("POST", `${path(second)}/stop`);
   expect((await firstRequest).status).toBe(400);
   expect((await secondRequest).status).toBe(200);
+});
+
+test("using a saved connection is explicit, preserves pause, and protects the active profile", async () => {
+  let requests = 0;
+  const c = await create({
+    baseUrl: serve(() => {
+      requests++;
+      return Response.json({});
+    }),
+  });
+  expect(getSettings(db).executionConnectionId).toBeNull();
+  expect((await send("POST", `${path(c)}/use`, { revision: c.revision + 1 })).status).toBe(409);
+  expect((await send("POST", `${path(c)}/use`, { revision: c.revision })).status).toBe(200);
+  expect(getSettings(db)).toMatchObject({
+    executionConnectionId: c.id,
+    planModel: c.model,
+    buildModel: c.model,
+    reviewModel: c.model,
+    dispatch: false,
+  });
+  expect(requests).toBe(0);
+  expect((await send("PATCH", path(c), { ...profile, revision: c.revision })).status).toBe(409);
+  expect((await send("DELETE", path(c), { revision: c.revision })).status).toBe(409);
+  expect((await send("PATCH", "/api/settings", { executionConnectionId: null })).status).toBe(400);
+  const listed = await (await send("GET", "/api/connections")).json();
+  expect(listed[0].usedForCrew).toBe(true);
+  expect((await send("POST", "/api/connections/local-engine", {})).status).toBe(200);
+  expect(getSettings(db).executionConnectionId).toBeNull();
+  expect(getSettings(db).dispatch).toBe(false);
+  expect((await send("DELETE", path(c), { revision: c.revision })).status).toBe(200);
+});
+
+test("execution selection requires a configured credential and model but never exposes the value", async () => {
+  const c = await create({ apiKeyEnv: credentialName });
+  expect((await send("POST", `${path(c)}/use`, { revision: c.revision })).status).toBe(400);
+  process.env[credentialName] = credential;
+  const selected = await send("POST", `${path(c)}/use`, { revision: c.revision });
+  expect(selected.status).toBe(200);
+  expect(await selected.text()).not.toContain(credential);
+  expect(JSON.stringify(getSettings(db))).not.toContain(credential);
 });

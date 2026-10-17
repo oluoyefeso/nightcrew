@@ -50,6 +50,76 @@ const request = (over: Partial<PhaseRequest> = {}): PhaseRequest => ({
 });
 
 describe("SdkEngine", () => {
+  test("review keeps phase and project instructions with inspection tools and guarded mutations", async () => {
+    writeFileSync(join(repo, "CLAUDE.md"), "Use the project's existing tests.");
+    const captured: { options?: realSdk.Options } = {};
+    scripted = async function* (args) {
+      captured.options = (args as Parameters<typeof real.query>[0]).options;
+      yield { type: "result", subtype: "success", is_error: false, result: "Reviewed." };
+    };
+    await new SdkEngine().runPhase(
+      request({ phase: "review", guard: { ...request().guard, readOnly: true } }),
+      () => {},
+    );
+    const options = captured.options!;
+    expect(typeof options.systemPrompt).toBe("string");
+    expect(options.systemPrompt).toContain("You are a careful engineer.");
+    expect(options.systemPrompt).toContain("Use the project's existing tests.");
+    expect(options.systemPrompt).toContain("Never read or expose credentials");
+    expect(options.tools).toEqual(["Read", "Bash", "Glob", "Grep"]);
+    expect(options.settingSources).toEqual([]);
+    const hook = options.hooks!.PreToolUse![0]!.hooks[0]!;
+    for (const command of ["git stash", "git push origin main"]) {
+      const decision = await hook(
+        {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+          tool_use_id: "tool-1",
+          session_id: "session-1",
+          transcript_path: "",
+          cwd: repo,
+        },
+        "tool-1",
+        { signal: new AbortController().signal },
+      );
+      expect(
+        "hookSpecificOutput" in decision &&
+          decision.hookSpecificOutput?.hookEventName === "PreToolUse" &&
+          decision.hookSpecificOutput.permissionDecision,
+      ).toBe("deny");
+    }
+  });
+
+  test.each([false, true])("success after exceeding allowance stays failed (streamed: %s)", async (streamed) => {
+    scripted = async function* () {
+      if (streamed)
+        yield { type: "assistant", message: { id: "m1", content: [], usage: { input_tokens: 120, output_tokens: 5 } } };
+      yield {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "Finished",
+        total_cost_usd: 0.01,
+        num_turns: 1,
+        modelUsage: {
+          fixture: {
+            inputTokens: 120,
+            outputTokens: 5,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            costUSD: 0.01,
+          },
+        },
+      };
+    };
+    const result = await new SdkEngine().runPhase(request({ maxTokens: 100 }), () => {});
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("token budget");
+    expect(result.tokensIn + result.tokensOut).toBe(125);
+    expect(result.usageStatus).toBe("reported");
+  });
+
   test("an already stopped phase returns without starting the agent", async () => {
     const stop = new AbortController();
     stop.abort();
@@ -121,7 +191,7 @@ describe("SdkEngine", () => {
     const r = await new SdkEngine().runPhase(request(), () => {});
     expect(r.ok).toBe(false);
     expect(r.error).toBe(
-      "The API requires payment or more credits (402). Check the provider balance and key spending limit.",
+      "The API refused the request budget (402). Check available credits, key limits and requested output tokens; concurrent requests can also reserve credit.",
     );
     expect(JSON.stringify(r)).not.toContain("synthetic-private-provider-detail");
     expect(r.rateLimited).toBe(false);

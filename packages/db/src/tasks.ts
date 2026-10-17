@@ -14,6 +14,7 @@ import {
   taskRoutingError,
 } from "@nightcrew/core";
 import { and, asc, eq, gt, inArray, max, sql } from "drizzle-orm";
+import { conductorTokens } from "./conductor";
 import type { Db } from "./index";
 import { auditEvent } from "./operations";
 import * as schema from "./schema";
@@ -288,11 +289,12 @@ function uniqueBranch(db: Db, repoId: string, base: string): string {
 /** Tokens the agents have used on a report day (input, cache and output). */
 export function tokensOnDay(db: Db, dayId: string): number {
   return (
-    db
+    conductorTokens(db, { dayId }) +
+    (db
       .select({ n: sql<number>`coalesce(sum(${schema.runs.tokensIn} + ${schema.runs.tokensOut}), 0)` })
       .from(schema.runs)
       .where(and(eq(schema.runs.nightId, dayId), sql`${schema.runs.source} != 'classic'`))
-      .get()?.n ?? 0
+      .get()?.n ?? 0)
   );
 }
 

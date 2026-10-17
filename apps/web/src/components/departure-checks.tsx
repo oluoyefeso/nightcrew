@@ -7,7 +7,7 @@ import { api } from "../api";
 
 export type DepartureInput = Partial<DepartureTask> & { repoId: string; title: string; dependsOnIndex?: number[] };
 
-export function DepartureChecks({ tasks }: { tasks: DepartureInput[] }) {
+export function DepartureChecks({ tasks, compact = false }: { tasks: DepartureInput[]; compact?: boolean }) {
   const input = JSON.stringify(tasks);
   const [settled, setSettled] = useState(input);
   useEffect(() => {
@@ -23,7 +23,7 @@ export function DepartureChecks({ tasks }: { tasks: DepartureInput[] }) {
   });
   const current = settled === input;
   const report = current && !preview.error ? preview.data : undefined;
-  return (
+  const details = (
     <section className="grid gap-4 rounded-2xl bg-surface p-4 ring-1 ring-line sm:p-5" aria-label="Departure checks">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="inline-flex items-center gap-2 font-medium text-[14px]">
@@ -131,5 +131,45 @@ export function DepartureChecks({ tasks }: { tasks: DepartureInput[] }) {
         </>
       )}
     </section>
+  );
+  if (!compact) return details;
+  const signals = [
+    ...new Set(
+      report?.tasks.flatMap((task) =>
+        task.signals
+          .filter((signal) => signal.kind === "hold" || signal.kind === "wait")
+          .map((signal) => signal.message),
+      ) ?? [],
+    ),
+  ];
+  return (
+    <div className="grid gap-3 text-[13px]">
+      {!report && !preview.error && (
+        <p role="status" className="text-muted">
+          Checking whether the work can start…
+        </p>
+      )}
+      {preview.error && (
+        <p role="alert" className="text-bad">
+          Couldn't check whether work can start.{" "}
+          <button type="button" className="underline" onClick={() => preview.refetch()}>
+            Try again
+          </button>
+        </p>
+      )}
+      {signals.length > 0 ? (
+        <ul className="grid gap-1 text-dawn">
+          {signals.map((signal) => (
+            <li key={signal}>{signal}</li>
+          ))}
+        </ul>
+      ) : (
+        report && <p className="text-muted">Work can queue within the current project permissions and crew limits.</p>
+      )}
+      <details>
+        <summary className="cursor-pointer text-[12px] text-muted">Execution checks</summary>
+        <div className="mt-3">{details}</div>
+      </details>
+    </div>
   );
 }

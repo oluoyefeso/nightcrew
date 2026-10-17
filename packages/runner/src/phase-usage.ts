@@ -118,7 +118,7 @@ export async function measuredPhase(
     tokensIn: usageStatus === "unknown" ? null : result.tokensIn,
     tokensOut: usageStatus === "unknown" ? null : result.tokensOut,
     turns: usageStatus === "reported" ? result.turns : null,
-    costUsd: usageStatus === "reported" ? result.costUsd : null,
+    costUsd: usageStatus === "reported" && result.costStatus !== "unknown" ? result.costUsd : null,
     usageStatus,
     tokenOvershoot:
       usageStatus === "unknown" ? null : Math.max(0, result.tokensIn + result.tokensOut - request.maxTokens),

@@ -225,6 +225,7 @@ export interface ActiveAgent {
 }
 
 export interface CrewStatus {
+  coordinating?: number;
   state: "working" | "idle" | "paused" | "waiting";
   active: ActiveAgent[];
   queued: number;
@@ -326,6 +327,7 @@ export function useInvalidateTasks() {
     qc.invalidateQueries({ queryKey: ["tasks"] });
     qc.invalidateQueries({ queryKey: ["missions"] });
     qc.invalidateQueries({ queryKey: ["acceptance"] });
+    qc.invalidateQueries({ queryKey: ["conductor"] });
     qc.invalidateQueries({ queryKey: ["operations"] });
     qc.invalidateQueries({ queryKey: ["task"] });
     qc.invalidateQueries({ queryKey: ["queue"] });

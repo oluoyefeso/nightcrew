@@ -337,3 +337,36 @@ export const modelConnections = sqliteTable("model_connections", {
   updatedAt: text("updated_at").notNull(),
   lastCheck: text("last_check", { mode: "json" }).$type<ConnectionCheck>(),
 });
+
+export const goalConductors = sqliteTable("goal_conductors", {
+  missionId: text("mission_id")
+    .primaryKey()
+    .references(() => missions.id, { onDelete: "cascade" }),
+  body: text("body", { mode: "json" }).$type<import("@nightcrew/core").GoalConductor>().notNull(),
+});
+export const goalUsage = sqliteTable("goal_usage", {
+  id: text("id").primaryKey(),
+  missionId: text("mission_id").notNull(),
+  dayId: text("day_id").notNull(),
+  phase: text("phase").notNull(),
+  status: text("status").notNull(),
+  reserved: integer("reserved").notNull(),
+  charged: integer("charged").notNull(),
+  tokensIn: integer("tokens_in").notNull().default(0),
+  tokensOut: integer("tokens_out").notNull().default(0),
+  costUsd: real("cost_usd").notNull().default(0),
+});
+export const goalResults = sqliteTable("goal_results", {
+  id: text("id").primaryKey(),
+  missionId: text("mission_id")
+    .notNull()
+    .references(() => missions.id, { onDelete: "cascade" }),
+  body: text("body", { mode: "json" }).$type<import("@nightcrew/core").GoalResult>().notNull(),
+});
+export const taskHandoffs = sqliteTable("task_handoffs", {
+  taskId: text("task_id")
+    .primaryKey()
+    .references(() => tasks.id, { onDelete: "cascade" }),
+  fingerprint: text("fingerprint").notNull(),
+  base: text("base").notNull(),
+});

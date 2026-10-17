@@ -14,7 +14,7 @@
   --line-strong: rgb(240 240 242 / 0.16);
   --fg: #f0f0f2;
   --muted: #a0a0a8;
-  --faint: #81818b;
+  --faint: #92929c;
   --dawn: #f2a65a;
   --dawn-soft: #f7c995;
   --on-dawn: #1b1206;
@@ -36,11 +36,11 @@
     --line-strong: rgb(25 25 29 / 0.18);
     --fg: #19191d;
     --muted: #64646f;
-    --faint: #767681;
-    --dawn: #b65a12;
+    --faint: #696975;
+    --dawn: #99470c;
     --dawn-soft: #d9873f;
     --on-dawn: #fff8f0;
-    --ok: #237a52;
+    --ok: #1b6945;
     --bad: #b93a30;
     --sky: #2d6ba8;
     --horizon-from: #c9d3e2;
@@ -58,11 +58,11 @@
   --line-strong: rgb(25 25 29 / 0.18);
   --fg: #19191d;
   --muted: #64646f;
-  --faint: #767681;
-  --dawn: #b65a12;
+  --faint: #696975;
+  --dawn: #99470c;
   --dawn-soft: #d9873f;
   --on-dawn: #fff8f0;
-  --ok: #237a52;
+  --ok: #1b6945;
   --bad: #b93a30;
   --sky: #2d6ba8;
   --horizon-from: #c9d3e2;

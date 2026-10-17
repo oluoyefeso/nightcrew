@@ -1,4 +1,6 @@
 export * from "./compose";
+export * from "./conductor";
+export { ConnectionEngine } from "./connection-engine";
 export { ConnectionError, checkConnection, discoverModels, normalizeConnectionUrl } from "./connections";
 export * from "./crew";
 export { deliveryReadiness } from "./delivery-readiness";
@@ -12,6 +14,7 @@ export * from "./operations";
 export * from "./pipeline";
 export { JevReflexes, NoReflexes, type Reflexes, reflexesFromEnv } from "./reflexes";
 export * from "./repository-readiness";
+export { RoutedEngine } from "./routed-engine";
 export { materializeRoutines } from "./routines";
 export { SdkEngine } from "./sdk-engine";
 export { repoSupport, taskRef, wipRef, workspaceDir } from "./workspace";

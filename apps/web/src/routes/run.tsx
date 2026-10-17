@@ -54,7 +54,7 @@ export function RunPage({ runId }: { runId: string }) {
         search={{ run: r.id }}
         className="inline-flex w-fit items-center gap-1.5 text-[12.5px] text-muted hover:text-fg"
       >
-        <ArrowLeft className="size-3.5" /> Station
+        <ArrowLeft className="size-3.5" /> Home
       </Link>
 
       <header className="grid gap-3">

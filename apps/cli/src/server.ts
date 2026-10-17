@@ -162,7 +162,7 @@ export function createApp(opts: ServerOptions) {
   mountTaskRoutes(app, { db, crew: opts.crew, engine: opts.engine, dataDir: opts.dataDir });
   mountOperationsRoutes(app, { db, crew: opts.crew, dataDir: opts.dataDir, publish: opts.publish });
   mountMissionRoutes(app, { db, crew: opts.crew });
-  mountConnectionRoutes(app, { db });
+  mountConnectionRoutes(app, { db, crew: opts.crew });
   mountTrustRoutes(app, { db, publish: opts.publish });
 
   app.post("/api/sync", async (c) => {

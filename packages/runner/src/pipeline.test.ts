@@ -294,6 +294,9 @@ describe("runTask", () => {
           return { text: "Done." };
         },
         review: (req) => {
+          expect(req.prompt).toContain('"failsOnBase":true');
+          expect(req.prompt).toContain('"passesOnBranch":true');
+          expect(req.prompt).toContain("on main with the new tests, exit 1");
           if (edits) writeFileSync(join(req.cwd, "src/feature.ts"), "export const feature = false;\n");
           return { structured: READY };
         },
@@ -598,6 +601,45 @@ test("a failed dependency install is logged with the end of its output", async (
 });
 
 describe("token budget split", () => {
+  test("an exhausted task cannot borrow a minimum allowance for review", async () => {
+    const task = setupTask({ workflow: "quick", tokenBudget: 20_000 });
+    const engine = new ScriptedEngine({
+      implement: (req) => {
+        writeFileSync(join(req.cwd, "src/feature.ts"), "export const feature = true;\n");
+        return { text: "Implemented.", tokensIn: 20_001, tokensOut: 0 };
+      },
+      review: () => ({ structured: READY }),
+    });
+    const out = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(engine.calls.map((call) => call.phase)).toEqual(["implement"]);
+    expect(getRun(db, out.runId)?.run.verdict).toBe("needs_eyes");
+  });
+
+  test("required reviewers share the remaining allowance and receive collected source evidence", async () => {
+    const task = setupTask({ workflow: "quick", tokenBudget: 200_000 });
+    updateRepo(db, task.repoId, { policies: { implementation: { ...DEFAULT_TASK_POLICY, reviewers: 2 } } });
+    const caps: number[] = [];
+    const engine = new ScriptedEngine({
+      implement: (req) => {
+        writeFileSync(join(req.cwd, "src/feature.ts"), "export const feature = true;\n");
+        return { text: "Implemented.", tokensIn: 100_000, tokensOut: 0 };
+      },
+      review: (req) => {
+        expect(req.guard.readOnly).toBe(true);
+        expect(req.prompt).toContain("Host-collected review context");
+        expect(req.prompt).toContain("+export const feature = true;");
+        expect(req.prompt).toContain("test -f src/feature.ts");
+        caps.push(req.maxTokens);
+        return { structured: READY, tokensIn: req.maxTokens, tokensOut: 0 };
+      },
+    });
+    const out = await runTask(deps(engine), task.id, new AbortController().signal);
+    expect(caps).toEqual([50_000, 50_000]);
+    expect(out.status).toBe("complete");
+    expect(getRun(db, out.runId)?.run.verdict).toBe("ready");
+    expect(out.tokens).toBe(200_000);
+  });
+
   // Value: protects=plan gets a capped slice, build leaves the reviewer its reserve, and caps used in full never pass the task's tokenBudget; fails_when=a cap formula or the review reserve changes; why_new=no test asserted per-phase maxTokens; seam=none
   test.each([
     // budget, plan cap, build cap, review cap (each phase burns its whole cap)
@@ -748,7 +790,29 @@ describe("review output", () => {
     expect(out.status).toBe("complete");
     const run = getRun(db, out.runId);
     expect(run?.run.verdict).toBe("needs_eyes");
-    expect(run?.artifacts.find((a) => a.kind === "review")?.content).toBe("lgtm");
+    expect(run?.artifacts.find((a) => a.kind === "review")?.content).toContain("No valid structured verdict");
+    expect(run?.artifacts.find((a) => a.kind === "review")?.content).toContain("lgtm");
+  });
+
+  test("an incomplete review preserves its stop reason before partial commentary", async () => {
+    const task = setupTask({ workflow: "quick" });
+    const engine = new ScriptedEngine({
+      implement: (req) => {
+        writeFileSync(join(req.cwd, "src", "feature.ts"), "export const feature = true;\n");
+        return { text: "Built the feature." };
+      },
+      review: () => ({
+        ok: false,
+        error: "Repeated tool requests were blocked.",
+        text: "Let me check one more thing.",
+      }),
+    });
+    const out = await runTask(deps(engine), task.id, new AbortController().signal);
+    const detail = getRun(db, out.runId)!;
+    expect(detail.run.verdict).toBe("needs_eyes");
+    const content = detail.artifacts.find((artifact) => artifact.kind === "review")!.content;
+    expect(content).toStartWith("# Review incomplete\n\nRepeated tool requests were blocked.");
+    expect(content).toContain("## Partial review\n\nLet me check one more thing.");
   });
 
   test("a ready verdict with an unmet or unreported criterion needs your eyes", async () => {

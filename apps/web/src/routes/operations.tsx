@@ -78,11 +78,11 @@ export function OperationsPage() {
       <section id="progress" className="grid scroll-mt-20 gap-3">
         <h2 className="text-[18px] font-medium">Running and recent operations</h2>
         <p className="text-[13px] text-muted">
-          Follow repository setup, mission verification and delivery here, including work started automatically.
-          Progress survives a page reload; a runner restart marks unfinished work interrupted.
+          Follow repository setup, goal verification and delivery here, including work started automatically. Progress
+          survives a page reload; a runner restart marks unfinished work interrupted.
         </p>
         {!data?.jobs.length && (
-          <p className="text-[13px] text-muted">Start mission verification or delivery to see its progress here.</p>
+          <p className="text-[13px] text-muted">Start goal verification or delivery to see its progress here.</p>
         )}
         {visibleJobs.map((job) => (
           <article key={job.id} className="grid gap-3 rounded-2xl bg-surface p-5 ring-1 ring-line">

@@ -72,7 +72,7 @@ The acceptance record includes your evidence, check results and snapshot. Change
 
 In a repository's **Routes by task type**, save the current rules as a named template. Load a template to preview the effective routes, then save to apply it. Templates are copied; editing a repository does not silently update other repositories.
 
-Choose one to three independent review sessions per task type. Extra reviewers are read-only, receive the task and evidence, and must all approve. They use the configured review model, so independence means separate sessions, not different providers. Additional reviews consume the task's token allowance. Running work retains stricter requirements observed while it runs; a late increase can hold landing until fresh verification.
+Choose one to three independent review sessions per task type. Reviewers are read-only, receive the task and collected evidence, and must all approve. They use the configured review model, so independence means separate sessions, not different providers. The remaining task token allowance is shared across the required reviews; an exhausted task cannot start another model call. Reported usage can still overshoot an in-flight call's allowance. Running work retains stricter requirements observed while it runs; a late increase can hold landing until fresh verification.
 
 Templates never promote the repository's autonomy ceiling, remove protected-path rules, or remove mandatory UI/bug-fix evidence.
 

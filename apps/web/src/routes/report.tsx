@@ -11,11 +11,12 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { clsx } from "clsx";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ArrowRight, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, crewQuery, reportQuery, toast } from "../api";
+import { ApiError, crewQuery, reportQuery, stationQuery, tasksQuery, toast } from "../api";
 import { AgentBoard } from "../components/agent-board";
 import { Horizon } from "../components/horizon";
+import { operationAttentionQuery } from "../components/operation-attention";
 import { RunPane } from "../components/run-pane";
 import { RunRow } from "../components/run-row";
 import { PromotionBanners, TrainCards } from "../components/trust";
@@ -24,9 +25,21 @@ import { BUCKET_COLOR, fmtDay, fmtWeekday, isTypingTarget } from "../lib";
 
 export function ReportPage({ nightId, runId }: { nightId?: string; runId?: string }) {
   const navigate = useNavigate();
-  const { data, isPending, error } = useQuery(reportQuery(nightId));
+  const { data, isPending, error, refetch } = useQuery(reportQuery(nightId));
   const [hovered, setHovered] = useState<string | null>(null);
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
+  const heading = useRef<HTMLHeadingElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const previousRun = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (isPending) return;
+    if (runId)
+      panel.current?.querySelector<HTMLButtonElement>('button[aria-label="Close"]')?.focus({ preventScroll: true });
+    else if (previousRun.current)
+      (rowRefs.current.get(previousRun.current) ?? heading.current)?.focus({ preventScroll: true });
+    previousRun.current = runId;
+  }, [runId, isPending]);
 
   const ordered = useMemo(() => {
     if (!data) return [] as Run[];
@@ -56,8 +69,22 @@ export function ReportPage({ nightId, runId }: { nightId?: string; runId?: strin
   }, [ordered, runId, select]);
 
   if (isPending) return <ReportSkeleton />;
-  if (error instanceof ApiError && error.status === 404) return <EmptyState />;
-  if (error || !data) return <p className="p-10 text-bad">{error?.message ?? "Something went wrong."}</p>;
+  if (error instanceof ApiError && error.status === 404) return <EmptyState historical={!!nightId} />;
+  if (error || !data)
+    return (
+      <div className="mx-auto grid max-w-[820px] gap-4 px-4 pt-12 sm:px-8">
+        <h1 className="t-h1">Your history couldn't load.</h1>
+        <p role="alert" className="text-bad">
+          {error?.message ?? "Something went wrong."}
+        </p>
+        <div>
+          <button type="button" onClick={() => refetch()} className="text-dawn underline">
+            Try again
+          </button>
+        </div>
+        <HomeAttention />
+      </div>
+    );
 
   // Agents still working appear under "Working now", not in the buckets or the greeting.
   const finished = data.runs.filter((r) => r.status !== "running");
@@ -69,16 +96,24 @@ export function ReportPage({ nightId, runId }: { nightId?: string; runId?: strin
       <section className={clsx("min-w-0 px-4 pt-8 pb-24 sm:px-8 lg:pt-12", runId && "hidden lg:block")}>
         <div className="mx-auto grid max-w-[820px] gap-7">
           <header className="grid gap-4">
-            <div className="flex items-center gap-1 font-mono text-[12px] text-muted">
-              <NightLink nightId={data.previousId} label="Previous night">
-                <ChevronLeft className="size-3.5" />
-              </NightLink>
-              <span className="px-1 tabular">{dayLabel(data.night.id, lastEnd ?? data.night.startedAt)}</span>
-              <NightLink nightId={data.nextId} label="Next night">
-                <ChevronRight className="size-3.5" />
-              </NightLink>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-1 font-mono text-[12px] text-muted">
+                <NightLink nightId={data.previousId} label="Previous day">
+                  <ChevronLeft className="size-3.5" />
+                </NightLink>
+                <span className="px-1 tabular">{dayLabel(data.night.id, lastEnd ?? data.night.startedAt)}</span>
+                <NightLink nightId={data.nextId} label="Next day">
+                  <ChevronRight className="size-3.5" />
+                </NightLink>
+                {data.nextId && (
+                  <Link to="/" className="ml-2 text-dawn">
+                    Latest
+                  </Link>
+                )}
+              </div>
+              <NewGoalLink />
             </div>
-            <h1 className="t-h1">
+            <h1 ref={heading} tabIndex={-1} className="t-h1">
               <TwoTone
                 text={
                   data.nextId
@@ -113,6 +148,7 @@ export function ReportPage({ nightId, runId }: { nightId?: string; runId?: strin
             />
           </header>
 
+          {!data.nextId && <HomeAttention />}
           {!data.nextId && <WorkingNow />}
           <PromotionBanners onToast={toast} />
           <TrainCards nightId={data.night.id} onOpen={select} />
@@ -149,7 +185,7 @@ export function ReportPage({ nightId, runId }: { nightId?: string; runId?: strin
             })}
           </div>
 
-          <p className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[12px] text-faint">
+          <p className="hidden flex-wrap items-center gap-x-4 gap-y-2 text-[12px] text-faint sm:flex">
             <span className="inline-flex items-center gap-1.5">
               <Kbd>J</Kbd>
               <Kbd>K</Kbd> move
@@ -174,7 +210,12 @@ export function ReportPage({ nightId, runId }: { nightId?: string; runId?: strin
       </section>
 
       {runId && (
-        <div className="lg:sticky lg:top-14 lg:h-[calc(100dvh-3.5rem)] lg:border-line lg:border-l">
+        <div
+          ref={panel}
+          role="region"
+          aria-label="Run evidence"
+          className="lg:sticky lg:top-14 lg:h-[calc(100dvh-3.5rem)] lg:border-line lg:border-l"
+        >
           <div className="h-[calc(100dvh-3.5rem)] lg:h-full">
             <RunPane runId={runId} onClose={() => select(null)} onToast={toast} />
           </div>
@@ -202,7 +243,11 @@ function NightLink({ nightId, label, children }: { nightId: string | null; label
 
 function ReportSkeleton() {
   return (
-    <div className="mx-auto grid max-w-[820px] gap-6 px-4 pt-12 sm:px-8">
+    <div
+      role="status"
+      aria-label="Loading your history"
+      className="mx-auto grid max-w-[820px] gap-6 px-4 pt-12 sm:px-8"
+    >
       <div className="h-4 w-28 rounded bg-raised" />
       <div className="h-12 w-3/4 rounded-lg bg-raised" />
       <div className="h-1 w-full rounded bg-raised" />
@@ -211,28 +256,97 @@ function ReportSkeleton() {
   );
 }
 
-function EmptyState() {
+function NewGoalLink() {
+  return (
+    <Link
+      to="/missions"
+      hash="new-goal"
+      className="inline-flex items-center gap-2 rounded-lg bg-fg px-3 py-2 font-medium text-[12px] text-bg"
+    >
+      <Plus className="size-3.5" /> New goal
+    </Link>
+  );
+}
+
+/** Keep unfinished decisions visible even when their report day is long past. */
+function HomeAttention() {
+  const station = useQuery(stationQuery);
+  const drafts = useQuery(tasksQuery(["draft"]));
+  const operations = useQuery(operationAttentionQuery);
+  const failed = station.isError || drafts.isError || operations.isError;
+  if (failed)
+    return (
+      <p role="alert" className="text-[13px] text-muted">
+        Couldn't check what needs you.{" "}
+        <button
+          type="button"
+          className="text-dawn underline"
+          onClick={() => {
+            void station.refetch();
+            void drafts.refetch();
+            void operations.refetch();
+          }}
+        >
+          Try again
+        </button>
+        {" · "}
+        <Link to="/work" hash="decisions" className="text-dawn">
+          Open work overview
+        </Link>
+      </p>
+    );
+  if (!station.data || !drafts.data || !operations.data)
+    return (
+      <p role="status" className="text-[13px] text-muted">
+        Checking what needs you…
+      </p>
+    );
+  const count =
+    station.data.decisions.length +
+    drafts.data.length +
+    station.data.queue.filter((entry) => entry.kind === "setup").length +
+    operations.data.total;
+  if (!count) return null;
+  return (
+    <Link
+      to="/work"
+      hash="decisions"
+      className="flex items-center justify-between gap-3 rounded-xl border border-line bg-surface px-4 py-3 text-[13px] hover:bg-raised"
+    >
+      <span>
+        <span className="font-medium">
+          {count} {count === 1 ? "item needs" : "items need"} you
+        </span>
+        <span className="text-muted"> · across all days</span>
+      </span>
+      <ArrowRight aria-hidden="true" className="size-4 shrink-0 text-muted" />
+    </Link>
+  );
+}
+
+function EmptyState({ historical }: { historical: boolean }) {
+  if (historical)
+    return (
+      <div className="mx-auto grid max-w-[620px] gap-5 px-4 pt-24 sm:px-8">
+        <h1 className="t-h1">No report for this day.</h1>
+        <Link to="/" className="text-dawn">
+          Return to latest history →
+        </Link>
+      </div>
+    );
   return (
     <div className="mx-auto grid max-w-[620px] gap-5 px-4 pt-24 sm:px-8">
       <h1 className="t-h1">
-        Nothing yet. <span className="text-faint">Your agents report here.</span>
+        Give your crew a goal. <span className="text-faint">Come back to results.</span>
       </h1>
       <p className="text-[15px] text-muted leading-relaxed">
-        Send work to your agents and their reports land here as they finish: what shipped, what needs you, and the
+        Describe the outcome you want. Your crew's work lands here as it finishes: what changed, what needs you, and the
         evidence for each.
       </p>
       <div>
-        <Link
-          to="/agents"
-          className="inline-flex h-9 items-center gap-2 rounded-full bg-dawn px-4 font-medium text-[13.5px] text-on-dawn"
-        >
-          Give the agents work
-        </Link>
+        <NewGoalLink />
       </div>
-      <p className="text-[13px] text-faint">
-        Used the classic runner? Import its history with{" "}
-        <span className="font-mono">nightcrew import --classic ~/path/to/nightcrew</span>
-      </p>
+      <HomeAttention />
     </div>
   );
 }

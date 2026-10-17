@@ -1,6 +1,6 @@
 # Evidence
 
-Routes in **Settings → Repos** can add verification requirements by task type. The task preview lists the effective requirements; the run's **Route** tab records what was enforced. Requirements can be added to any code task type, while UI visual evidence and bug-fix regression proof remain mandatory for automatic landing. If the Skeptic changes files after visual or regression evidence was collected, the run waits for review with a request for fresh evidence.
+Routes in **Settings → Repos** can add verification requirements by task type. The task preview lists the effective requirements; the run's **Route** tab records what was enforced. Requirements can be added to any code task type, while UI visual evidence and bug-fix regression proof remain mandatory for automatic landing. Reviewers are read-only. NightCrew also rechecks the work after review; changed files invalidate previously collected visual or regression evidence.
 
 The agent that wrote the code never grades it. NightCrew gathers evidence itself, then a separate reviewer, the Skeptic, tries to show the work isn't done.
 
@@ -16,7 +16,7 @@ Screenshots are taken in a real headless Chrome, using your installed Chrome or 
 
 ## The Skeptic
 
-The reviewer gets the diff, the acceptance criteria and a summary of the evidence. It has to:
+The reviewer gets a bounded packet containing the collected diff, file status, check output, acceptance criteria and evidence summary. Truncated content is labelled so the reviewer can inspect the missing source. It uses inspection tools and targeted checks to resolve gaps, without editing the work or repeating checks that already establish the same fact. It has to:
 
 - check each criterion against concrete evidence (a test name, a command and its output, a file and line),
 - make at least five challenges (edge cases, regressions, tests that might pass for the wrong reason, scope) and record which held,

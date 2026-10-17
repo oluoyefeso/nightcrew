@@ -176,7 +176,7 @@ describe("checkConnection", () => {
   test("HTTP failures give fixed actionable reasons without exposing provider details", async () => {
     for (const [status, reason] of [
       [401, "credential"],
-      [402, "payment or more credits"],
+      [402, "request budget"],
       [403, "permissions"],
       [404, "API route or selected model"],
       [429, "rate or quota limit"],

@@ -17,6 +17,7 @@ import {
   detectTestCommand,
   draftTasks,
   inspectRepo,
+  RoutedEngine,
   reflexesFromEnv,
   repoSupport,
   SdkEngine,
@@ -101,7 +102,6 @@ const values = {
 
 const command = positionals[0] ?? "up";
 const cwd = process.cwd();
-const usesAgents = ["up", "serve", "run"].includes(command);
 const compiled = import.meta.path.startsWith("/$bunfs") || import.meta.path.includes("~BUN");
 if (values.engine !== "local") {
   console.error(
@@ -111,22 +111,13 @@ if (values.engine !== "local") {
   );
   process.exit(1);
 }
-if (compiled && usesAgents && !values.demo && !Bun.which("claude")) {
-  console.error(`NightCrew runs its agents with Claude Code, and \`claude\` isn't on your PATH.
-
-  Install it:  npm i -g @anthropic-ai/claude-code
-  Log in:      claude   (once, then quit it)
-
-Then start NightCrew again. To look around without Claude, use: nightcrew --demo`);
-  process.exit(1);
-}
 mkdirSync(values.data, { recursive: true });
 setLandingHome(values.data);
 const db = openDb(join(values.data, "nightcrew.db"));
 const classicRoot = values.classic ? resolve(values.classic) : undefined;
 const engine: AgentEngine = values.demo
   ? new DemoEngine(Number(process.env.NIGHTCREW_DEMO_STEP_MS) || 900)
-  : new SdkEngine({ claudePath: claudeOnPath() });
+  : new RoutedEngine(db, new SdkEngine({ claudePath: claudeOnPath() }));
 const publish = !values["no-publish"] && !values.demo;
 const reflexes = reflexesFromEnv();
 const crew = new Crew({ db, engine, dataDir: values.data, publish, reflexes });
@@ -151,7 +142,7 @@ crew.subscribe((e) => {
 /** In the compiled binary the SDK can't find its bundled CLI, so use Claude Code from PATH. */
 function claudeOnPath(): string | undefined {
   if (!compiled) return undefined;
-  return Bun.which("claude") ?? undefined;
+  return Bun.which("claude") ?? "";
 }
 
 /**

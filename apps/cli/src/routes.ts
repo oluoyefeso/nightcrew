@@ -371,16 +371,32 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
 
   // ── Composer ──
   app.post("/api/compose", async (c) => {
-    const { text, repoId, missionId } = await body<{ text: string; repoId?: string; missionId?: string | null }>(c);
+    const { text, repoId, repoIds, missionId } = await body<{
+      text: string;
+      repoId?: string;
+      repoIds?: string[];
+      missionId?: string | null;
+    }>(c);
     const missionIssue = missionError(db, missionId);
     if (missionIssue) return c.json({ error: missionIssue }, 400);
     const mission = missionId ? getMission(db, missionId) : null;
     if (!text?.trim()) return c.json({ error: "Describe what the crew should do." }, 400);
+    let repos = listRepos(db);
+    if (repoIds !== undefined) {
+      if (
+        !Array.isArray(repoIds) ||
+        !repoIds.length ||
+        repoIds.some((id) => typeof id !== "string" || !repos.some((repo) => repo.id === id)) ||
+        (repoId && !repoIds.includes(repoId))
+      )
+        return c.json({ error: "Choose connected projects for this plan." }, 400);
+      repos = repos.filter((repo) => repoIds.includes(repo.id));
+    }
     try {
       const out = await draftTasks(deps.engine, {
         text,
         mission,
-        repos: listRepos(db),
+        repos,
         defaultRepoId: repoId,
         model: getSettings(db).buildModel,
       });
@@ -470,6 +486,8 @@ export function mountTaskRoutes(app: Hono, deps: { db: Db; crew: Crew; engine: A
   app.get("/api/settings", (c) => c.json(getSettings(db)));
   app.patch("/api/settings", async (c) => {
     const patch = await body<Settings>(c);
+    if (patch.executionConnectionId !== undefined)
+      return c.json({ error: "Choose the crew's provider from Model connections." }, 400);
     if (
       patch.scheduleAt !== undefined &&
       !(typeof patch.scheduleAt === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(patch.scheduleAt))

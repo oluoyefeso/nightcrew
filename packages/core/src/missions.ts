@@ -19,6 +19,7 @@ export interface Mission {
 }
 
 export interface MissionSummary extends Mission {
+  conductor?: import("./conductor").GoalConductor | null;
   counts: { total: number; running: number; queued: number; parked: number; needsYou: number; resolved: number };
   /** All local attempts charged to this mission at dispatch, including detached or deleted tasks. */
   tokensUsed: number;

@@ -5,6 +5,7 @@ import { api } from "../api";
 import { Field, Select, TextInput } from "./form";
 
 type ConnectionView = ModelConnection & {
+  usedForCrew: boolean;
   credentialConfigured: boolean;
   active: { kind: "models" | "check"; stopping: boolean } | null;
 };
@@ -15,7 +16,7 @@ const initial: Profile = { name: "Local model", baseUrl: "http://localhost:11434
 const openRouter: Profile = {
   name: "OpenRouter",
   baseUrl: "https://openrouter.ai/api/v1",
-  model: "",
+  model: "anthropic/claude-haiku-4.5",
   apiKeyEnv: "OPENROUTER_API_KEY",
 };
 
@@ -28,6 +29,12 @@ export function ModelConnections() {
     refetchInterval: open ? 2000 : false,
   });
   const qc = useQueryClient();
+  const useClaude = useMutation({
+    mutationFn: () => api.post("/api/connections/local-engine", {}),
+    onSuccess: () => {
+      void qc.invalidateQueries();
+    },
+  });
   const [adding, setAdding] = useState(false);
   const create = useMutation({
     mutationFn: (profile: Profile) => api.post<ConnectionView>("/api/connections", profile),
@@ -45,8 +52,9 @@ export function ModelConnections() {
         <div className="mt-4 grid gap-4">
           <p className="text-[13px] text-muted">
             OpenRouter is the recommended connection for hosted models with one key. You can also connect a local or
-            custom endpoint. Connections currently discover models and check tools; coding uses the crew engine shown
-            above.
+            custom endpoint. Choose Use for crew to send task code to that model for planning, implementation and
+            review, under your existing project permissions and token limits. Saving a connection alone does not change
+            execution.
           </p>
           {connections.isPending && <p className="text-[13px] text-muted">Loading connections…</p>}
           {connections.error && (
@@ -63,6 +71,23 @@ export function ModelConnections() {
           {connections.data?.map((connection) => (
             <ConnectionRow key={connection.id} connection={connection} />
           ))}
+          {connections.data?.some((connection) => connection.usedForCrew) && (
+            <div>
+              <button
+                type="button"
+                className={button}
+                disabled={useClaude.isPending}
+                onClick={() => useClaude.mutate()}
+              >
+                Use Claude Code instead
+              </button>
+              {useClaude.error && (
+                <p role="alert" className="mt-2 text-[12px] text-bad">
+                  {useClaude.error.message}
+                </p>
+              )}
+            </div>
+          )}
           {adding ? (
             <ProfileEditor
               initial={initial}
@@ -113,6 +138,12 @@ function ConnectionRow({ connection: c }: { connection: ConnectionView }) {
     mutationFn: () => api.post(`${path}/check`, { revision: c.revision }),
     onSettled: refresh,
   });
+  const useForCrew = useMutation({
+    mutationFn: () => api.post(`${path}/use`, { revision: c.revision }),
+    onSuccess: () => {
+      void qc.invalidateQueries();
+    },
+  });
   const discover = useMutation({
     mutationFn: () => api.post<{ models: string[] }>(`${path}/models`, { revision: c.revision }),
     onSuccess: (result) => {
@@ -145,13 +176,13 @@ function ConnectionRow({ connection: c }: { connection: ConnectionView }) {
           cancelled: "Check stopped",
         }[c.lastCheck.status]
       : "Unchecked";
-  const error = check.error ?? discover.error ?? stop.error ?? remove.error;
+  const error = useForCrew.error ?? check.error ?? discover.error ?? stop.error ?? remove.error;
   return (
     <article aria-label={c.name} className="min-w-0 border-t border-line pt-4">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h3 className="font-medium text-[14px] break-all">{c.name}</h3>
         <span role="status" className="text-[12px] text-muted">
-          {status}
+          {c.usedForCrew ? `Used by crew · ${status}` : status}
         </span>
       </div>
       <p className="mt-1 break-all font-mono text-[11.5px] text-faint">
@@ -175,6 +206,16 @@ function ConnectionRow({ connection: c }: { connection: ConnectionView }) {
           </button>
         ) : (
           <>
+            {!c.usedForCrew && (
+              <button
+                type="button"
+                className={button}
+                disabled={!c.model || !c.credentialConfigured || editing || useForCrew.isPending}
+                onClick={() => useForCrew.mutate()}
+              >
+                Use for crew
+              </button>
+            )}
             <button
               type="button"
               className={button}
@@ -189,7 +230,7 @@ function ConnectionRow({ connection: c }: { connection: ConnectionView }) {
             <button
               type="button"
               className={button}
-              disabled={!c.credentialConfigured || editing}
+              disabled={!c.credentialConfigured || editing || c.usedForCrew}
               onClick={() => {
                 discover.reset();
                 discover.mutate();
@@ -200,6 +241,7 @@ function ConnectionRow({ connection: c }: { connection: ConnectionView }) {
             <button
               type="button"
               className={button}
+              disabled={c.usedForCrew}
               onClick={() => {
                 save.reset();
                 setEditing(!editing);
@@ -211,6 +253,11 @@ function ConnectionRow({ connection: c }: { connection: ConnectionView }) {
           </>
         )}
       </div>
+      {c.usedForCrew && (
+        <p className="mt-2 text-[11.5px] text-faint">
+          Choose another connection or Claude Code before editing or removing this connection.
+        </p>
+      )}
       <p className="mt-2 text-[11.5px] text-faint">
         Tool checks use provider tokens outside task budgets and send only a synthetic prompt. They stop waiting after
         30 seconds.
@@ -256,7 +303,7 @@ function ConnectionRow({ connection: c }: { connection: ConnectionView }) {
           </div>
         </details>
       )}
-      {!busy && (
+      {!busy && !c.usedForCrew && (
         <div className="mt-3 flex flex-wrap items-center gap-2 text-[12px] text-faint">
           {confirmRemove ? (
             <>

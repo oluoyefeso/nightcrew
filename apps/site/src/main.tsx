@@ -640,7 +640,7 @@ function Site() {
 
       <footer className="border-line border-t">
         <div className="mx-auto flex max-w-[1120px] flex-wrap items-center justify-between gap-4 px-5 py-8 text-[13px] text-muted">
-          <span>NightCrew · MIT licensed · powered by Claude</span>
+          <span>NightCrew · MIT licensed · Runs locally</span>
           <div className="flex gap-5">
             <a href={REPO} className="hover:text-fg">
               GitHub

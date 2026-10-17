@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTask, getRun, getTask, listRepos, listTasks, openDb } from "@nightcrew/db";
@@ -74,6 +74,81 @@ describe("relative data directories", () => {
     }
   });
 });
+
+test("the real CLI loads private credentials and startup defaults without exposing key values", async () => {
+  const secret = "synthetic-credential-for-cli-test";
+  const file = join(root, "private.env");
+  writeFileSync(
+    file,
+    `OPENROUTER_API_KEY=${secret}\nNIGHTCREW_HOME=private-data\nNIGHTCREW_PORT=0\nNIGHTCREW_DEMO=1\n`,
+    { mode: 0o600 },
+  );
+  const env: NodeJS.ProcessEnv = { ...process.env, TYPESAFE_API_KEY: "" };
+  for (const name of ["OPENROUTER_API_KEY", "NIGHTCREW_HOME", "NIGHTCREW_PORT", "NIGHTCREW_DEMO", "NIGHTCREW_DEV"])
+    delete env[name];
+  const proc = Bun.spawn(
+    [
+      process.execPath,
+      "--no-env-file",
+      join(import.meta.dir, "main.ts"),
+      "serve",
+      "--env-file",
+      file,
+      "--offline",
+      "--no-open",
+      "--no-publish",
+    ],
+    { cwd: root, env, stdout: "pipe", stderr: "pipe" },
+  );
+  const reader = proc.stdout.getReader();
+  const stderr = new Response(proc.stderr).text();
+  let output = "";
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const launch = await Promise.race([
+      (async () => {
+        const decoder = new TextDecoder();
+        for (;;) {
+          const chunk = await reader.read();
+          if (chunk.done) throw new Error("The fixture server exited before startup.");
+          output += decoder.decode(chunk.value, { stream: true });
+          const match = output.match(/http:\/\/localhost:(\d+)\/\?t=([a-f0-9]{64})/);
+          if (match) return { base: `http://localhost:${match[1]}`, token: match[2]! };
+        }
+      })(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("The fixture server did not start.")), 10_000);
+      }),
+    ]);
+    expect(existsSync(join(root, "private-data", "nightcrew.db"))).toBe(true);
+    expect((await fetch(`${launch.base}/api/connections`)).status).toBe(401);
+    const headers = { "x-nightcrew-token": launch.token, "content-type": "application/json" };
+    const created = await fetch(`${launch.base}/api/connections`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        name: "OpenRouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        model: "",
+        apiKeyEnv: "OPENROUTER_API_KEY",
+      }),
+    });
+    expect(created.status).toBe(201);
+    const profile = await created.text();
+    expect(JSON.parse(profile)).toMatchObject({ credentialConfigured: true, apiKeyEnv: "OPENROUTER_API_KEY" });
+    expect(profile).not.toContain(secret);
+    const listed = await fetch(`${launch.base}/api/connections`, { headers }).then((r) => r.text());
+    expect(listed).not.toContain(secret);
+    expect(JSON.parse(listed)).toHaveLength(1);
+    expect(output).not.toContain(secret);
+  } finally {
+    clearTimeout(timer);
+    proc.kill();
+    await proc.exited;
+    await reader.cancel();
+    expect(await stderr).not.toContain(secret);
+  }
+}, 15_000);
 
 describe("nightcrew add", () => {
   test("managed mode is coming soon and exits before creating local data", async () => {

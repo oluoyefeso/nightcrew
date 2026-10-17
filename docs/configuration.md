@@ -1,16 +1,32 @@
 # Configuration
 
-Configure the crew in the dashboard. Credentials referenced by model connections are set in the environment before starting NightCrew.
+Configure the crew in the dashboard. Load credentials before starting NightCrew, either from your shell environment or an explicitly selected private environment file.
 
 ## Model connections (optional)
 
-In **Settings → Model connections**, save an API base URL and optionally a model ID and credential environment variable name. Use HTTPS for hosted endpoints or HTTP on loopback for a local runtime. Keep key values out of the profile; NightCrew reads the named variable from its own process environment.
+In **Settings → Model connections**, choose **Add OpenRouter** for the recommended hosted connection. It fills in `https://openrouter.ai/api/v1` and the credential variable name `OPENROUTER_API_KEY`. One OpenRouter key gives access to its model catalog; model availability, tool support and pricing vary. **Add local or custom connection** keeps other providers and local runtimes available.
+
+Create a private `.env.local` file, keep it out of version control, and put your key after the equals sign:
+
+```dotenv
+OPENROUTER_API_KEY=
+```
+
+Start NightCrew with that file:
+
+```sh
+nightcrew --env-file .env.local
+```
+
+The compiled CLI loads a file only when explicitly requested. Existing exported variables take precedence, including empty values. The file is parsed as data, never executed as shell code; use uppercase variable names. Restart NightCrew after changing it. Profiles store the variable name, not the key value, and the dashboard reports whether that variable is available to its running process. Availability does not establish that a provider will accept the key.
+
+For a custom connection, save an API base URL and optionally a model ID and credential environment variable name. Use HTTPS for hosted endpoints or HTTP on loopback for a local runtime. Keep key values out of the profile.
 
 **Discover models** requests the endpoint's `/models` list. Choose a model and save, then **Check tools** sends at most two non-streaming `/chat/completions` requests for one synthetic Read exchange. The file exists only in memory; the check cannot read your repository or run commands. Discovery waits up to 15 seconds and a tool check up to 30 seconds. Redirects and automatic retries are refused.
 
 Checks may incur provider charges and are separate from task and mission budgets. Check evidence records the result, response count, elapsed time and observed token counters; missing usage stays unknown. **Stop check** cancels NightCrew's request but cannot guarantee the provider stops inference. Editing a connection clears its previous result and prevents an in-flight result from certifying the changed profile.
 
-Failures distinguish refused credentials, rate or quota limits, missing API routes or models, and recognized reports that a model does not support tools. These are fixed diagnostic messages; raw provider responses are not displayed or stored in check evidence.
+Failures distinguish refused credentials, payment or credit limits, rate or quota limits, missing API routes or models, and recognized reports that a model does not support tools. These are fixed diagnostic messages; raw provider responses are not displayed or stored in check evidence.
 
 Saved connections are diagnostics only. Passing the synthetic exchange does not verify coding ability or enable task execution. The local coding runner still uses Claude Code; managed mode remains Coming soon.
 
@@ -72,6 +88,7 @@ Crew sessions are isolated: no filesystem settings, MCP servers, skills or plugi
 | Variable | Effect |
 |---|---|
 | `ANTHROPIC_API_KEY` | Used by the crew when set; otherwise your Claude Code login. |
+| `OPENROUTER_API_KEY` | Used by the OpenRouter connection preset for discovery and synthetic tool checks. Does not switch the coding engine. |
 | `TYPESAFE_API_KEY` | Turns on Jev (TypeSafe's System One model) for fast judgement calls: workflow choice, merge confidence, failure classification. Without it, rules decide. |
 | `NIGHTCREW_HOME` | Data folder (default `~/.nightcrew`). Relative paths, including `--data`, resolve from the directory where the CLI starts. |
 | `NIGHTCREW_PORT` | Dashboard port (default 3721). |
@@ -90,6 +107,7 @@ nightcrew import              Import 0.x (classic) history
 --demo             Pretend crew that spends nothing
 --engine local     Run agents on this machine (default; managed mode is coming soon)
 --no-publish   Keep branches local: don't push or open PRs
+--env-file <file>  Load a private environment file; exported variables take precedence
 --port, --no-open, --data, --classic, --offline
 ```
 

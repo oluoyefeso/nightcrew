@@ -63,7 +63,7 @@ export function MissionControls({
         <Field
           label="Goal token limit"
           htmlFor="mission-budget"
-          hint="Blank means no separate limit. Includes all attempts charged to this goal."
+          hint="Blank means no separate goal limit. Daily and per-task limits still apply. Includes all attempts charged to this goal."
         >
           <TextInput
             id="mission-budget"

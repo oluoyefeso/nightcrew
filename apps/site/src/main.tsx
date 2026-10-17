@@ -609,8 +609,8 @@ function Site() {
                   authority.
                 </p>
                 <p className="text-[13px] text-muted leading-relaxed">
-                  Optional model connections let you discover models and check a synthetic tool exchange on a local or
-                  hosted endpoint. These checks do not enable coding with that endpoint.
+                  OpenRouter is the recommended hosted model connection. Local and custom endpoints are also supported
+                  for model discovery and synthetic tool checks. These checks do not enable coding with that endpoint.
                 </p>
               </div>
               <div className="grid gap-2 rounded-2xl bg-surface p-6 ring-1 ring-line">

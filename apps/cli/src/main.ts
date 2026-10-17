@@ -23,6 +23,7 @@ import {
   setLandingHome,
   takeCrewLock,
 } from "@nightcrew/runner";
+import { loadEnvFile } from "./env-file";
 import { createApp, VERSION } from "./server";
 import { syncClassic } from "./sync";
 
@@ -46,23 +47,25 @@ Options
   --no-publish        Keep branches local: don't push or open PRs
   --classic <dir>     Classic NightCrew directory (default: auto-detect)
   --data <dir>        Where NightCrew keeps its data (default ~/.nightcrew)
+  --env-file <file>   Load a private environment file; exported variables take precedence
   --offline           Skip GitHub lookups during import
 `;
 
-const { values, positionals } = parseArgs({
+const { values: args, positionals } = parseArgs({
   args: Bun.argv.slice(2),
   allowPositionals: true,
   options: {
-    port: { type: "string", default: process.env.NIGHTCREW_PORT ?? "3721" },
+    port: { type: "string" },
     "no-open": { type: "boolean", default: false },
     repo: { type: "string" },
     later: { type: "boolean", default: false },
     schedule: { type: "boolean", default: false },
-    demo: { type: "boolean", default: process.env.NIGHTCREW_DEMO === "1" },
-    engine: { type: "string", default: process.env.NIGHTCREW_ENGINE ?? "local" },
+    demo: { type: "boolean" },
+    engine: { type: "string" },
     "no-publish": { type: "boolean", default: false },
     classic: { type: "string" },
-    data: { type: "string", default: process.env.NIGHTCREW_HOME ?? join(homedir(), ".nightcrew") },
+    data: { type: "string" },
+    "env-file": { type: "string" },
     offline: { type: "boolean", default: false },
     dev: { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
@@ -70,20 +73,34 @@ const { values, positionals } = parseArgs({
   },
 });
 
-if (values.help) {
+if (args.help) {
   console.log(HELP);
   process.exit(0);
 }
-if (values.version) {
+if (args.version) {
   console.log(VERSION);
   process.exit(0);
 }
 
+if (args["env-file"]) {
+  try {
+    loadEnvFile(resolve(args["env-file"]));
+  } catch (error) {
+    console.error((error as Error).message);
+    process.exit(1);
+  }
+}
+const values = {
+  ...args,
+  port: args.port ?? process.env.NIGHTCREW_PORT ?? "3721",
+  demo: args.demo ?? process.env.NIGHTCREW_DEMO === "1",
+  engine: args.engine ?? process.env.NIGHTCREW_ENGINE ?? "local",
+  // Downstream git commands change cwd; resolve paths from the launch directory.
+  data: resolve(args.data ?? process.env.NIGHTCREW_HOME ?? join(homedir(), ".nightcrew")),
+};
+
 const command = positionals[0] ?? "up";
 const cwd = process.cwd();
-// Downstream git commands change cwd; every workspace and artifact path must
-// still resolve against the directory where the CLI was launched.
-values.data = resolve(values.data);
 const usesAgents = ["up", "serve", "run"].includes(command);
 const compiled = import.meta.path.startsWith("/$bunfs") || import.meta.path.includes("~BUN");
 if (values.engine !== "local") {

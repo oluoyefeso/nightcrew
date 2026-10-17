@@ -27,6 +27,7 @@ type Failure =
   | "network"
   | "rejected"
   | "credentials"
+  | "credits"
   | "rate-limit"
   | "not-found"
   | "unsupported-tools"
@@ -48,6 +49,7 @@ const MESSAGES: Record<Failure, string> = {
   network: "The endpoint could not be reached, or tried to redirect.",
   rejected: "The endpoint refused the request.",
   credentials: "The endpoint refused access. Check the credential and its permissions.",
+  credits: "The endpoint requires payment or more credits. Check the provider balance and key spending limit.",
   "rate-limit": "The endpoint reported a rate or quota limit. Check the provider limit before trying again.",
   "not-found": "The endpoint could not find the API route or selected model. Check the base URL and model ID.",
   "unsupported-tools":
@@ -228,11 +230,13 @@ async function exchange(
     throw new ConnectionError(
       res.status === 401 || res.status === 403
         ? "credentials"
-        : res.status === 429
-          ? "rate-limit"
-          : res.status === 404
-            ? "not-found"
-            : "rejected",
+        : res.status === 402
+          ? "credits"
+          : res.status === 429
+            ? "rate-limit"
+            : res.status === 404
+              ? "not-found"
+              : "rejected",
     );
   }
   const text = await readLimited(res, limit, scope);

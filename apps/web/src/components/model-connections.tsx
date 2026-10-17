@@ -12,6 +12,12 @@ type Profile = Pick<ModelConnection, "name" | "baseUrl" | "model" | "apiKeyEnv">
 const queryKey = ["connections"];
 const button = "rounded-lg border border-line px-3 py-1.5 text-[12.5px] hover:bg-raised disabled:opacity-40";
 const initial: Profile = { name: "Local model", baseUrl: "http://localhost:11434/v1", model: "", apiKeyEnv: null };
+const openRouter: Profile = {
+  name: "OpenRouter",
+  baseUrl: "https://openrouter.ai/api/v1",
+  model: "",
+  apiKeyEnv: "OPENROUTER_API_KEY",
+};
 
 /** Optional connection management stays inside Settings, away from the goal workspace. */
 export function ModelConnections() {
@@ -38,8 +44,9 @@ export function ModelConnections() {
         </summary>
         <div className="mt-4 grid gap-4">
           <p className="text-[13px] text-muted">
-            Save a local or hosted compatible endpoint and check its tools. These connections do not run tasks; coding
-            still uses the crew engine shown above.
+            OpenRouter is the recommended connection for hosted models with one key. You can also connect a local or
+            custom endpoint. Connections currently discover models and check tools; coding uses the crew engine shown
+            above.
           </p>
           {connections.isPending && <p className="text-[13px] text-muted">Loading connections…</p>}
           {connections.error && (
@@ -48,6 +55,11 @@ export function ModelConnections() {
             </p>
           )}
           {connections.data?.length === 0 && <p className="text-[13px] text-faint">No connections saved.</p>}
+          {create.error && !adding && (
+            <p role="alert" className="text-[13px] text-bad">
+              {create.error.message}
+            </p>
+          )}
           {connections.data?.map((connection) => (
             <ConnectionRow key={connection.id} connection={connection} />
           ))}
@@ -60,16 +72,29 @@ export function ModelConnections() {
               onCancel={() => setAdding(false)}
             />
           ) : (
-            <button
-              type="button"
-              className={`${button} justify-self-start`}
-              onClick={() => {
-                create.reset();
-                setAdding(true);
-              }}
-            >
-              Add connection
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {!connections.data?.some((c) => c.baseUrl === openRouter.baseUrl) && (
+                <button
+                  type="button"
+                  className="rounded-lg bg-fg px-3 py-1.5 text-[12.5px] text-bg hover:opacity-90 disabled:opacity-40"
+                  disabled={create.isPending || connections.isPending || Boolean(connections.error)}
+                  onClick={() => create.mutate(openRouter)}
+                >
+                  {create.isPending ? "Adding…" : "Add OpenRouter"}
+                </button>
+              )}
+              <button
+                type="button"
+                className={`${button} justify-self-start`}
+                disabled={create.isPending}
+                onClick={() => {
+                  create.reset();
+                  setAdding(true);
+                }}
+              >
+                Add local or custom connection
+              </button>
+            </div>
           )}
         </div>
       </details>
@@ -133,7 +158,10 @@ function ConnectionRow({ connection: c }: { connection: ConnectionView }) {
         {c.model || "Choose a model"} · {c.baseUrl}
       </p>
       {!c.credentialConfigured && (
-        <p className="mt-2 text-[12px] text-warn">Set {c.apiKeyEnv} before starting NightCrew, then restart.</p>
+        <p className="mt-2 text-[12px] text-warn">
+          Set {c.apiKeyEnv} in your shell or a private environment file, then restart NightCrew. Use --env-file to load
+          a file.
+        </p>
       )}
       <div className="mt-3 flex flex-wrap gap-2">
         {busy ? (

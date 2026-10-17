@@ -80,8 +80,14 @@ export function CommandBar() {
             },
           ]
         : []),
-      { id: "station", label: "Home", group: "Go to", keywords: "station decisions", run: go("/") },
-      { id: "report", label: "Daily reports", group: "Go to", run: go("/history") },
+      {
+        id: "report",
+        label: "Home · daily history",
+        group: "Go to",
+        keywords: "reports results evidence",
+        run: go("/"),
+      },
+      { id: "station", label: "Work overview", group: "Go to", keywords: "station decisions queue", run: go("/work") },
       { id: "agents", label: "Agents", group: "Go to", run: go("/agents") },
       { id: "missions", label: "Goals", group: "Go to", keywords: "missions objectives", run: go("/missions") },
       { id: "later", label: "Later", group: "Go to", run: go("/later") },

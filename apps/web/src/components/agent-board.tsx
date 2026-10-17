@@ -156,7 +156,7 @@ export function CrewSummary() {
       <div className="grid gap-2">
         <p className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-[12.5px] text-muted tabular">
           <span>
-            <b className="font-medium text-fg">{s.active.length}</b>/{s.maxAgents} working
+            <b className="font-medium text-fg">{s.active.length + (s.coordinating ?? 0)}</b>/{s.maxAgents} working
           </span>
           <span>
             <b className="font-medium text-fg">{s.queued}</b> queued
@@ -171,7 +171,7 @@ export function CrewSummary() {
           )}
           <span>
             <b className="font-medium text-fg">{formatTokens(s.tokensToday)}</b> of {formatTokens(s.dailyTokenBudget)}{" "}
-            tokens today
+            tokens accounted today
           </span>
         </p>
         <div className="h-1 w-56 max-w-full overflow-hidden rounded-full bg-raised">

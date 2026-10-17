@@ -34,6 +34,8 @@ export interface PhaseResult {
   text: string;
   structured: unknown;
   costUsd: number;
+  /** Absent means the adapter reported cost. Unknown costs must not appear as known zero. */
+  costStatus?: "reported" | "unknown";
   tokensIn: number;
   tokensOut: number;
   turns: number;

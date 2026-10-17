@@ -2,6 +2,27 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.22] - 2026-10-17
+
+### Added
+
+- Start a goal from an outcome and a remembered project. The persistent conductor plans bounded tasks, passes checked prerequisite changes forward, and verifies the combined result against the goal's criteria. Questions, setup gaps and exhausted allowances stay visible in the goal workspace.
+- Saved OpenRouter, local and custom model connections can now run planning, implementation and independent review through a direct compatible tool loop. **Use for crew** explicitly selects a connection; saving or checking one does not switch execution or resume dispatch. Claude Code remains available.
+- History remains Home. Success criteria and goal limits are optional controls, with direct editing and inline recovery. Save for later keeps a goal without starting work.
+
+### Fixed
+
+- Missing project checks hold goal verification without repeatedly launching it. Interrupted or unaccounted coordinator calls retain their reservations until explicitly continued.
+- Reviewers receive host-collected changes, test output and regression proof. Reviews are read-only, share the remaining allowance, and retain a clear stop reason when incomplete.
+- Direct file tools reject paths outside permitted workspaces. Task commands cannot change to a host project directory. Provider errors are sanitized; missing token accounting holds execution before further tools run, and missing cost remains unknown.
+- Claude Code is no longer required just to open the dashboard and configure another model connection.
+
+### Compatibility and limits
+
+- Migration 0015 persists conductor state, calls, handoffs and goal results. Each coordinated goal uses one project. Results require task review, combined checks and an independent criterion review; a held review does not count as success.
+- Compatible connections require function tools and token usage reporting. Model competence varies, and live execution can still stop for review or permissions. Token thresholds follow reported usage and may overshoot; optional goal limits do not remove shared daily or task limits or create a guaranteed dollar cap.
+- Demo mode remains simulated, repository authority is unchanged, and Managed remains Coming soon.
+
 ## [1.0.0-alpha.21] - 2026-10-17
 
 ### Added

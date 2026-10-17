@@ -2,7 +2,7 @@ import { AUTONOMY_LABEL, type AutonomyLevel, type Repo, type Settings } from "@n
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 import { useState } from "react";
-import { api, crewQuery, infoQuery, reposQuery, settingsQuery } from "../api";
+import { api, crewQuery, reposQuery, settingsQuery } from "../api";
 import { AddRepo } from "../components/add-repo";
 import { DeliveryEditor } from "../components/delivery-editor";
 import { ChipsEditor, Field, Select, TextInput } from "../components/form";
@@ -21,7 +21,6 @@ export function SettingsPage() {
   const settings = useQuery(settingsQuery);
   const repos = useQuery(reposQuery);
   const crew = useQuery(crewQuery);
-  const info = useQuery(infoQuery);
   const qc = useQueryClient();
   const save = useMutation({
     mutationFn: (patch: Partial<Settings>) => api.patch<Settings>("/api/settings", patch),
@@ -41,55 +40,30 @@ export function SettingsPage() {
         <h1 className="t-h1">Settings</h1>
         <p className="text-[14px] text-muted">
           Crew engine: <span className="font-mono text-fg">{crew.data?.engine ?? "…"}</span>
-          {crew.data?.engine === "demo" && " (pretend runs, nothing is spent or pushed)"}
+          {crew.data?.engine === "demo" && " (simulated tasks; explicit connection checks can use provider tokens)"}
         </p>
       </header>
 
-      <div className="grid gap-2 rounded-2xl bg-surface p-5 ring-1 ring-line">
-        <h2 className="font-medium text-[15px]">Open source, on your machine</h2>
-        <p className="text-[13.5px] text-muted">
-          Choose where the crew works, how it verifies changes, and who makes the merge decision. The local runner is
-          the core NightCrew experience.
-        </p>
-        <p className="text-[12px] text-faint">Managed mode · Coming soon</p>
-      </div>
-
       <ModelConnections />
+
+      {settings.isPending && (
+        <p role="status" className="text-muted">
+          Loading crew limits…
+        </p>
+      )}
+      {settings.error && (
+        <p role="alert" className="text-bad">
+          Couldn't load crew limits.{" "}
+          <button type="button" className="underline" onClick={() => settings.refetch()}>
+            Try again
+          </button>
+        </p>
+      )}
 
       {s && (
         <section className="grid gap-5">
-          <h2 className="font-medium text-[16px] tracking-[-0.02em]">Agents</h2>
-          <div className="grid gap-4 sm:grid-cols-3">
-            <Field label="Agents at once" htmlFor="max-agents" hint="Across all repos.">
-              <TextInput
-                id="max-agents"
-                type="number"
-                min={1}
-                max={12}
-                defaultValue={s.maxAgents}
-                onBlur={(e) =>
-                  save.mutate({ maxAgents: Math.min(12, Math.max(1, Math.round(Number(e.target.value) || 1))) })
-                }
-                className="font-mono"
-              />
-            </Field>
-            <Field
-              label="Per repo"
-              htmlFor="per-repo"
-              hint="Above 1, same-repo agents use separate branches; the train catches conflicts."
-            >
-              <TextInput
-                id="per-repo"
-                type="number"
-                min={1}
-                max={6}
-                defaultValue={s.maxPerRepo}
-                onBlur={(e) =>
-                  save.mutate({ maxPerRepo: Math.min(6, Math.max(1, Math.round(Number(e.target.value) || 1))) })
-                }
-                className="font-mono"
-              />
-            </Field>
+          <h2 className="font-medium text-[16px] tracking-[-0.02em]">Crew limits</h2>
+          <div className="grid gap-4 sm:grid-cols-2">
             <Field
               label="Daily token budget (millions)"
               htmlFor="budget"
@@ -107,8 +81,6 @@ export function SettingsPage() {
                 className="font-mono"
               />
             </Field>
-          </div>
-          <div className="grid gap-4 sm:grid-cols-3">
             <Field label="Dispatch" htmlFor="dispatch" hint="Paused: running agents finish, nothing new starts.">
               <Select
                 id="dispatch"
@@ -119,77 +91,120 @@ export function SettingsPage() {
                 <option value="off">Paused</option>
               </Select>
             </Field>
-            <Field
-              label="Schedule time"
-              htmlFor="schedule"
-              hint={'Where "Schedule" sends work, e.g. off-peak. Local time.'}
-            >
-              <TextInput
-                id="schedule"
-                type="time"
-                defaultValue={s.scheduleAt}
-                onBlur={(e) => {
-                  // A cleared time field means "no change"; the schedule always needs a time.
-                  if (!e.target.value) e.target.value = s.scheduleAt;
-                  else if (e.target.value !== s.scheduleAt) save.mutate({ scheduleAt: e.target.value });
-                }}
-                className="font-mono"
-              />
-            </Field>
-            <Field
-              label="Slack webhook"
-              htmlFor="slack"
-              hint="Optional. Agents report there when they finish or need you."
-            >
-              <TextInput
-                id="slack"
-                defaultValue={s.slackWebhookUrl ?? ""}
-                onBlur={(e) =>
-                  (e.target.value || null) !== s.slackWebhookUrl &&
-                  save.mutate({ slackWebhookUrl: e.target.value.trim() || null })
-                }
-                placeholder="https://hooks.slack.com/…"
-                className="font-mono"
-              />
-            </Field>
           </div>
-          <BrowserNotifications />
-          <div className="grid gap-4 sm:grid-cols-3">
-            {(
-              [
-                ["planModel", "Planning model"],
-                ["buildModel", "Building model"],
-                ["reviewModel", "Review model"],
-              ] as const
-            ).map(([key, label]) => (
-              <Field key={key} label={label} htmlFor={key}>
-                <TextInput
-                  id={key}
-                  defaultValue={s[key]}
-                  onBlur={(e) => e.target.value && e.target.value !== s[key] && save.mutate({ [key]: e.target.value })}
-                  className="font-mono"
-                />
-              </Field>
-            ))}
-          </div>
+          <details className="border-t border-line pt-4">
+            <summary className="cursor-pointer text-[13px] text-muted">Advanced crew settings</summary>
+            <div className="mt-5 grid gap-5">
+              <div className="grid gap-4 sm:grid-cols-3">
+                <Field label="Agents at once" htmlFor="max-agents" hint="Across all repos.">
+                  <TextInput
+                    id="max-agents"
+                    type="number"
+                    min={1}
+                    max={12}
+                    defaultValue={s.maxAgents}
+                    onBlur={(e) =>
+                      save.mutate({ maxAgents: Math.min(12, Math.max(1, Math.round(Number(e.target.value) || 1))) })
+                    }
+                    className="font-mono"
+                  />
+                </Field>
+                <Field
+                  label="Per repo"
+                  htmlFor="per-repo"
+                  hint="Above 1, same-repo agents use separate branches; the train catches conflicts."
+                >
+                  <TextInput
+                    id="per-repo"
+                    type="number"
+                    min={1}
+                    max={6}
+                    defaultValue={s.maxPerRepo}
+                    onBlur={(e) =>
+                      save.mutate({ maxPerRepo: Math.min(6, Math.max(1, Math.round(Number(e.target.value) || 1))) })
+                    }
+                    className="font-mono"
+                  />
+                </Field>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-3">
+                <Field
+                  label="Schedule time"
+                  htmlFor="schedule"
+                  hint={'Where "Schedule" sends work, e.g. off-peak. Local time.'}
+                >
+                  <TextInput
+                    id="schedule"
+                    type="time"
+                    defaultValue={s.scheduleAt}
+                    onBlur={(e) => {
+                      // A cleared time field means "no change"; the schedule always needs a time.
+                      if (!e.target.value) e.target.value = s.scheduleAt;
+                      else if (e.target.value !== s.scheduleAt) save.mutate({ scheduleAt: e.target.value });
+                    }}
+                    className="font-mono"
+                  />
+                </Field>
+                <Field
+                  label="Slack webhook"
+                  htmlFor="slack"
+                  hint="Optional. Agents report there when they finish or need you."
+                >
+                  <TextInput
+                    id="slack"
+                    defaultValue={s.slackWebhookUrl ?? ""}
+                    onBlur={(e) =>
+                      (e.target.value || null) !== s.slackWebhookUrl &&
+                      save.mutate({ slackWebhookUrl: e.target.value.trim() || null })
+                    }
+                    placeholder="https://hooks.slack.com/…"
+                    className="font-mono"
+                  />
+                </Field>
+              </div>
+              <BrowserNotifications />
+              <div className="grid gap-4 sm:grid-cols-3">
+                {(
+                  [
+                    ["planModel", "Planning model"],
+                    ["buildModel", "Building model"],
+                    ["reviewModel", "Review model"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <Field key={key} label={label} htmlFor={key}>
+                    <TextInput
+                      id={key}
+                      defaultValue={s[key]}
+                      onBlur={(e) =>
+                        e.target.value && e.target.value !== s[key] && save.mutate({ [key]: e.target.value })
+                      }
+                      className="font-mono"
+                    />
+                  </Field>
+                ))}
+              </div>
+            </div>
+          </details>
           {save.error && <p className="text-[12.5px] text-bad">{save.error.message}</p>}
         </section>
       )}
 
       <section className="grid gap-5">
         <div className="grid gap-1">
-          <h2 className="font-medium text-[16px] tracking-[-0.02em]">Repos</h2>
+          <h2 className="font-medium text-[16px] tracking-[-0.02em]">Projects & permissions</h2>
           <p className="text-[13.5px] text-muted">
-            Where the crew may work. Each task gets its own clone in{" "}
-            {info.data?.workDir ? (
-              <span className="break-all font-mono">{info.data.workDir}</span>
-            ) : (
-              "NightCrew's work folder"
-            )}
-            , and its result lands in your repo by commit.
+            Choose where the crew may work and how far it may go. Technical setup is available when you need it.
           </p>
         </div>
         <div className="grid gap-3">
+          {repos.error && (
+            <p role="alert" className="text-bad">
+              Couldn't load projects.{" "}
+              <button type="button" className="underline" onClick={() => repos.refetch()}>
+                Try again
+              </button>
+            </p>
+          )}
           {repos.data?.map((r) => (
             <RepoCard key={r.id} repo={r} />
           ))}
@@ -279,19 +294,8 @@ function RepoCard({ repo }: { repo: Repo }) {
             ))}
           </Select>
         </Field>
-        <Field label="Test command" htmlFor={`test-${repo.id}`} hint="NightCrew runs it after every task.">
-          <TextInput
-            id={`test-${repo.id}`}
-            defaultValue={repo.testCommand ?? ""}
-            onBlur={(e) => update.mutate({ testCommand: e.target.value || null })}
-            placeholder="bun test"
-            className="font-mono"
-          />
-        </Field>
       </div>
       {update.error && <p className="text-[12.5px] text-bad">{update.error.message}</p>}
-      <DeliveryEditor key={`${repo.id}:${JSON.stringify(repo.delivery)}`} repo={repo} />
-      <PolicyEditor key={`${repo.id}:${JSON.stringify(repo.policies ?? {})}`} repo={repo} />
       {(level === "ship" || level === "train") && (
         <div className="grid gap-4 rounded-xl bg-raised/50 p-4">
           <div className="grid gap-4 sm:grid-cols-2">
@@ -339,66 +343,87 @@ function RepoCard({ repo }: { repo: Repo }) {
           <TrackLine repoId={repo.id} />
         </div>
       )}
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Install command" htmlFor={`setup-${repo.id}`} hint="Runs in each fresh task clone before tests.">
-          <TextInput
-            id={`setup-${repo.id}`}
-            defaultValue={repo.setupCommand ?? ""}
-            onBlur={(e) => update.mutate({ setupCommand: e.target.value || null })}
-            placeholder="bun install --frozen-lockfile"
-            className="font-mono"
-          />
-        </Field>
-        <Field
-          label="Preview command"
-          htmlFor={`preview-${repo.id}`}
-          hint={
-            <>
-              For UI screenshots. Gets <span className="font-mono">$PORT</span>; use{" "}
-              <span className="font-mono">static</span> to serve the folder.
-            </>
-          }
-        >
-          <TextInput
-            id={`preview-${repo.id}`}
-            defaultValue={repo.previewCommand ?? ""}
-            onBlur={(e) => update.mutate({ previewCommand: e.target.value || null })}
-            placeholder="bun run dev -- --port $PORT"
-            className="font-mono"
-          />
-        </Field>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Preview URL" htmlFor={`url-${repo.id}`}>
-          <TextInput
-            id={`url-${repo.id}`}
-            defaultValue={repo.previewUrl ?? "http://localhost:{port}"}
-            onBlur={(e) => update.mutate({ previewUrl: e.target.value || null })}
-            className="font-mono"
-          />
-        </Field>
-        <Field label="Pages to screenshot" htmlFor={`paths-${repo.id}`} hint="Up to six paths.">
-          <ChipsEditor
-            id={`paths-${repo.id}`}
-            value={repo.previewPaths}
-            onChange={(previewPaths) => update.mutate({ previewPaths })}
-            placeholder="/, /settings"
-          />
-        </Field>
-      </div>
-      <Field
-        label="Also protect these branches"
-        htmlFor={`pb-${repo.id}`}
-        hint={`${[...new Set([repo.defaultBranch, "main", "master"])].join(", ")} are always protected.`}
-      >
-        <ChipsEditor
-          id={`pb-${repo.id}`}
-          value={extra}
-          onChange={(protectedBranches) => update.mutate({ protectedBranches })}
-          placeholder="production, release/*"
-        />
-      </Field>
-      <RepositoryReadinessPanel repo={repo} />
+      <details className="border-t border-line pt-3">
+        <summary className="cursor-pointer text-[13px] text-muted">Project setup & execution</summary>
+        <div className="mt-5 grid gap-5">
+          <Field label="Test command" htmlFor={`test-${repo.id}`} hint="NightCrew runs it after every task.">
+            <TextInput
+              id={`test-${repo.id}`}
+              defaultValue={repo.testCommand ?? ""}
+              onBlur={(e) => update.mutate({ testCommand: e.target.value || null })}
+              placeholder="bun test"
+              className="font-mono"
+            />
+          </Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field
+              label="Install command"
+              htmlFor={`setup-${repo.id}`}
+              hint="Runs in each fresh task clone before tests."
+            >
+              <TextInput
+                id={`setup-${repo.id}`}
+                defaultValue={repo.setupCommand ?? ""}
+                onBlur={(e) => update.mutate({ setupCommand: e.target.value || null })}
+                placeholder="bun install --frozen-lockfile"
+                className="font-mono"
+              />
+            </Field>
+            <Field
+              label="Preview command"
+              htmlFor={`preview-${repo.id}`}
+              hint={
+                <>
+                  For UI screenshots. Gets <span className="font-mono">$PORT</span>; use{" "}
+                  <span className="font-mono">static</span> to serve the folder.
+                </>
+              }
+            >
+              <TextInput
+                id={`preview-${repo.id}`}
+                defaultValue={repo.previewCommand ?? ""}
+                onBlur={(e) => update.mutate({ previewCommand: e.target.value || null })}
+                placeholder="bun run dev -- --port $PORT"
+                className="font-mono"
+              />
+            </Field>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Preview URL" htmlFor={`url-${repo.id}`}>
+              <TextInput
+                id={`url-${repo.id}`}
+                defaultValue={repo.previewUrl ?? "http://localhost:{port}"}
+                onBlur={(e) => update.mutate({ previewUrl: e.target.value || null })}
+                className="font-mono"
+              />
+            </Field>
+            <Field label="Pages to screenshot" htmlFor={`paths-${repo.id}`} hint="Up to six paths.">
+              <ChipsEditor
+                id={`paths-${repo.id}`}
+                value={repo.previewPaths}
+                onChange={(previewPaths) => update.mutate({ previewPaths })}
+                placeholder="/, /settings"
+              />
+            </Field>
+          </div>
+          <Field
+            label="Also protect these branches"
+            htmlFor={`pb-${repo.id}`}
+            hint={`${[...new Set([repo.defaultBranch, "main", "master"])].join(", ")} are always protected.`}
+          >
+            <ChipsEditor
+              id={`pb-${repo.id}`}
+              value={extra}
+              onChange={(protectedBranches) => update.mutate({ protectedBranches })}
+              placeholder="production, release/*"
+            />
+          </Field>
+          <RepositoryReadinessPanel repo={repo} />
+          <DeliveryEditor key={`${repo.id}:${JSON.stringify(repo.delivery)}`} repo={repo} />
+          <PolicyEditor key={`${repo.id}:${JSON.stringify(repo.policies ?? {})}`} repo={repo} />
+        </div>
+      </details>
+
       {remove.error && (
         <p role="alert" className="text-[12px] text-bad">
           {remove.error.message}

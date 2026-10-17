@@ -1,26 +1,29 @@
-import type { ModelConnection } from "@nightcrew/core";
+import { DEFAULT_SETTINGS, type ModelConnection } from "@nightcrew/core";
 import {
   type ConnectionInput,
   createConnection,
   type Db,
   deleteConnection,
   getConnection,
+  getSettings,
   listConnections,
   saveConnectionCheck,
   updateConnection,
+  updateSettings,
 } from "@nightcrew/db";
-import { ConnectionError, checkConnection, discoverModels, normalizeConnectionUrl } from "@nightcrew/runner";
+import { ConnectionError, type Crew, checkConnection, discoverModels, normalizeConnectionUrl } from "@nightcrew/runner";
 import type { Hono } from "hono";
 
 const INVALIDATED = "The connection changed. Reload it before checking again.";
 type ActiveCheck = { controller: AbortController; revision: number; kind: "models" | "check" };
 
-export function mountConnectionRoutes(app: Hono, { db }: { db: Db }) {
+export function mountConnectionRoutes(app: Hono, { db, crew }: { db: Db; crew: Crew }) {
   const active = new Map<string, ActiveCheck>();
   const view = (connection: ModelConnection) => {
     const operation = active.get(connection.id);
     return {
       ...connection,
+      usedForCrew: getSettings(db).executionConnectionId === connection.id,
       credentialConfigured: !connection.apiKeyEnv || Boolean(process.env[connection.apiKeyEnv]),
       active: operation ? { kind: operation.kind, stopping: operation.controller.signal.aborted } : null,
     };
@@ -35,9 +38,40 @@ export function mountConnectionRoutes(app: Hono, { db }: { db: Db }) {
     if (listConnections(db).length >= 20) return c.json({ error: "Keep at most 20 model connections." }, 400);
     return c.json(view(createConnection(db, parsed)), 201);
   });
+  const selectionBusy = () => crew.getStatus().active.length > 0 || crew.conductor.active > 0;
+  app.post("/api/connections/:id/use", async (c) => {
+    const current = getConnection(db, c.req.param("id"));
+    if (!current) return c.json({ error: "Connection not found." }, 404);
+    const revision = readRevision(await c.req.json().catch(() => null));
+    if (revision !== current.revision) return c.json({ error: INVALIDATED }, 409);
+    if (selectionBusy())
+      return c.json({ error: "Wait for active work to finish before changing the crew's model connection." }, 409);
+    if (!current.model || (current.apiKeyEnv && !process.env[current.apiKeyEnv]))
+      return c.json({ error: "Save a model and configure its credential before using this connection." }, 400);
+    updateSettings(db, {
+      executionConnectionId: current.id,
+      planModel: current.model,
+      buildModel: current.model,
+      reviewModel: current.model,
+    });
+    return c.json(view(current));
+  });
+  app.post("/api/connections/local-engine", (c) => {
+    if (selectionBusy())
+      return c.json({ error: "Wait for active work to finish before changing the crew's model connection." }, 409);
+    updateSettings(db, {
+      executionConnectionId: null,
+      planModel: DEFAULT_SETTINGS.planModel,
+      buildModel: DEFAULT_SETTINGS.buildModel,
+      reviewModel: DEFAULT_SETTINGS.reviewModel,
+    });
+    return c.json({ ok: true });
+  });
   app.patch("/api/connections/:id", async (c) => {
     const current = getConnection(db, c.req.param("id"));
     if (!current) return c.json({ error: "Connection not found." }, 404);
+    if (getSettings(db).executionConnectionId === current.id)
+      return c.json({ error: "Switch the crew to another connection before editing this one." }, 409);
     const body: unknown = await c.req.json().catch(() => null);
     const parsed = parseProfile(body, true);
     if (typeof parsed === "string") return c.json({ error: parsed }, 400);
@@ -50,6 +84,8 @@ export function mountConnectionRoutes(app: Hono, { db }: { db: Db }) {
   app.delete("/api/connections/:id", async (c) => {
     const current = getConnection(db, c.req.param("id"));
     if (!current) return c.json({ error: "Connection not found." }, 404);
+    if (getSettings(db).executionConnectionId === current.id)
+      return c.json({ error: "Switch the crew to another connection before removing this one." }, 409);
     const revision = readRevision(await c.req.json().catch(() => null));
     if (revision === null) return c.json({ error: "Provide the saved connection revision." }, 400);
     if (!deleteConnection(db, current.id, revision)) return c.json({ error: INVALIDATED }, 409);

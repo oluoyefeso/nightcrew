@@ -49,7 +49,8 @@ const MESSAGES: Record<Failure, string> = {
   network: "The endpoint could not be reached, or tried to redirect.",
   rejected: "The endpoint refused the request.",
   credentials: "The endpoint refused access. Check the credential and its permissions.",
-  credits: "The endpoint requires payment or more credits. Check the provider balance and key spending limit.",
+  credits:
+    "The endpoint refused the request budget (402). Check available credits, key limits and requested output tokens; concurrent requests can also reserve credit.",
   "rate-limit": "The endpoint reported a rate or quota limit. Check the provider limit before trying again.",
   "not-found": "The endpoint could not find the API route or selected model. Check the base URL and model ID.",
   "unsupported-tools":
@@ -249,6 +250,24 @@ async function exchange(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Shared bounded transport for explicit model execution. Never retries or follows redirects. */
+export async function completeConnection(
+  target: { baseUrl: string; apiKey?: string },
+  payload: Record<string, unknown>,
+  signal: AbortSignal,
+): Promise<unknown> {
+  const base = normalizeConnectionUrl(target.baseUrl);
+  const key = validKey(target.apiKey);
+  const body = JSON.stringify(payload);
+  if (body.length > 500_000) throw new ConnectionError("too-large");
+  const scope = new Scope(60_000, signal);
+  try {
+    return await exchange(`${base}/chat/completions`, { method: "POST", body }, key, 1024 * 1024, scope);
+  } finally {
+    scope.close();
+  }
 }
 
 /** The model IDs an endpoint lists: unique, sorted, bounded. Throws only fixed messages. */

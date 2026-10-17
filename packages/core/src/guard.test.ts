@@ -263,6 +263,33 @@ describe("bash", () => {
     expect(allowed("Bash", { command: "git -C . commit -m x" }, ro)).toBe(false);
     expect(allowed("Bash", { command: "grep -r TODO src | head" }, ro)).toBe(true);
   });
+  test("commands cannot leave the task workspace through directory changes", () => {
+    for (const command of [
+      "cd .. && bun test",
+      "cd /another/project && bun test",
+      "cd $HOME",
+      "cd ~",
+      "cd -",
+      "pushd /another/project",
+      "popd",
+    ])
+      expect(allowed("Bash", { command })).toBe(false);
+    expect(allowed("Bash", { command: "cd src && bun test" })).toBe(true);
+    expect(allowed("Bash", { command: "bun test" })).toBe(true);
+  });
+  test("read-only review cannot stash, restore or switch away from the checked work", () => {
+    const ro = { ...ctx, readOnly: true };
+    for (const command of [
+      "git stash",
+      "git -C . restore src/a.ts",
+      "git reset HEAD~1",
+      "git checkout feature",
+      "git clean -fd",
+    ])
+      expect(allowed("Bash", { command }, ro)).toBe(false);
+    expect(allowed("Bash", { command: "git diff main...HEAD" }, ro)).toBe(true);
+    expect(allowed("Bash", { command: "bun test" }, ro)).toBe(true);
+  });
 });
 
 test("reading .env is refused, an env template is fine", () => {

@@ -144,6 +144,18 @@ export function guardToolCall(tool: string, input: Record<string, unknown>, ctx:
     const cmd = String(input.command ?? "").replace(/["'\\]/g, "");
     for (const rule of BASH_RULES) if (rule.test.test(cmd)) return deny(rule.reason);
     for (const words of segments(cmd)) {
+      const directoryCommand = words.findIndex((word) => ["cd", "pushd", "popd"].includes(word));
+      if (directoryCommand >= 0) {
+        const target = words[directoryCommand + 1];
+        if (
+          words[directoryCommand] === "popd" ||
+          !target ||
+          /[$`~]/.test(target) ||
+          target.startsWith("-") ||
+          !isInside(realPath(resolve(ctx.worktree, target)), realPath(ctx.worktree))
+        )
+          return deny("Keep commands in the task workspace. Do not change to the host project or another directory.");
+      }
       const branch = protectedBranchIn(words, ctx.protectedBranches);
       if (branch) return deny(`Branch "${branch}" is protected. Stay on the task branch.`);
       if (deletesOutside(words, ctx)) return deny("Deleting outside the worktree is blocked.");
@@ -151,9 +163,11 @@ export function guardToolCall(tool: string, input: Record<string, unknown>, ctx:
     if (
       ctx.readOnly &&
       (/(^|[;&|]\s*)(rm|mv|cp|touch|mkdir|tee|sed\s+-i)\b|>\s*[^&\s]/.test(cmd) ||
-        git(String.raw`(add|commit|mv|rm)\b`).test(cmd))
+        git(
+          String.raw`(add|commit|mv|rm|stash|reset|clean|checkout|switch|restore|apply|am|merge|rebase|cherry-pick|revert|update-index|update-ref|read-tree)\b`,
+        ).test(cmd))
     ) {
-      return deny("Research tasks don't change files. Write findings to the report instead.");
+      return deny("This phase is read-only. Report findings without changing the project.");
     }
     return { allow: true };
   }
@@ -294,7 +308,7 @@ function guardWrite(path: string, ctx: GuardContext): GuardDecision {
   if (writable) return isInside(lands, landing(writable, true) ?? writable) ? { allow: true } : deny(ESCAPES);
   const root = landing(ctx.worktree, true) ?? ctx.worktree;
   if (!isInside(lands, root)) return deny(ESCAPES);
-  if (ctx.readOnly) return deny("Research tasks don't change the code. Write the report to the artifacts folder.");
+  if (ctx.readOnly) return deny("This phase is read-only. Write findings only to the artifacts folder.");
 
   // Both names: wt/ci -> .github/workflows makes ci/x.yml a workflow.
   for (const rel of new Set([relative(ctx.worktree, abs), relative(root, lands)])) {

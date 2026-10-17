@@ -4,7 +4,10 @@ import {
   createMission,
   type Db,
   deleteMission,
+  getConductor,
+  getGoalResult,
   getMission,
+  getRepo,
   getRunSummaries,
   latestOperationJob,
   listMissions,
@@ -43,8 +46,40 @@ export function mountMissionRoutes(app: Hono, { db, crew }: { db: Db; crew: Crew
     const value: unknown = await c.req.json().catch(() => null);
     const error = validate(value, true);
     if (error) return c.json({ error }, 400);
-    const input = value as NewMission;
-    return c.json(createMission(db, input), 201);
+    const input = value as NewMission & { conductor?: { repoId: string } };
+    if (input.conductor && !getRepo(db, input.conductor.repoId))
+      return c.json({ error: "Choose a connected project." }, 400);
+    const mission = db.transaction(() => {
+      const mission = createMission(db, input);
+      if (input.conductor) crew.conductor.start(mission.id, input.conductor.repoId);
+      return getMission(db, mission.id)!;
+    });
+    return c.json(mission, 201);
+  });
+  app.get("/api/missions/:id/conductor", (c) => {
+    if (!getMission(db, c.req.param("id"))) return c.json({ error: "Goal not found." }, 404);
+    const state = getConductor(db, c.req.param("id"));
+    c.header("cache-control", "no-store");
+    return c.json({ state, result: state?.resultId ? getGoalResult(db, state.resultId) : null });
+  });
+  app.post("/api/missions/:id/conductor", async (c) => {
+    const value = await c.req.json().catch(() => null);
+    if (!value || typeof value.repoId !== "string" || Object.keys(value).some((key) => key !== "repoId"))
+      return c.json({ error: "Choose a connected project." }, 400);
+    try {
+      return c.json(crew.conductor.start(c.req.param("id"), value.repoId), 202);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : "Could not start the goal." }, 409);
+    }
+  });
+  app.delete("/api/missions/:id/conductor", (c) => {
+    const id = c.req.param("id");
+    if (!getMission(db, id)) return c.json({ error: "Goal not found." }, 404);
+    updateMission(db, id, { paused: true });
+    crew.conductor.stop(id);
+    for (const task of listTasks(db, ["running"])) if (task.missionId === id) crew.stopAgent(task.id);
+    void crew.pump();
+    return c.json({ ok: true });
   });
   app.patch("/api/missions/:id", async (c) => {
     const id = c.req.param("id");
@@ -75,6 +110,8 @@ export function mountMissionRoutes(app: Hono, { db, crew }: { db: Db; crew: Crew
   app.delete("/api/missions/:id", (c) => {
     const id = c.req.param("id");
     if (!getMission(db, id)) return c.json({ error: "Mission not found." }, 404);
+    if (crew.conductor.isBusy(id))
+      return c.json({ error: "Stop goal coordination and wait for cleanup before deleting it." }, 409);
     if (["running", "stopping"].includes(latestOperationJob(db, "mission", id)?.status ?? ""))
       return c.json({ error: "Stop mission verification and wait for cleanup before deleting it." }, 409);
     if (listTasks(db).some((task) => task.missionId === id))
@@ -90,10 +127,29 @@ function validate(value: unknown, creating: boolean): string | null {
   if (
     Object.keys(input).some(
       (key) =>
-        !["title", "objective", "paused", "criteria", "tokenBudget", "priority", "deadline", "stopAt"].includes(key),
+        ![
+          "title",
+          "objective",
+          "paused",
+          "criteria",
+          "tokenBudget",
+          "priority",
+          "deadline",
+          "stopAt",
+          ...(creating ? ["conductor"] : []),
+        ].includes(key),
     )
   )
     return "Unknown mission field.";
+  if (
+    "conductor" in input &&
+    (!input.conductor ||
+      typeof input.conductor !== "object" ||
+      Array.isArray(input.conductor) ||
+      Object.keys(input.conductor).some((key) => key !== "repoId") ||
+      typeof (input.conductor as { repoId?: unknown }).repoId !== "string")
+  )
+    return "Choose a connected project.";
   for (const field of ["title", "objective"]) {
     if (creating || field in input) {
       const text = input[field];

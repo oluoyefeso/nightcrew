@@ -116,9 +116,9 @@ function Replay() {
     <div className="overflow-hidden rounded-[18px] bg-surface text-left shadow-[var(--shadow)] ring-1 ring-line">
       <div className="flex items-center justify-between gap-3 border-line border-b px-4 py-2.5">
         <div className="flex gap-1 text-[12px]">
-          <span className="whitespace-nowrap rounded-md bg-raised px-2 py-1">History</span>
-          <span className="hidden px-2 py-1 text-muted sm:inline">Agents</span>
-          <span className="hidden px-2 py-1 text-muted sm:inline">Later</span>
+          <span className="whitespace-nowrap rounded-md bg-raised px-2 py-1">Home</span>
+          <span className="hidden px-2 py-1 text-muted sm:inline">Goals</span>
+          <span className="hidden px-2 py-1 text-muted sm:inline">More</span>
         </div>
         <span className="flex items-center gap-2 whitespace-nowrap font-mono text-[11px] text-muted tabular">
           <span className={clsx("size-1.5 rounded-full", morning ? "bg-ok" : "animate-pulse bg-dawn")} />
@@ -384,7 +384,9 @@ function Site() {
                   Read the code
                 </a>
               </div>
-              <p className="font-mono text-[12px] text-faint">Local runner · Claude Code today · Managed coming soon</p>
+              <p className="font-mono text-[12px] text-faint">
+                Local runner · Your model connection · Managed coming soon
+              </p>
             </div>
             <div className="w-full">
               <StationExample />
@@ -406,17 +408,17 @@ function Site() {
                 [
                   "Any time · Dispatch",
                   "Tell the crew",
-                  "Start with an outcome in Goals. Add success criteria when useful; naming, scheduling and limits are optional details. Goals start paused so you can draft and review the work before agents begin.",
+                  "Describe the outcome in Goals. Your project is remembered. Start goal hands planning, execution and verification to the crew. Success criteria, budget and deadline are optional; Save for later keeps the goal without starting work.",
                 ],
                 [
                   "In parallel · Agents work",
                   "Inside guardrails",
-                  "Several agents at once, each in its own clone of the repo and an isolated, sandboxed Claude session, within your per-repo limits and daily budget. Every tool call passes a guard: no pushes, no secrets, nothing outside scope.",
+                  "Several agents at once, each in its own clone of the repo, within your per-repo limits and daily budget. Tool calls pass project guards and commands run in a sandbox. Your selected model connection or Claude Code carries out the work.",
                 ],
                 [
                   "As they finish · Report back",
                   "Judge the evidence",
-                  "Home keeps unresolved decisions visible across days. Decision briefs explain stop reasons, missing evidence and next steps. Your repo settings decide whether the crew stops at a plan, opens a PR, joins a train, or merges to dev.",
+                  "Home opens daily results and links to unresolved decisions across days. Decision briefs explain stop reasons, missing evidence and next steps. Your repo settings decide whether the crew stops at a plan, opens a PR, joins a train, or merges to dev.",
                 ],
               ].map(([time, title, body]) => (
                 <div key={title} className="grid content-start gap-3 bg-surface p-7">
@@ -437,16 +439,15 @@ function Site() {
               rest="See what is moving, what is held and what needs your judgement."
             />
             <p className="max-w-[700px] text-[15px] text-muted leading-relaxed">
-              Home and Goals keep everyday navigation simple. Each goal brings waiting decisions and run evidence
-              together, with an explicit outcome verification status. Agents, history and delivery stay reachable
-              through More. Failed and interrupted operations remain visible until reviewed.
+              Home opens your daily history, with evidence one click away and a link to unresolved work across days.
+              Goals bring waiting decisions and run evidence together, with an explicit outcome verification status.
+              Start goal coordinates a bounded plan, carries work between tasks and checks the combined result. Answer
+              questions, adjust limits and inspect evidence in the goal. Task and crew settings expand on demand.
             </p>
           </Reveal>
           <div className="grid gap-3">
             <Replay />
-            <p className="text-[12px] text-muted">
-              Daily reports remain available in History. An example day is shown above.
-            </p>
+            <p className="text-[12px] text-muted">Daily history is Home. An example day is shown above.</p>
           </div>
           <p className="text-[13px] text-muted">
             Available in the local open-source runner. Verification templates support up to three independent reviews.
@@ -498,7 +499,10 @@ function Site() {
                     "Bug fixes",
                     "A new test that fails on the base branch and passes on the fix. A test that passes either way is called out.",
                   ],
-                  ["Every task", "Its own checks, independent of what the agent says: scope, tests, protected paths."],
+                  [
+                    "Every task",
+                    "Its own scope and test checks, then a separate read-only review of the diff and collected evidence.",
+                  ],
                   [
                     "The Skeptic",
                     "A separate reviewer gets the evidence and has to make concrete challenges. Missing evidence always means a person looks.",
@@ -604,13 +608,13 @@ function Site() {
               <div className="grid gap-2 rounded-2xl bg-surface p-6 ring-1 ring-line">
                 <b className="font-medium text-[15px]">Open source, on your machine</b>
                 <p className="text-[14px] text-muted leading-relaxed">
-                  One binary on your machine. The dashboard runs at localhost, the crew uses the Claude Agent SDK with
-                  your own key or Claude Code login. You control the repos, evidence requirements, budgets, and merge
-                  authority.
+                  One binary on your machine. The dashboard runs at localhost. Use your model connection or Claude Code
+                  login. You control the repos, evidence requirements, budgets, and merge authority.
                 </p>
                 <p className="text-[13px] text-muted leading-relaxed">
-                  OpenRouter is the recommended hosted model connection. Local and custom endpoints are also supported
-                  for model discovery and synthetic tool checks. These checks do not enable coding with that endpoint.
+                  OpenRouter is the recommended hosted connection. Choose Use for crew to enable planning, coding and
+                  review with a compatible model. Local and custom endpoints are supported when they provide tool calls
+                  and token usage.
                 </p>
               </div>
               <div className="grid gap-2 rounded-2xl bg-surface p-6 ring-1 ring-line">
@@ -628,7 +632,9 @@ function Site() {
             Hand off the work. <span className="text-faint">Keep the judgement.</span>
           </h2>
           <InstallButton large />
-          <p className="font-mono text-[12px] text-faint">macOS and Linux · needs git, gh and Claude Code</p>
+          <p className="font-mono text-[12px] text-faint">
+            macOS and Linux · git and a model connection · gh for publishing
+          </p>
         </section>
       </main>
 

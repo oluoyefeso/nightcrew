@@ -29,7 +29,7 @@ export function StationPage({ runId }: { runId?: string }) {
   const rows = useRef(new Map<string, HTMLButtonElement>());
   const select = useCallback(
     (id: string | null) => {
-      navigate({ to: "/", search: id ? { run: id } : {}, replace: true });
+      navigate({ to: "/work", search: id ? { run: id } : {}, replace: true });
       rows.current.get(id ?? "")?.scrollIntoView({ block: "nearest" });
     },
     [navigate],
@@ -69,7 +69,7 @@ export function StationPage({ runId }: { runId?: string }) {
         <div className="mx-auto grid max-w-[980px] gap-8">
           <header className="grid gap-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <span className="text-[13px] font-medium text-muted">Home</span>
+              <span className="text-[13px] font-medium text-muted">Work overview</span>
               <Link
                 to="/missions"
                 hash="new-goal"
@@ -94,7 +94,7 @@ export function StationPage({ runId }: { runId?: string }) {
 
           {station.error && (
             <p role="alert" className="rounded-xl bg-surface p-4 text-bad">
-              Couldn't load the Station. {station.error.message}{" "}
+              Couldn't load work. {station.error.message}{" "}
               <button type="button" onClick={() => station.refetch()} className="underline">
                 Try again
               </button>
@@ -160,7 +160,7 @@ export function StationPage({ runId }: { runId?: string }) {
             </div>
           </section>
 
-          <section className="grid gap-3" aria-labelledby="station-decisions">
+          <section id="decisions" className="grid scroll-mt-20 gap-3" aria-labelledby="station-decisions">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <h2 id="station-decisions" className="t-h3">
                 Decisions
@@ -385,7 +385,7 @@ export function StationPage({ runId }: { runId?: string }) {
           <section className="grid gap-3">
             <div className="flex items-baseline justify-between gap-3">
               <h2 className="t-h3">Recent outcomes</h2>
-              <Link to="/history" className="inline-flex items-center gap-1.5 text-[12.5px] text-muted hover:text-fg">
+              <Link to="/" className="inline-flex items-center gap-1.5 text-[12.5px] text-muted hover:text-fg">
                 <History className="size-3.5" /> Daily reports
               </Link>
             </div>

@@ -1,8 +1,27 @@
-import { formatTokens, type QueueEntry, type Repo, TASK_TYPE_LABEL, TASK_TYPES, type Task } from "@nightcrew/core";
+import {
+  formatTokens,
+  type Mission,
+  type QueueEntry,
+  type Repo,
+  TASK_TYPE_LABEL,
+  TASK_TYPES,
+  type Task,
+} from "@nightcrew/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { clsx } from "clsx";
-import { ArrowRight, CalendarClock, CircleHelp, GitBranch, GripVertical, Inbox, Play, Sparkles, X } from "lucide-react";
+import {
+  ArrowRight,
+  CalendarClock,
+  CircleHelp,
+  GitBranch,
+  GripVertical,
+  Inbox,
+  Play,
+  Plus,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { Reorder, useDragControls } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -20,12 +39,175 @@ import {
 import { AddRepo } from "../components/add-repo";
 import { AgentBoard, CrewSummary } from "../components/agent-board";
 import { DepartureChecks } from "../components/departure-checks";
-import { ChipsEditor, inlineEdit, ListEditor, Select, TextInput } from "../components/form";
+import { ChipsEditor, inlineEdit, ListEditor, Select, TextArea, TextInput } from "../components/form";
 import { MissionCriteriaLinks } from "../components/mission-criteria-links";
 import { TaskRoute } from "../components/task-route";
 import { Button } from "../components/ui";
 import { isTypingTarget } from "../lib";
-import { dropStash, unstash, useStashOnReload } from "../pending";
+import { dropStash, stash, unstash, useStashOnReload } from "../pending";
+
+type PreparedWork = {
+  fingerprint: string;
+  requestText: string;
+  repoId: string;
+  drafts: DraftTask[];
+  fallback: boolean;
+};
+
+/** Prepare work from the saved objective without making the user rewrite it in Agents. */
+export function GoalWork({ mission, hasTasks }: { mission: Mission; hasTasks: boolean }) {
+  const repos = useQuery(reposQuery);
+  const key = `goal-work-${mission.id}`;
+  const fingerprint = JSON.stringify([mission.objective, mission.criteria]);
+  const [prepared, setPrepared] = useState<PreparedWork | null>(() => {
+    const saved = unstash<PreparedWork>(key);
+    return saved && Array.isArray(saved.drafts) && saved.drafts.every((draft) => draft.missionId === mission.id)
+      ? saved
+      : null;
+  });
+  const [open, setOpen] = useState(!hasTasks || !!prepared);
+  const [repoId, setRepoId] = useState(prepared?.repoId ?? "");
+  const [direction, setDirection] = useState("");
+  useEffect(() => {
+    stash(key, prepared);
+  }, [key, prepared]);
+  const compose = useMutation({
+    mutationFn: (source: { text: string; fingerprint: string; repoId: string }) =>
+      api.post<{ drafts: DraftTask[]; fallback: boolean }>("/api/compose", {
+        text: source.text,
+        repoId: source.repoId,
+        repoIds: [source.repoId],
+        missionId: mission.id,
+      }),
+    onSuccess: (result, source) =>
+      setPrepared({ ...result, fingerprint: source.fingerprint, requestText: source.text, repoId: source.repoId }),
+  });
+  const activeRepo = repoId || (repos.data?.length === 1 ? repos.data[0]?.id : "");
+  const stale = prepared && prepared.fingerprint !== fingerprint;
+  return (
+    <section aria-label="Prepare goal work" className="grid gap-4">
+      {!open ? (
+        <div>
+          <Button onClick={() => setOpen(true)}>
+            <Plus className="size-3.5" /> Prepare more work
+          </Button>
+        </div>
+      ) : (
+        <>
+          {!prepared && (
+            <div className="grid gap-4 rounded-xl border border-line bg-surface p-5">
+              <div className="grid gap-1">
+                <h3 className="text-[15px] font-medium">Turn this goal into work</h3>
+                <p className="text-[13px] text-muted">
+                  The crew uses your saved outcome and success criteria to propose the work. Review the approach here
+                  before queueing it.
+                </p>
+              </div>
+              {hasTasks && (
+                <label htmlFor={`goal-direction-${mission.id}`} className="grid gap-2 text-[13px] text-muted">
+                  What should happen next?
+                  <TextArea
+                    id={`goal-direction-${mission.id}`}
+                    value={direction}
+                    onChange={(e) => setDirection(e.target.value)}
+                    rows={3}
+                    placeholder="Describe the next change or adjustment. The crew already has this goal's context."
+                  />
+                </label>
+              )}
+              {repos.isPending && (
+                <p role="status" className="text-muted">
+                  Loading projects…
+                </p>
+              )}
+              {repos.error && (
+                <p role="alert" className="text-bad">
+                  Couldn't load projects.{" "}
+                  <button type="button" className="underline" onClick={() => repos.refetch()}>
+                    Try again
+                  </button>
+                </p>
+              )}
+              {repos.data?.length === 0 ? (
+                <Link to="/settings" className="text-dawn">
+                  Connect a project to begin →
+                </Link>
+              ) : repos.data && repos.data.length > 1 ? (
+                <label htmlFor={`goal-project-${mission.id}`} className="grid gap-2 text-[13px] text-muted">
+                  Project
+                  <Select id={`goal-project-${mission.id}`} value={repoId} onChange={(e) => setRepoId(e.target.value)}>
+                    <option value="">Choose where the crew should work</option>
+                    {repos.data.map((repo) => (
+                      <option key={repo.id} value={repo.id}>
+                        {repo.name}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+              ) : (
+                repos.data?.[0] && <p className="text-[13px] text-muted">Project · {repos.data[0].name}</p>
+              )}
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  disabled={!activeRepo || (hasTasks && !direction.trim()) || compose.isPending}
+                  onClick={() =>
+                    activeRepo &&
+                    compose.mutate({ text: hasTasks ? direction : mission.objective, fingerprint, repoId: activeRepo })
+                  }
+                >
+                  <Sparkles className="size-3.5" />
+                  {compose.isPending ? "Preparing work…" : "Prepare work"}
+                </Button>
+                <span className="text-[12px] text-muted">Planning can use model tokens. No task starts yet.</span>
+              </div>
+              {compose.error && (
+                <p role="alert" className="text-bad">
+                  {compose.error.message}
+                </p>
+              )}
+            </div>
+          )}
+          {stale ? (
+            <div role="alert" className="grid gap-3 rounded-xl border border-line p-4">
+              <p>The goal changed after this work was prepared. Prepare it again against the current outcome.</p>
+              <div>
+                <Button
+                  onClick={() => {
+                    setDirection(prepared.requestText ?? "");
+                    setPrepared(null);
+                  }}
+                >
+                  Prepare again
+                </Button>
+              </div>
+            </div>
+          ) : (
+            prepared && (
+              <>
+                {prepared.fallback && (
+                  <p role="alert" className="text-[13px] text-dawn">
+                    Planning wasn't available. This is a fallback task from your brief, not a reviewed plan. Inspect it
+                    before queueing.
+                  </p>
+                )}
+                <Drafts
+                  drafts={prepared.drafts}
+                  repos={repos.data ?? []}
+                  onChange={(drafts) => setPrepared({ ...prepared, drafts })}
+                  onDone={() => {
+                    setPrepared(null);
+                    setDirection("");
+                    setOpen(false);
+                  }}
+                />
+              </>
+            )
+          )}
+        </>
+      )}
+    </section>
+  );
+}
 
 export function AgentsPage({ initialMissionId }: { initialMissionId?: string }) {
   const repos = useQuery(reposQuery);
@@ -103,7 +285,7 @@ export function AgentsPage({ initialMissionId }: { initialMissionId?: string }) 
       ) : (
         <div className="grid gap-3">
           <label htmlFor="composer-mission" className="grid gap-1.5 text-[13px] text-muted">
-            Mission for this work
+            Goal for this work
             <Select
               id="composer-mission"
               value={missionId}
@@ -115,9 +297,9 @@ export function AgentsPage({ initialMissionId }: { initialMissionId?: string }) 
                 );
               }}
             >
-              <option value="">No mission</option>
+              <option value="">No goal</option>
               {missionId && !missions.data?.some((m) => m.id === missionId) && (
-                <option value={missionId}>Loading mission…</option>
+                <option value={missionId}>Loading goal…</option>
               )}
               {missions.data?.map((m) => (
                 <option key={m.id} value={m.id}>
@@ -128,7 +310,7 @@ export function AgentsPage({ initialMissionId }: { initialMissionId?: string }) 
             </Select>
           </label>
           <Link to="/missions" className="text-[12.5px] text-dawn">
-            Create or manage missions →
+            Create or manage goals →
           </Link>
           <Composer
             missionId={missionId || null}
@@ -383,7 +565,7 @@ function Drafts({
   return (
     <section className="grid gap-3">
       <h2 className="font-medium text-[13px]">
-        The crew drafted {drafts.length} {drafts.length === 1 ? "task" : "tasks"}. Fix anything that's off, then queue.
+        Proposed work · {drafts.length} {drafts.length === 1 ? "task" : "tasks"}
       </h2>
       {[...new Set(drafts.flatMap((draft) => (draft.missionId ? [draft.missionId] : [])))].map((id) => {
         const mission = missions.data?.find((m) => m.id === id);
@@ -396,12 +578,10 @@ function Drafts({
             <p className="font-medium">{mission.title} · draft criterion coverage</p>
             <p className="text-muted">
               {mission.criteria.length - missing.length} of {mission.criteria.length} criteria linked in this batch.
-              Existing mission tasks may cover other outcomes.
+              Existing goal tasks may cover other outcomes.
             </p>
             {missing.length > 0 && <p className="text-dawn">Not linked in this batch: {missing.join("; ")}</p>}
-            {mission.paused && (
-              <p className="text-dawn">This mission is paused. Queued work waits until you resume it.</p>
-            )}
+            {mission.paused && <p className="text-dawn">This goal is paused. Queued work waits until you resume it.</p>}
           </div>
         );
       })}
@@ -433,47 +613,62 @@ function Drafts({
                 {d.question ? "1 question" : "Draft"}
               </span>
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <Select aria-label="Repo" value={d.repoId} onChange={(e) => update(i, { repoId: e.target.value })}>
-                {repos.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name}
-                  </option>
+            {d.brief && <p className="text-[13px] text-muted">{d.brief}</p>}
+            <p className="text-[12px] text-muted">
+              {repos.find((repo) => repo.id === d.repoId)?.name ?? "Project unavailable"}
+            </p>
+            {d.criteria.length > 0 && (
+              <ul className="list-disc space-y-1 pl-4 text-[12px] text-muted">
+                {d.criteria.map((criterion) => (
+                  <li key={criterion}>{criterion}</li>
                 ))}
-              </Select>
-              <Select
-                aria-label="Type"
-                value={d.type}
-                onChange={(e) => update(i, { type: e.target.value as DraftTask["type"] })}
-              >
-                {TASK_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {TASK_TYPE_LABEL[t]}
-                  </option>
-                ))}
-              </Select>
-            </div>
-            {d.brief && <p className="line-clamp-3 text-[13px] text-muted">{d.brief}</p>}
-            {repos.find((r) => r.id === d.repoId) && (
-              <TaskRoute repo={repos.find((r) => r.id === d.repoId)!} type={d.type} compact />
+              </ul>
             )}
-            <ChipsEditor
-              value={d.scope}
-              onChange={(scope) => update(i, { scope })}
-              placeholder="Scope, e.g. src/auth/** (empty = whole repo)"
-            />
-            <ListEditor
-              value={d.criteria}
-              onChange={(criteria) => update(i, { criteria })}
-              placeholder="Add an acceptance criterion"
-            />
-            {d.missionId && (
-              <MissionCriteriaLinks
-                criteria={missions.data?.find((m) => m.id === d.missionId)?.criteria}
-                selected={d.missionCriteria ?? []}
-                onChange={(missionCriteria) => update(i, { missionCriteria })}
-              />
-            )}
+            <details className="border-t border-line pt-3">
+              <summary className="cursor-pointer text-[12px] text-muted">Adjust task details</summary>
+              <div className="mt-3 grid gap-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <Select aria-label="Repo" value={d.repoId} onChange={(e) => update(i, { repoId: e.target.value })}>
+                    {repos.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </Select>
+                  <Select
+                    aria-label="Type"
+                    value={d.type}
+                    onChange={(e) => update(i, { type: e.target.value as DraftTask["type"] })}
+                  >
+                    {TASK_TYPES.map((t) => (
+                      <option key={t} value={t}>
+                        {TASK_TYPE_LABEL[t]}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                {repos.find((r) => r.id === d.repoId) && (
+                  <TaskRoute repo={repos.find((r) => r.id === d.repoId)!} type={d.type} compact />
+                )}
+                <ChipsEditor
+                  value={d.scope}
+                  onChange={(scope) => update(i, { scope })}
+                  placeholder="Scope, e.g. src/auth/** (empty = whole repo)"
+                />
+                <ListEditor
+                  value={d.criteria}
+                  onChange={(criteria) => update(i, { criteria })}
+                  placeholder="Add an acceptance criterion"
+                />
+                {d.missionId && (
+                  <MissionCriteriaLinks
+                    criteria={missions.data?.find((m) => m.id === d.missionId)?.criteria}
+                    selected={d.missionCriteria ?? []}
+                    onChange={(missionCriteria) => update(i, { missionCriteria })}
+                  />
+                )}
+              </div>
+            </details>
             {d.question && (
               <div className="grid gap-2 rounded-xl bg-raised p-3">
                 <p className="text-[13px]">{d.question}</p>
@@ -499,7 +694,10 @@ function Drafts({
           </article>
         ))}
       </div>
-      <DepartureChecks tasks={drafts.map((d) => ({ ...d, dependsOn: undefined, dependsOnIndex: d.dependsOn }))} />
+      <DepartureChecks
+        compact
+        tasks={drafts.map((d) => ({ ...d, dependsOn: undefined, dependsOnIndex: d.dependsOn }))}
+      />
       <div className="flex flex-wrap items-center justify-end gap-2">
         {save.error && <span className="text-[12px] text-bad">{save.error.message}</span>}
         <Button variant="ghost" onClick={onDone}>
@@ -516,8 +714,7 @@ function Drafts({
           <CalendarClock className="size-3.5" /> Schedule for {settings.data?.scheduleAt ?? "later"}
         </Button>
         <Button variant="primary" onClick={() => save.mutate("now")} disabled={save.isPending}>
-          <Play className="size-3.5" /> Run{" "}
-          {ready === drafts.length ? (drafts.length === 1 ? "now" : `all ${drafts.length} now`) : `${ready} now`}
+          <Play className="size-3.5" /> Queue {ready === drafts.length ? "work" : `${ready} ready tasks`}
         </Button>
       </div>
     </section>

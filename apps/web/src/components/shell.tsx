@@ -12,17 +12,22 @@ function NavLink({
   children,
   className,
 }: {
-  to: "/" | "/agents" | "/later" | "/history" | "/missions" | "/operations";
+  to: "/" | "/agents" | "/later" | "/work" | "/missions" | "/operations";
   children: ReactNode;
   className?: string;
 }) {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const historicalHome = to === "/" && pathname.startsWith("/night/");
+  const current = pathname === to || (to !== "/" && pathname.startsWith(`${to}/`)) || historicalHome;
   return (
     <Link
       to={to}
       activeOptions={{ exact: to === "/", includeSearch: false }}
+      aria-current={current ? "page" : undefined}
       className={clsx(
         "inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-muted transition-colors hover:text-fg data-[status=active]:bg-raised data-[status=active]:text-fg",
         className,
+        historicalHome && "bg-raised text-fg",
       )}
     >
       {children}
@@ -35,14 +40,16 @@ function CrewPill() {
   const crew = useQuery(crewQuery);
   const s = crew.data;
   if (!s) return null;
-  const working = s.active.length;
+  const working = s.active.length + (s.coordinating ?? 0);
   const label =
     s.state === "paused"
       ? "dispatch paused"
       : s.state === "waiting"
         ? "backing off"
         : working
-          ? `${working} working`
+          ? s.active.length
+            ? `${s.active.length} working`
+            : "coordinating goals"
           : "agents idle";
   return (
     <Link
@@ -103,6 +110,12 @@ export function Shell() {
   const queued = tasks.data?.length ?? 0;
   return (
     <div className="flex min-h-full flex-col">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-lg focus:bg-fg focus:px-4 focus:py-2 focus:text-bg"
+      >
+        Skip to content
+      </a>
       <header className="sticky top-0 z-30 border-b border-line bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] backdrop-blur-xl">
         <div className="mx-auto flex h-14 max-w-[1440px] items-center gap-3 px-4 sm:gap-6 sm:px-6">
           <Link
@@ -122,6 +135,7 @@ export function Shell() {
             <CrewPill />
             <button
               type="button"
+              aria-label="Search commands and tasks"
               onClick={() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }))}
               className="hidden h-8 items-center gap-2 rounded-full px-3 text-[12.5px] text-muted ring-1 ring-line ring-inset hover:text-fg md:inline-flex"
             >
@@ -138,7 +152,7 @@ export function Shell() {
           </div>
         </div>
       </header>
-      <main className="flex-1">
+      <main id="main-content" tabIndex={-1} className="flex-1">
         <Outlet />
       </main>
       <CommandBar />
@@ -148,16 +162,15 @@ export function Shell() {
 }
 
 const AUX = [
+  { to: "/work", label: "Work overview" },
   { to: "/agents", label: "Agents" },
   { to: "/later", label: "Later" },
   { to: "/operations", label: "Operations" },
-  { to: "/history", label: "History" },
 ] as const;
 
 /** Everything that is not Home or Goals, plus the quiet controls. */
 function MoreMenu({ queued }: { queued: number }) {
   const ref = useRef<HTMLDetailsElement>(null);
-  const [open, setOpen] = useState(false);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const previousPath = useRef(pathname);
   const activeAux = AUX.find((a) => pathname === a.to || pathname.startsWith(`${a.to}/`));
@@ -172,14 +185,14 @@ function MoreMenu({ queued }: { queued: number }) {
   }, [pathname, close]);
 
   useEffect(() => {
-    if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      if (e.key !== "Escape" || !ref.current?.open) return;
+      e.stopPropagation();
       close();
       ref.current?.querySelector("summary")?.focus();
     };
     const onPointer = (e: PointerEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) close();
+      if (ref.current?.open && !ref.current.contains(e.target as Node)) close();
     };
     document.addEventListener("keydown", onKey);
     document.addEventListener("pointerdown", onPointer);
@@ -187,10 +200,10 @@ function MoreMenu({ queued }: { queued: number }) {
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("pointerdown", onPointer);
     };
-  }, [open, close]);
+  }, [close]);
 
   return (
-    <details ref={ref} className="relative" onToggle={(e) => setOpen(e.currentTarget.open)}>
+    <details ref={ref} className="relative">
       <summary
         aria-label={activeAux ? `More destinations, current: ${activeAux.label}` : "More destinations"}
         className={clsx(

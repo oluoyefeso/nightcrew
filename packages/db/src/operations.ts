@@ -9,6 +9,7 @@ import type {
   RepositoryCheck,
 } from "@nightcrew/core";
 import { and, desc, eq, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
+import { conductorTokens } from "./conductor";
 import type { Db } from "./index";
 import * as schema from "./schema";
 
@@ -90,11 +91,12 @@ export function deleteTemplate(db: Db, id: string, expectedUpdatedAt: string): b
 }
 export function missionTokens(db: Db, missionId: string): number {
   return (
-    db
+    conductorTokens(db, { missionId }) +
+    (db
       .select({ n: sql<number>`coalesce(sum(${schema.runs.tokensIn} + ${schema.runs.tokensOut}), 0)` })
       .from(schema.runs)
       .where(and(eq(schema.runs.missionId, missionId), eq(schema.runs.source, "local")))
-      .get()?.n ?? 0
+      .get()?.n ?? 0)
   );
 }
 export function listAcceptances(db: Db, missionId: string): MissionAcceptance[] {

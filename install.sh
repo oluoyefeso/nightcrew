@@ -34,16 +34,16 @@ mv "$tmp" "$DEST/nightcrew"
 echo "Installed to $DEST/nightcrew"
 
 missing=""
-for cmd in git gh claude; do
+for cmd in git; do
   command -v "$cmd" >/dev/null 2>&1 || missing="$missing $cmd"
 done
 if [ -n "$missing" ]; then
   echo
   echo "NightCrew also needs:$missing"
   echo "  git     https://git-scm.com"
-  echo "  gh      https://cli.github.com (then: gh auth login)"
-  echo "  claude  https://claude.com/claude-code (or set ANTHROPIC_API_KEY)"
 fi
+echo "Choose OpenRouter or a compatible model in Settings → Model connections, or install and sign in to Claude Code."
+echo "GitHub publishing also needs gh: https://cli.github.com (then: gh auth login)."
 
 case ":$PATH:" in
   *":$DEST:"*) ;;

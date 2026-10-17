@@ -28,7 +28,9 @@ Checks may incur provider charges and are separate from task and mission budgets
 
 Failures distinguish refused credentials, payment or credit limits, rate or quota limits, missing API routes or models, and recognized reports that a model does not support tools. These are fixed diagnostic messages; raw provider responses are not displayed or stored in check evidence.
 
-Saved connections are diagnostics only. Passing the synthetic exchange does not verify coding ability or enable task execution. The local coding runner still uses Claude Code; managed mode remains Coming soon.
+Choose **Use for crew** on a saved connection to use its model for planning, coding and independent review. Selection sets the three default role models without resuming paused dispatch. Saving a profile or passing a tool check alone does not change execution or verify coding ability. The selected provider receives the task's code and context. Switch to another connection or **Use Claude Code instead** before editing or removing the active profile; provider changes wait for running work to finish. Demo mode remains simulated even when a connection is selected.
+
+The direct engine uses the compatible `/chat/completions` tool protocol, guarded file tools and sandboxed project commands. Models must support function tools and report input/output token counts; missing usage holds work before further tools execute. Structured results are validated locally. Response size, tool output, turn count and time are bounded, with no transport retries or redirects. A phase cannot resume another engine's session; saved plans and checked builds provide recovery instead. Reported cost is recorded when available; unreported cost remains unknown in phase details. These are execution capabilities, not a guarantee that every model can solve a coding task. Managed mode remains Coming soon.
 
 Before dispatch, NightCrew checks that its engine declares the phases the task route may need, including repair and structured review. Unsupported work stays held while supported tasks can proceed. These declarations describe the adapter's supported operations, not a model's competence; repository authority and tool guards still apply. Engines without session continuation receive the written plan instead of an opaque session handle.
 
@@ -88,7 +90,7 @@ Crew sessions are isolated: no filesystem settings, MCP servers, skills or plugi
 | Variable | Effect |
 |---|---|
 | `ANTHROPIC_API_KEY` | Used by the crew when set; otherwise your Claude Code login. |
-| `OPENROUTER_API_KEY` | Used by the OpenRouter connection preset for discovery and synthetic tool checks. Does not switch the coding engine. |
+| `OPENROUTER_API_KEY` | Used by the OpenRouter preset for discovery, checks and task execution after selecting Use for crew. Setting the key alone does not switch engines. |
 | `TYPESAFE_API_KEY` | Turns on Jev (TypeSafe's System One model) for fast judgement calls: workflow choice, merge confidence, failure classification. Without it, rules decide. |
 | `NIGHTCREW_HOME` | Data folder (default `~/.nightcrew`). Relative paths, including `--data`, resolve from the directory where the CLI starts. |
 | `NIGHTCREW_PORT` | Dashboard port (default 3721). |

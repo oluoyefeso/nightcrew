@@ -1,4 +1,4 @@
-import { TASK_TYPE_LABEL, TASK_TYPES, type Task } from "@nightcrew/core";
+import { formatTokens, TASK_TYPE_LABEL, TASK_TYPES, type Task } from "@nightcrew/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { clsx } from "clsx";
@@ -356,7 +356,7 @@ function TaskEditor({
       )}
 
       <fieldset disabled={locked} className="grid gap-5 disabled:opacity-60">
-        <Field label="Brief" htmlFor="brief" hint="Everything the crew should know. It can't ask you at 3am.">
+        <Field label="Brief" htmlFor="brief" hint="The outcome, context and constraints the crew should work from.">
           <TextArea
             id="brief"
             rows={6}
@@ -366,167 +366,184 @@ function TaskEditor({
           />
         </Field>
 
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Field label="Repo" htmlFor="repo">
-            <Select id="repo" value={t.repoId} onChange={(e) => edit({ repoId: e.target.value })}>
-              {repos.data?.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Type" htmlFor="type">
-            <Select id="type" value={t.type} onChange={(e) => edit({ type: e.target.value as Task["type"] })}>
-              {TASK_TYPES.map((x) => (
-                <option key={x} value={x}>
-                  {TASK_TYPE_LABEL[x]}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Model" htmlFor="model" hint="Blank uses your default.">
-            <TextInput
-              id="model"
-              value={t.model ?? ""}
-              onChange={(e) => edit({ model: e.target.value || null })}
-              placeholder="claude-sonnet-5-5"
-              className="font-mono"
-            />
-          </Field>
-        </div>
-
         <Field label="Acceptance criteria" hint="The reviewer checks each one against real evidence.">
           <ListEditor value={t.criteria} onChange={(criteria) => edit({ criteria })} placeholder="Add a criterion" />
         </Field>
+        <details className="border-t border-line pt-4">
+          <summary className="cursor-pointer text-[13px] text-muted">
+            Execution details & limits{" "}
+            <span className="ml-2 text-[12px]">
+              {formatTokens(t.tokenBudget)} tokens · {t.maxMinutes} min
+            </span>
+          </summary>
+          <div className="mt-4 grid gap-5">
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Field label="Repo" htmlFor="repo">
+                <Select id="repo" value={t.repoId} onChange={(e) => edit({ repoId: e.target.value })}>
+                  {repos.data?.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Type" htmlFor="type">
+                <Select id="type" value={t.type} onChange={(e) => edit({ type: e.target.value as Task["type"] })}>
+                  {TASK_TYPES.map((x) => (
+                    <option key={x} value={x}>
+                      {TASK_TYPE_LABEL[x]}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Model" htmlFor="model" hint="Blank uses your default.">
+                <TextInput
+                  id="model"
+                  value={t.model ?? ""}
+                  onChange={(e) => edit({ model: e.target.value || null })}
+                  placeholder="claude-sonnet-5-5"
+                  className="font-mono"
+                />
+              </Field>
+            </div>
 
-        <Field
-          label="Scope"
-          htmlFor="scope"
-          hint="Files the crew may change. Anything else is refused. Empty means the whole repo."
-        >
-          <ChipsEditor
-            id="scope"
-            value={t.scope}
-            onChange={(scope) => edit({ scope })}
-            placeholder="src/auth/**, tests/auth/**"
-          />
-        </Field>
+            <Field
+              label="Scope"
+              htmlFor="scope"
+              hint="Files the crew may change. Anything else is refused. Empty means the whole repo."
+            >
+              <ChipsEditor
+                id="scope"
+                value={t.scope}
+                onChange={(scope) => edit({ scope })}
+                placeholder="src/auth/**, tests/auth/**"
+              />
+            </Field>
 
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Field
-            label="Token budget (thousands)"
-            htmlFor="budget"
-            hint="Input, cache and output across all phases. The agent stops at it."
-          >
-            <TextInput
-              id="budget"
-              type="number"
-              min={50}
-              max={Number.isFinite(maxTokens) ? maxTokens / 1000 : undefined}
-              step={100}
-              value={Math.round(t.tokenBudget / 1000).toString()}
-              onChange={(e) =>
-                edit({
-                  tokenBudget: Math.min(maxTokens, Math.max(50_000, Math.round(Number(e.target.value) * 1000) || 0)),
-                })
-              }
-              className="font-mono"
-            />
-          </Field>
-          <Field label="Time cap (minutes)" htmlFor="minutes">
-            <TextInput
-              id="minutes"
-              type="number"
-              min={5}
-              max={600}
-              step={5}
-              value={t.maxMinutes}
-              onChange={(e) =>
-                edit({ maxMinutes: Math.min(600, Math.max(5, Math.round(Number(e.target.value)) || 45)) })
-              }
-              className="font-mono"
-            />
-          </Field>
-          <Field label="Test command" htmlFor="test" hint="Blank uses the repo's.">
-            <TextInput
-              id="test"
-              value={t.testCommand ?? ""}
-              onChange={(e) => edit({ testCommand: e.target.value || null })}
-              placeholder="bun test"
-              className="font-mono"
-            />
-          </Field>
-        </div>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Field
+                label="Token budget (thousands)"
+                htmlFor="budget"
+                hint="Input, cache and output across all phases. The agent stops at it."
+              >
+                <TextInput
+                  id="budget"
+                  type="number"
+                  min={50}
+                  max={Number.isFinite(maxTokens) ? maxTokens / 1000 : undefined}
+                  step={100}
+                  value={Math.round(t.tokenBudget / 1000).toString()}
+                  onChange={(e) =>
+                    edit({
+                      tokenBudget: Math.min(
+                        maxTokens,
+                        Math.max(50_000, Math.round(Number(e.target.value) * 1000) || 0),
+                      ),
+                    })
+                  }
+                  className="font-mono"
+                />
+              </Field>
+              <Field label="Time cap (minutes)" htmlFor="minutes">
+                <TextInput
+                  id="minutes"
+                  type="number"
+                  min={5}
+                  max={600}
+                  step={5}
+                  value={t.maxMinutes}
+                  onChange={(e) =>
+                    edit({ maxMinutes: Math.min(600, Math.max(5, Math.round(Number(e.target.value)) || 45)) })
+                  }
+                  className="font-mono"
+                />
+              </Field>
+              <Field label="Test command" htmlFor="test" hint="Blank uses the repo's.">
+                <TextInput
+                  id="test"
+                  value={t.testCommand ?? ""}
+                  onChange={(e) => edit({ testCommand: e.target.value || null })}
+                  placeholder="bun test"
+                  className="font-mono"
+                />
+              </Field>
+            </div>
+          </div>
+        </details>
       </fieldset>
 
-      {!locked && (
-        <section className="grid gap-2">
-          <Field label="Mission">
-            <Select
-              aria-label="Mission"
-              value={t.missionId ?? ""}
-              onChange={(e) => edit({ missionId: e.target.value || null, missionCriteria: [] })}
-            >
-              <option value="">No mission</option>
-              {missions.data?.map((mission) => (
-                <option key={mission.id} value={mission.id}>
-                  {mission.title}
-                  {mission.paused ? " · paused" : ""}
-                </option>
+      <details className="border-t border-line pt-4">
+        <summary className="cursor-pointer text-[13px] text-muted">Coordination & execution checks</summary>
+        <div className="mt-4 grid gap-5">
+          {!locked && (
+            <section className="grid gap-2">
+              <Field label="Goal">
+                <Select
+                  aria-label="Goal"
+                  value={t.missionId ?? ""}
+                  onChange={(e) => edit({ missionId: e.target.value || null, missionCriteria: [] })}
+                >
+                  <option value="">No goal</option>
+                  {missions.data?.map((mission) => (
+                    <option key={mission.id} value={mission.id}>
+                      {mission.title}
+                      {mission.paused ? " · paused" : ""}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              {t.missionId && (
+                <Link to="/missions/$missionId" params={{ missionId: t.missionId }} className="text-[13px] text-dawn">
+                  Open goal →
+                </Link>
+              )}
+              {t.missionId && (
+                <MissionCriteriaLinks
+                  criteria={missions.data?.find((m) => m.id === t.missionId)?.criteria}
+                  selected={t.missionCriteria ?? []}
+                  onChange={(missionCriteria) => edit({ missionCriteria })}
+                />
+              )}
+              <h2 className="text-[13px] font-medium">Wait for tasks</h2>
+              {t.dependsOn.map((id) => (
+                <div
+                  key={id}
+                  className="flex items-center justify-between gap-2 rounded-xl bg-surface px-3 py-2 text-[13px]"
+                >
+                  <span>{allTasks.data?.find((task) => task.id === id)?.title ?? "Missing prerequisite"}</span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => edit({ dependsOn: t.dependsOn.filter((dep) => dep !== id) })}
+                  >
+                    Remove
+                  </Button>
+                </div>
               ))}
-            </Select>
-          </Field>
-          {t.missionId && (
-            <Link to="/missions/$missionId" params={{ missionId: t.missionId }} className="text-[13px] text-dawn">
-              Open mission →
-            </Link>
-          )}
-          {t.missionId && (
-            <MissionCriteriaLinks
-              criteria={missions.data?.find((m) => m.id === t.missionId)?.criteria}
-              selected={t.missionCriteria ?? []}
-              onChange={(missionCriteria) => edit({ missionCriteria })}
-            />
-          )}
-          <h2 className="text-[13px] font-medium">Wait for tasks</h2>
-          {t.dependsOn.map((id) => (
-            <div
-              key={id}
-              className="flex items-center justify-between gap-2 rounded-xl bg-surface px-3 py-2 text-[13px]"
-            >
-              <span>{allTasks.data?.find((task) => task.id === id)?.title ?? "Missing prerequisite"}</span>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => edit({ dependsOn: t.dependsOn.filter((dep) => dep !== id) })}
+              <Select
+                aria-label="Add prerequisite"
+                value=""
+                onChange={(e) => {
+                  if (e.target.value) edit({ dependsOn: [...t.dependsOn, e.target.value] });
+                }}
               >
-                Remove
-              </Button>
-            </div>
-          ))}
-          <Select
-            aria-label="Add prerequisite"
-            value=""
-            onChange={(e) => {
-              if (e.target.value) edit({ dependsOn: [...t.dependsOn, e.target.value] });
-            }}
-          >
-            <option value="">Add a prerequisite…</option>
-            {allTasks.data
-              ?.filter((task) => task.id !== t.id && !t.dependsOn.includes(task.id))
-              .map((task) => (
-                <option key={task.id} value={task.id}>
-                  {task.repoName} · {task.title}
-                </option>
-              ))}
-          </Select>
-        </section>
-      )}
-      {repos.data?.find((r) => r.id === t.repoId) && (
-        <TaskRoute repo={repos.data.find((r) => r.id === t.repoId)!} type={t.type} />
-      )}
-      {!locked && <DepartureChecks tasks={[t]} />}
+                <option value="">Add a prerequisite…</option>
+                {allTasks.data
+                  ?.filter((task) => task.id !== t.id && !t.dependsOn.includes(task.id))
+                  .map((task) => (
+                    <option key={task.id} value={task.id}>
+                      {task.repoName} · {task.title}
+                    </option>
+                  ))}
+              </Select>
+            </section>
+          )}
+          {repos.data?.find((r) => r.id === t.repoId) && (
+            <TaskRoute repo={repos.data.find((r) => r.id === t.repoId)!} type={t.type} />
+          )}
+          {!locked && <DepartureChecks tasks={[t]} />}
+        </div>
+      </details>
       <RecoveryPanel task={t} />
 
       <section className="grid gap-3">

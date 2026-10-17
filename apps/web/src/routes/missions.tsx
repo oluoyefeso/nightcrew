@@ -1,16 +1,34 @@
 import { decisionFor, formatTokens, type Mission, type MissionSummary, needsDecision, type Run } from "@nightcrew/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { clsx } from "clsx";
 import { ArrowLeft, Pause, Play, Plus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, missionQuery, missionsQuery, tasksQuery, toast, useInvalidateTasks } from "../api";
+import { api, missionQuery, missionsQuery, reposQuery, tasksQuery, toast, useInvalidateTasks } from "../api";
 import { Field, Select, TextArea, TextInput } from "../components/form";
+import { GoalAnswer, GoalConductorPanel } from "../components/goal-conductor";
 import { MissionAcceptancePanel } from "../components/mission-acceptance";
-import { MissionControls, missionControlPatch, missionControlValues } from "../components/mission-controls";
+import {
+  GoalLimitsEditor,
+  MissionControls,
+  missionControlPatch,
+  missionControlValues,
+} from "../components/mission-controls";
+import { useProjectChoice } from "../components/project-choice";
 import { RunPane } from "../components/run-pane";
 import { Button } from "../components/ui";
 import { isTypingTarget } from "../lib";
+import { GoalWork } from "./agents";
+
+function goalTitle(objective: string) {
+  const first = objective.trim().split(/\r?\n|(?<=[.!?])\s+/)[0] ?? "";
+  return first.length <= 80
+    ? first
+    : `${first
+        .slice(0, 76)
+        .replace(/\s+\S*$/, "")
+        .trimEnd()}…`;
+}
 
 export function MissionCard({ mission }: { mission: MissionSummary }) {
   const stopped = Boolean(mission.stopAt && Date.parse(mission.stopAt) <= Date.now());
@@ -23,17 +41,36 @@ export function MissionCard({ mission }: { mission: MissionSummary }) {
       <div className="flex items-start justify-between gap-4">
         <h3 className="min-w-0 break-words font-medium text-[14px]">{mission.title}</h3>
         <span className="shrink-0 text-[11px] text-muted">
-          {stopped ? "Stop time reached" : mission.paused ? "Paused" : "Active"}
+          {stopped
+            ? "Stop time reached"
+            : mission.paused
+              ? "Paused"
+              : mission.conductor
+                ? {
+                    planning: "Planning",
+                    working: "Working",
+                    verifying: "Verifying",
+                    needs_you: "Needs you",
+                    paused: "Paused",
+                    ready: "Verified",
+                  }[mission.conductor.state]
+                : "Active"}
         </span>
       </div>
-      <p className="line-clamp-2 whitespace-pre-wrap break-words text-[13px] text-muted">{mission.objective}</p>
+      {mission.objective !== mission.title && (
+        <p className="line-clamp-2 whitespace-pre-wrap break-words text-[13px] text-muted">{mission.objective}</p>
+      )}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px] text-muted">
         <span>
           {mission.counts.total} {mission.counts.total === 1 ? "task" : "tasks"}
         </span>
         {mission.counts.running > 0 && <span>{mission.counts.running} working</span>}
-        {mission.counts.needsYou > 0 && <span className="text-dawn">{mission.counts.needsYou} need review</span>}
-        <span>{formatTokens(mission.tokensUsed)} tokens used</span>
+        {!mission.conductor && mission.counts.needsYou > 0 && (
+          <span className="text-dawn">{mission.counts.needsYou} need review</span>
+        )}
+        <span>
+          {formatTokens(mission.tokensUsed)} tokens {mission.conductor ? "accounted" : "used"}
+        </span>
         {mission.stopAt && <span>Stop work at {new Date(mission.stopAt).toLocaleString()}</span>}
         <span className="ml-auto text-fg group-hover:text-dawn">Open goal →</span>
       </div>
@@ -43,19 +80,25 @@ export function MissionCard({ mission }: { mission: MissionSummary }) {
 
 export function MissionsPage() {
   const missions = useQuery(missionsQuery);
-  const [title, setTitle] = useState("");
+  const repos = useQuery(reposQuery);
+  const [activeRepo, setRepoId] = useProjectChoice(repos.data);
+  const hash = useRouterState({ select: (s) => s.location.hash });
+  const creating = hash === "new-goal" || missions.data?.length === 0;
   const [objective, setObjective] = useState("");
   const [controls, setControls] = useState(() => missionControlValues());
-  const [paused, setPaused] = useState(true);
   const invalidate = useInvalidateTasks();
   const navigate = useNavigate();
+  useEffect(() => {
+    if (hash === "new-goal") document.getElementById("mission-objective")?.focus({ preventScroll: true });
+  }, [hash]);
   const create = useMutation({
-    mutationFn: () =>
+    mutationFn: (start: boolean) =>
       api.post<Mission>("/api/missions", {
-        title: title.trim() || objective.trim().split(/\r?\n/)[0]?.slice(0, 80),
+        title: goalTitle(objective),
         objective: objective.trim(),
-        paused,
+        paused: !start,
         ...missionControlPatch(controls),
+        ...(start ? { conductor: { repoId: activeRepo } } : {}),
       }),
     onSuccess: (mission) => {
       invalidate();
@@ -65,23 +108,45 @@ export function MissionsPage() {
   return (
     <div className="mx-auto grid max-w-[920px] gap-10 px-4 pt-8 pb-24 sm:px-8 lg:pt-12">
       <header className="grid gap-2">
-        <h1 className="text-[30px] font-medium tracking-[-0.03em]">Goals</h1>
+        <div className="flex items-center justify-between gap-4">
+          <h1 className="text-[30px] font-medium tracking-[-0.03em]">Goals</h1>
+          {!creating && (
+            <Link
+              to="/missions"
+              hash="new-goal"
+              className="inline-flex items-center gap-2 rounded-lg bg-fg px-3 py-2 text-[13px] text-bg"
+            >
+              <Plus className="size-3.5" /> New goal
+            </Link>
+          )}
+        </div>
         <p className="max-w-[620px] text-[14px] text-muted">
           Set the direction. Keep progress, decisions and evidence together.
         </p>
       </header>
       <form
+        hidden={!creating}
         id="new-goal"
         aria-labelledby="new-goal-title"
-        className="grid scroll-mt-20 gap-5 rounded-xl border border-line bg-surface p-5 sm:p-6"
+        className={clsx(
+          "scroll-mt-20 gap-5 rounded-xl border border-line bg-surface p-5 sm:p-6",
+          creating ? "grid" : "hidden",
+        )}
         onSubmit={(e) => {
           e.preventDefault();
-          create.mutate();
+          create.mutate(true);
         }}
       >
-        <h2 id="new-goal-title" className="text-[16px] font-medium">
-          What do you want to achieve?
-        </h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 id="new-goal-title" className="text-[16px] font-medium">
+            What do you want to achieve?
+          </h2>
+          {!!missions.data?.length && (
+            <Link to="/missions" className="text-[13px] text-muted">
+              Back to goals
+            </Link>
+          )}
+        </div>
         <Field label="Outcome" htmlFor="mission-objective">
           <TextArea
             id="mission-objective"
@@ -93,44 +158,57 @@ export function MissionsPage() {
             rows={3}
           />
         </Field>
-        <Field
-          label="What does done look like?"
-          htmlFor="mission-criteria"
-          hint="Optional for now. Add one checkable outcome per line."
-        >
-          <TextArea
-            id="mission-criteria"
-            rows={2}
-            value={controls.criteria}
-            maxLength={30030}
-            placeholder="A new user can create a workspace and invite a teammate."
-            onChange={(e) => setControls({ ...controls, criteria: e.target.value })}
-          />
-        </Field>
-        <details className="border-y border-line py-3">
-          <summary className="cursor-pointer text-[13px] text-muted hover:text-fg">
-            Details & limits <span className="ml-2 text-[11px]">Optional</span>
-          </summary>
-          <div className="mt-5 grid gap-4">
-            <Field label="Goal name" htmlFor="mission-title" hint="Leave blank to use the first line of your outcome.">
-              <TextInput
-                id="mission-title"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                maxLength={200}
-                placeholder="Make onboarding effortless"
+        {repos.data && repos.data.length > 1 && (
+          <Field label="Project" htmlFor="new-goal-project">
+            <Select id="new-goal-project" value={activeRepo} onChange={(event) => setRepoId(event.target.value)}>
+              <option value="">Choose where the crew should work</option>
+              {repos.data.map((repo) => (
+                <option key={repo.id} value={repo.id}>
+                  {repo.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
+        {repos.data?.length === 1 && <p className="text-[13px] text-muted">Project · {repos.data[0]?.name}</p>}
+        {repos.data?.length === 0 && (
+          <Link to="/settings" className="text-[13px] text-dawn">
+            Connect a project to start work →
+          </Link>
+        )}
+        {repos.error && (
+          <p role="alert" className="text-bad">
+            Couldn't load projects.{" "}
+            <button type="button" className="underline" onClick={() => repos.refetch()}>
+              Try again
+            </button>
+          </p>
+        )}
+        <details className="group">
+          <summary className="cursor-pointer text-[13px] text-muted hover:text-fg">Add success criteria</summary>
+          <div className="mt-3">
+            <Field
+              label="What does done look like?"
+              htmlFor="mission-criteria"
+              hint="Optional. Without these, the crew verifies the outcome you described."
+            >
+              <TextArea
+                id="mission-criteria"
+                rows={2}
+                value={controls.criteria}
+                maxLength={30030}
+                placeholder="A new user can create a workspace and invite a teammate."
+                onChange={(e) => setControls({ ...controls, criteria: e.target.value })}
               />
             </Field>
-            <MissionControls values={controls} onChange={setControls} includeCriteria={false} />
-            <label className="flex items-center gap-2 text-[13px]">
-              <input
-                type="checkbox"
-                checked={paused}
-                onChange={(e) => setPaused(e.target.checked)}
-                className="accent-dawn"
-              />
-              Start paused while I review the work
-            </label>
+          </div>
+        </details>
+        <details className="border-y border-line py-3">
+          <summary className="cursor-pointer text-[13px] text-muted hover:text-fg">
+            Budget & deadline <span className="ml-2 text-[11px]">Optional</span>
+          </summary>
+          <div className="mt-5 grid gap-4">
+            <MissionControls values={controls} onChange={setControls} includeCriteria={false} simple />
           </div>
         </details>
         <div className="flex flex-wrap items-end justify-between gap-4">
@@ -141,16 +219,24 @@ export function MissionsPage() {
                 : "Daily crew budget applies. "}
               Repository authority stays in place.
             </p>
-            <p>
-              {paused
-                ? "Saved paused. Next, draft and review the work before starting."
-                : "Next, draft the work. Queued tasks may start within your crew's limits."}
-            </p>
+            <p>The crew plans, executes and verifies. It brings questions back here.</p>
           </div>
-          <Button type="submit" variant="primary" disabled={create.isPending || !objective.trim()}>
-            <Plus className="size-3.5" />
-            {create.isPending ? "Creating…" : "Create goal"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={create.isPending || !objective.trim()}
+              onClick={(event) => {
+                if (event.currentTarget.form?.reportValidity()) create.mutate(false);
+              }}
+            >
+              Save for later
+            </Button>
+            <Button type="submit" variant="primary" disabled={create.isPending || !objective.trim() || !activeRepo}>
+              <Plus className="size-3.5" />
+              {create.isPending ? (create.variables ? "Starting…" : "Saving…") : "Start goal"}
+            </Button>
+          </div>
         </div>
         {create.error && (
           <p role="alert" className="text-[13px] text-bad">
@@ -166,7 +252,10 @@ export function MissionsPage() {
         {missions.isPending && <p className="text-[13px] text-muted">Loading goals…</p>}
         {missions.error && (
           <p role="alert" className="text-bad">
-            Couldn't load goals. {missions.error.message}
+            Couldn't load goals. {missions.error.message}{" "}
+            <button type="button" className="underline" onClick={() => missions.refetch()}>
+              Try again
+            </button>
           </p>
         )}
         {Boolean(missions.data?.length) && (
@@ -191,7 +280,7 @@ export function MissionPage({ missionId, runId }: { missionId: string; runId?: s
   const available = useQuery(tasksQuery([]));
   const invalidate = useInvalidateTasks();
   const [selected, setSelected] = useState("");
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState<"goal" | "limits" | null>(null);
   const navigate = useNavigate();
   const opener = useRef<HTMLElement | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -238,7 +327,10 @@ export function MissionPage({ missionId, runId }: { missionId: string; runId?: s
   const { mission, tasks } = detail.data;
   const decisions = tasks.filter(
     ({ task, run, departure }) =>
-      task.question || departure?.kind === "setup" || (task.status === "done" && (!run || needsDecision(run))),
+      task.question ||
+      departure?.kind === "setup" ||
+      (task.status === "done" &&
+        (!run || (mission.conductor ? run.verdict !== "ready" || run.status !== "complete" : needsDecision(run)))),
   );
   const evidenceLink = (run: Run, label = "Inspect evidence") => (
     <Link
@@ -268,12 +360,24 @@ export function MissionPage({ missionId, runId }: { missionId: string; runId?: s
                   ? "Stop time reached"
                   : mission.paused
                     ? "New starts paused"
-                    : "Active goal"}
+                    : mission.conductor?.state === "ready"
+                      ? "Outcome verified"
+                      : "Active goal"}
               </span>
-              <Button onClick={() => change.mutate(!mission.paused)} disabled={change.isPending}>
-                {mission.paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
-                {mission.paused ? "Resume goal" : "Pause goal"}
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-expanded={editing === "goal"}
+                onClick={() => setEditing(editing === "goal" ? null : "goal")}
+              >
+                Edit goal
               </Button>
+              {tasks.length > 0 && !mission.conductor && (
+                <Button onClick={() => change.mutate(!mission.paused)} disabled={change.isPending}>
+                  {mission.paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
+                  {mission.paused ? "Resume goal" : "Pause goal"}
+                </Button>
+              )}
             </div>
             <h1
               ref={heading}
@@ -282,24 +386,46 @@ export function MissionPage({ missionId, runId }: { missionId: string; runId?: s
             >
               {mission.title}
             </h1>
-            <p className="whitespace-pre-wrap break-words text-[15px] text-muted leading-relaxed">
-              {mission.objective}
-            </p>
+            {mission.objective !== mission.title && (
+              <p className="whitespace-pre-wrap break-words text-[15px] text-muted leading-relaxed">
+                {mission.objective}
+              </p>
+            )}
             <section
               aria-label="Goal progress"
               className="flex flex-wrap gap-x-5 gap-y-2 border-y border-line py-3 text-[12px] text-muted"
             >
-              <span>{mission.counts.running} working</span>
-              <span>{mission.counts.queued} queued</span>
-              <span>{mission.counts.parked} draft or parked</span>
-              <span>{mission.counts.resolved} resolved tasks</span>
-              <span>{formatTokens(mission.tokensUsed)} tokens used</span>
+              {(!mission.conductor || mission.counts.running > 0) && <span>{mission.counts.running} working</span>}
+              {(!mission.conductor || mission.counts.queued > 0) && <span>{mission.counts.queued} queued</span>}
+              {(!mission.conductor || mission.counts.parked > 0) && (
+                <span>{mission.counts.parked} draft or parked</span>
+              )}
+              <span>
+                {mission.conductor
+                  ? `Checked work: ${tasks.filter(({ run }) => run?.status === "complete" && run.verdict === "ready").length} of ${tasks.length}`
+                  : `${mission.counts.resolved} resolved tasks`}
+              </span>
+              <span>
+                {formatTokens(mission.tokensUsed)} tokens {mission.conductor ? "accounted" : "used"}
+                {mission.tokenBudget ? ` of ${formatTokens(mission.tokenBudget)}` : ""}
+              </span>
+              {mission.stopAt && <span>Deadline · {new Date(mission.stopAt).toLocaleString()}</span>}
+              <button
+                type="button"
+                className="text-dawn hover:underline"
+                aria-expanded={editing === "limits"}
+                onClick={() => setEditing(editing === "limits" ? null : "limits")}
+              >
+                Budget & deadline
+              </button>
             </section>
-            <p className="text-[12px] text-muted">
-              {mission.paused
-                ? "New starts are paused. Agents already working finish their current run."
-                : "Queued tasks start when departure checks, dependencies and crew limits allow."}
-            </p>
+            {!mission.conductor && (
+              <p className="text-[12px] text-muted">
+                {mission.paused
+                  ? "New starts are paused. Agents already working finish their current run."
+                  : "Queued tasks start when departure checks, dependencies and crew limits allow."}
+              </p>
+            )}
             {change.error && (
               <p role="alert" className="text-bad">
                 {change.error.message}
@@ -307,63 +433,109 @@ export function MissionPage({ missionId, runId }: { missionId: string; runId?: s
             )}
           </header>
 
-          <section aria-label="Goal decisions" className="grid gap-3">
-            <h2 className="text-[15px] font-medium">
-              {decisions.length ? `Needs your decision · ${decisions.length}` : "No decisions waiting"}
-            </h2>
-            {decisions.length ? (
-              <div className="divide-y divide-line border-y border-line">
-                {decisions.map(({ task, run, departure }) => (
-                  <article key={task.id} className="grid gap-2 py-4">
-                    <h3 className="break-words text-[14px] font-medium">{task.title}</h3>
-                    <p className="whitespace-pre-wrap break-words text-[13px] text-muted">
-                      {task.question
-                        ? `Question: ${task.question}`
-                        : departure?.kind === "setup"
-                          ? departure.reason
-                          : run
-                            ? decisionFor(run).reason
-                            : "This task finished without an inspectable run. Review the task before accepting its result."}
-                    </p>
-                    <div className="flex flex-wrap gap-x-5 gap-y-2">
-                      {run && evidenceLink(run, "Review decision")}
-                      {(task.question || departure?.kind === "setup" || !run) && (
-                        <Link to="/task/$taskId" params={{ taskId: task.id }} className="text-[12.5px] text-dawn">
-                          {task.question ? "Answer question" : "Review task"} →
-                        </Link>
-                      )}
-                    </div>
-                  </article>
-                ))}
+          {editing === "goal" && (
+            <div className="grid gap-2">
+              <MissionEditor
+                key={mission.id}
+                mission={mission}
+                onSaved={() => {
+                  setEditing(null);
+                  invalidate();
+                }}
+              />
+              <div>
+                <Button variant="ghost" onClick={() => setEditing(null)}>
+                  Cancel editing
+                </Button>
               </div>
-            ) : (
-              <p className="text-[13px] text-muted">
-                {tasks.length
-                  ? "Work and outcome verification remain visible below."
-                  : "Draft work for this objective to get started. Saving a goal does not create or run tasks."}
-              </p>
-            )}
-          </section>
+            </div>
+          )}
+          {editing === "limits" && (
+            <GoalLimitsEditor
+              key={`limits-${mission.id}`}
+              mission={mission}
+              onSaved={() => {
+                setEditing(null);
+                invalidate();
+              }}
+              onCancel={() => setEditing(null)}
+            />
+          )}
 
-          <MissionAcceptancePanel key={`${mission.id}:${JSON.stringify(mission.criteria)}`} mission={mission} />
+          <GoalConductorPanel
+            key={mission.id}
+            mission={mission}
+            waiting={tasks.flatMap(({ departure }) => (departure ? [departure] : []))}
+          />
+
+          {(decisions.length > 0 || !mission.conductor) && (
+            <section aria-label="Goal decisions" className="grid gap-3">
+              <h2 className="text-[15px] font-medium">
+                {decisions.length ? `Needs your decision · ${decisions.length}` : "No decisions waiting"}
+              </h2>
+              {decisions.length ? (
+                <div className="divide-y divide-line border-y border-line">
+                  {decisions.map(({ task, run, departure }) => (
+                    <article key={task.id} className="grid gap-2 py-4">
+                      <h3 className="break-words text-[14px] font-medium">{task.title}</h3>
+                      <p className="whitespace-pre-wrap break-words text-[13px] text-muted">
+                        {task.question
+                          ? `Question: ${task.question}`
+                          : departure?.kind === "setup"
+                            ? departure.reason
+                            : run
+                              ? decisionFor(run).reason
+                              : "This task finished without an inspectable run. Review the task before accepting its result."}
+                      </p>
+                      {task.question && <GoalAnswer taskId={task.id} />}
+                      <div className="flex flex-wrap gap-x-5 gap-y-2">
+                        {run && evidenceLink(run, "Review decision")}
+                        {!task.question && (departure?.kind === "setup" || !run) && (
+                          <Link to="/task/$taskId" params={{ taskId: task.id }} className="text-[12.5px] text-dawn">
+                            Review task →
+                          </Link>
+                        )}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[13px] text-muted">
+                  {tasks.length
+                    ? mission.conductor
+                      ? "The crew handles the next steps. You can inspect its work below."
+                      : "Work and outcome verification remain visible below."
+                    : mission.conductor
+                      ? "The crew will surface questions and permission decisions here."
+                      : "Start the goal above when you are ready."}
+                </p>
+              )}
+            </section>
+          )}
+
+          {!mission.conductor && tasks.length > 0 && (
+            <MissionAcceptancePanel key={`${mission.id}:${JSON.stringify(mission.criteria)}`} mission={mission} />
+          )}
 
           <section aria-label="Goal work and evidence" className="grid gap-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-[15px] font-medium">
                 Work & evidence <span className="ml-2 font-mono text-[12px] text-muted">{tasks.length}</span>
               </h2>
-              <Link
-                to="/agents"
-                search={{ mission: mission.id }}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-fg px-3 py-2 text-[12px] font-medium text-bg"
-              >
-                <Plus className="size-3.5" />
-                Draft work
-              </Link>
             </div>
-            <p className="text-[12px] text-muted">
-              Resolved includes merged, shipped and dismissed tasks. It does not establish that the goal is achieved.
-            </p>
+            {!mission.conductor && (
+              <details>
+                <summary className="cursor-pointer text-[12px] text-muted">Prepare work manually</summary>
+                <div className="mt-4">
+                  <GoalWork key={mission.id} mission={mission} hasTasks={tasks.length > 0} />
+                </div>
+              </details>
+            )}
+            {!mission.conductor && (
+              <p className="text-[12px] text-muted">
+                Resolved includes merged, shipped and dismissed tasks. It does not establish that the goal is achieved.
+              </p>
+            )}
             <div className="divide-y divide-line border-y border-line">
               {tasks.map(({ task, run, departure }) => (
                 <article key={task.id} className="grid gap-2 py-4">
@@ -378,9 +550,11 @@ export function MissionPage({ missionId, runId }: { missionId: string; runId?: s
                     <span className="text-[12px] text-muted">
                       {task.status === "done"
                         ? run
-                          ? needsDecision(run)
-                            ? decisionFor(run).label
-                            : "Resolved"
+                          ? mission.conductor && run.status === "complete" && run.verdict === "ready"
+                            ? "Checked"
+                            : needsDecision(run)
+                              ? decisionFor(run).label
+                              : "Resolved"
                           : "Needs review"
                         : {
                             queued: "Queued",
@@ -403,13 +577,15 @@ export function MissionPage({ missionId, runId }: { missionId: string; runId?: s
                         Watch live activity →
                       </Link>
                     )}
-                    <Link
-                      to="/task/$taskId"
-                      params={{ taskId: task.id }}
-                      className="text-[12.5px] text-muted hover:text-fg"
-                    >
-                      Task details →
-                    </Link>
+                    {!mission.conductor && (
+                      <Link
+                        to="/task/$taskId"
+                        params={{ taskId: task.id }}
+                        className="text-[12.5px] text-muted hover:text-fg"
+                      >
+                        Task details →
+                      </Link>
+                    )}
                   </div>
                   {task.dependsOn.length > 0 && (
                     <p className="break-words text-[12px] text-muted">
@@ -426,7 +602,7 @@ export function MissionPage({ missionId, runId }: { missionId: string; runId?: s
           </section>
 
           <details className="border-y border-line py-4">
-            <summary className="cursor-pointer text-[13px] text-muted hover:text-fg">Details & limits</summary>
+            <summary className="cursor-pointer text-[13px] text-muted hover:text-fg">Work details</summary>
             <div className="mt-5 grid gap-6 [&>*]:min-w-0">
               <p className="text-[13px] text-muted">
                 Priority: {["Normal", "Raised", "High", "Urgent"][mission.priority]} · Token limit:{" "}
@@ -439,21 +615,6 @@ export function MissionPage({ missionId, runId }: { missionId: string; runId?: s
                 {formatTokens(mission.taskCaps)} combined caps for queued and running tasks. Caps are limits, not
                 forecasts or extra reservations. Daily crew budget and repository authority still apply.
               </p>
-              <div>
-                <Button variant="ghost" onClick={() => setEditing(!editing)}>
-                  {editing ? "Cancel editing" : "Edit objective & limits"}
-                </Button>
-              </div>
-              {editing && (
-                <MissionEditor
-                  key={mission.id}
-                  mission={mission}
-                  onSaved={() => {
-                    setEditing(false);
-                    invalidate();
-                  }}
-                />
-              )}
               <section aria-label="Goal criterion coverage" className="grid gap-3">
                 <h2 className="text-[14px] font-medium">Planned criterion coverage</h2>
                 <p className="text-[12px] text-muted">
@@ -606,7 +767,7 @@ function MissionEditor({ mission, onSaved }: { mission: Mission; onSaved: () => 
       api.patch(`/api/missions/${mission.id}`, {
         title,
         objective,
-        ...missionControlPatch(controls),
+        criteria: missionControlPatch(controls).criteria,
       }),
     onSuccess: onSaved,
   });
@@ -637,7 +798,15 @@ function MissionEditor({ mission, onSaved }: { mission: Mission; onSaved: () => 
           rows={4}
         />
       </Field>
-      <MissionControls values={controls} onChange={setControls} />
+      <Field label="Success criteria" htmlFor="mission-criteria" hint="Optional. One checkable outcome per line.">
+        <TextArea
+          id="mission-criteria"
+          rows={3}
+          value={controls.criteria}
+          maxLength={30030}
+          onChange={(event) => setControls({ ...controls, criteria: event.target.value })}
+        />
+      </Field>
       <p className="text-[12px] text-muted">
         Changes apply to future attempts. Agents already running keep the objective they started with.
       </p>
@@ -648,7 +817,7 @@ function MissionEditor({ mission, onSaved }: { mission: Mission; onSaved: () => 
       )}
       <div>
         <Button type="submit" disabled={save.isPending || !title.trim() || !objective.trim()}>
-          Save objective
+          Save goal
         </Button>
       </div>
     </form>

@@ -163,6 +163,8 @@ export interface Settings {
   planModel: string;
   buildModel: string;
   reviewModel: string;
+  /** Explicitly selected compatible connection; null uses the local Claude engine. */
+  executionConnectionId: string | null;
   /** Optional Slack incoming webhook for reports that need you. */
   slackWebhookUrl: string | null;
 }
@@ -176,6 +178,7 @@ export const DEFAULT_SETTINGS: Settings = {
   planModel: "claude-opus-5-5",
   buildModel: "claude-sonnet-5-5",
   reviewModel: "claude-sonnet-5-5",
+  executionConnectionId: null,
   slackWebhookUrl: null,
 };
 

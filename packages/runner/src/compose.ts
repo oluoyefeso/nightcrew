@@ -4,7 +4,7 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { type Mission, type Repo, TASK_TYPES, type TaskType } from "@nightcrew/core";
-import { type AgentEngine, runEnginePhase } from "./engine";
+import { type AgentEngine, type EngineEvent, type PhaseResult, runEnginePhase } from "./engine";
 
 export interface DraftTask {
   repoId: string;
@@ -70,6 +70,11 @@ export async function draftTasks(
     defaultRepoId?: string;
     model: string;
     mission?: (Pick<Mission, "title" | "objective"> & Partial<Pick<Mission, "criteria">>) | null;
+    maxTokens?: number;
+    strict?: boolean;
+    signal?: AbortSignal;
+    onEvent?: (event: EngineEvent) => void;
+    onResult?: (result: PhaseResult) => void;
   },
 ): Promise<{ drafts: DraftTask[]; costUsd: number; fallback: boolean }> {
   const { repos } = input;
@@ -87,9 +92,7 @@ export async function draftTasks(
     },
   ];
 
-  const context = repos
-    .map((r) => `### ${r.name}${r.id === input.defaultRepoId ? " (default)" : ""}\n${fileTree(r.path)}`)
-    .join("\n\n");
+  const context = repos.map((r) => `### ${r.name}\n${fileTree(r.path)}`).join("\n\n");
 
   const result = await runEnginePhase(
     engine,
@@ -98,21 +101,72 @@ export async function draftTasks(
       cwd: (repos.find((r) => r.id === input.defaultRepoId) ?? (repos[0] as Repo)).path,
       model: input.model,
       systemPrompt:
-        "You turn a developer's request into well-scoped tasks for a coding crew that works unattended. Split unrelated work into separate tasks; keep one coherent change as one task. Never invent requirements.",
-      prompt: `Repos and their files:\n\n${context}\n\n---\n\n${input.mission ? `Shared mission context (scope comes from the request):\n${input.mission.title}\n${input.mission.objective}\nMission acceptance criteria:\n${(input.mission.criteria ?? []).map((c) => `- ${c}`).join("\n")}\nPropose a complete task breakdown with prerequisites and a final integration check. Link each task to the exact mission criteria it supports; leave unrelated work unlinked. Keep drafts reviewable before dispatch.\n\n` : ""}The request:\n\n${input.text}`,
+        "You turn a developer's request into well-scoped tasks for a coding crew that works unattended. Split unrelated work into separate tasks; keep one coherent change and its tests as ONE task. Each task must pass its checks before any dependent task can start. Never put deliberately failing regression tests in a separate predecessor task: the bug fix task must implement both the fix and its regression test. The conductor performs final integration verification itself; do not create a separate task just to verify the goal. Never invent requirements.",
+      prompt: `Repos and their files:\n\n${context}\n\n---\n\n${input.mission ? `Shared mission context (scope comes from the request):\n${input.mission.title}\n${input.mission.objective}\nMission acceptance criteria:\n${(input.mission.criteria ?? []).map((c) => `- ${c}`).join("\n")}\nPropose the work needed, with prerequisites where necessary. A fix and its regression tests must be in the same task so each task can pass before its dependents start. The conductor runs final integration verification itself. Link each task to the exact mission criteria it supports; leave unrelated work unlinked.\n\n` : ""}The request:\n\n${input.text}`,
       guard: { worktree: "/nonexistent", writableDirs: [], scope: [], protectedBranches: [], readOnly: true },
-      maxTokens: 200_000,
+      maxTokens: input.maxTokens ?? 200_000,
       maxTurns: 3,
-      outputSchema: SCHEMA,
-      signal: AbortSignal.timeout(90_000),
+      outputSchema: {
+        ...SCHEMA,
+        properties: {
+          tasks: {
+            ...SCHEMA.properties.tasks,
+            items: {
+              ...SCHEMA.properties.tasks.items,
+              properties: {
+                ...SCHEMA.properties.tasks.items.properties,
+                repo: {
+                  type: "string",
+                  enum: repos.map((repo) => repo.name),
+                  description: "Exact connected project name, with no annotations.",
+                },
+              },
+            },
+          },
+        },
+      },
+      signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(90_000)]) : AbortSignal.timeout(90_000),
     },
-    () => {},
+    input.onEvent ?? (() => {}),
   );
+  input.onResult?.(result);
 
   const out = result.structured as { tasks?: Array<Omit<DraftTask, "repoId"> & { repo: string }> } | null;
-  if (!result.ok || !out?.tasks?.length) return { drafts: fallback(), costUsd: result.costUsd, fallback: true };
+  if (
+    !result.ok ||
+    !Array.isArray(out?.tasks) ||
+    !out.tasks.length ||
+    out.tasks.length > 12 ||
+    out.tasks.some(
+      (t) =>
+        !t ||
+        typeof t.title !== "string" ||
+        !t.title.trim() ||
+        !Array.isArray(t.scope) ||
+        !Array.isArray(t.criteria) ||
+        !Array.isArray(t.dependsOn),
+    )
+  )
+    return { drafts: fallback(), costUsd: result.costUsd, fallback: true };
 
   const byName = new Map(repos.map((r) => [r.name.toLowerCase(), r.id]));
+  if (
+    input.strict &&
+    out.tasks.some(
+      (task, index) =>
+        !byName.has(String(task.repo).toLowerCase()) ||
+        !(TASK_TYPES as string[]).includes(task.type) ||
+        typeof task.brief !== "string" ||
+        task.brief.length > 10000 ||
+        task.scope.some((scope) => typeof scope !== "string" || scope.length > 1000) ||
+        task.criteria.some(
+          (criterion) => typeof criterion !== "string" || !criterion.trim() || criterion.length > 1000,
+        ) ||
+        (task.question !== null && typeof task.question !== "string") ||
+        task.dependsOn.some((dependency) => !Number.isInteger(dependency) || dependency < 0 || dependency >= index),
+    )
+  )
+    return { drafts: fallback(), costUsd: result.costUsd, fallback: true };
   const drafts = out.tasks.map((t, i) => ({
     repoId: byName.get(String(t.repo).toLowerCase()) ?? input.defaultRepoId ?? (repos[0] as Repo).id,
     title: String(t.title).slice(0, 120),

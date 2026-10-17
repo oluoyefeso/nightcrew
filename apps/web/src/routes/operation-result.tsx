@@ -29,7 +29,7 @@ export function OperationPage({ operationId }: { operationId: string }) {
       </Link>
       <h1 className="t-h1">
         {job?.kind === "mission"
-          ? "Mission verification"
+          ? "Goal verification"
           : job?.kind === "repository"
             ? "Repository setup"
             : job?.stage

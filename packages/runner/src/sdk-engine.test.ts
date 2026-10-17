@@ -107,6 +107,27 @@ describe("SdkEngine", () => {
     expect(r.usageStatus).toBe("unknown");
   });
 
+  test("a payment refusal gives fixed credit guidance without exposing provider details", async () => {
+    scripted = async function* () {
+      yield {
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        api_error_status: 402,
+        result: "synthetic-private-provider-detail",
+        num_turns: 1,
+      };
+    };
+    const r = await new SdkEngine().runPhase(request(), () => {});
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe(
+      "The API requires payment or more credits (402). Check the provider balance and key spending limit.",
+    );
+    expect(JSON.stringify(r)).not.toContain("synthetic-private-provider-detail");
+    expect(r.rateLimited).toBe(false);
+    expect(r.usageStatus).not.toBe("reported");
+  });
+
   test("terminal usage includes cache reads and writes exactly once", async () => {
     scripted = async function* () {
       yield {

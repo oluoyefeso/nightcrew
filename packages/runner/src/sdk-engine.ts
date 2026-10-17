@@ -202,7 +202,8 @@ export class SdkEngine implements AgentEngine {
             const status = "api_error_status" in msg ? msg.api_error_status : null;
             result.rateLimited = status === 429;
             result.error = describeFailure(msg.subtype, status, "result" in msg ? String(msg.result ?? "") : "");
-            if ("result" in msg && typeof msg.result === "string") result.text = msg.result;
+            if ("result" in msg && typeof msg.result === "string")
+              result.text = status === 402 ? result.error : msg.result;
           }
         }
       }
@@ -350,6 +351,8 @@ export function withRepoInstructions(system: string, cwd: string): string {
 }
 
 function describeFailure(subtype: string, status: number | null | undefined, text: string): string {
+  if (status === 402)
+    return "The API requires payment or more credits (402). Check the provider balance and key spending limit.";
   if (status === 429) return "Rate limited by the API (429).";
   if (status) return `API error ${status}.`;
   switch (subtype) {

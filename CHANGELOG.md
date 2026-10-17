@@ -2,6 +2,19 @@
 
 All notable changes to NightCrew are documented here.
 
+## [1.0.0-alpha.21] - 2026-10-17
+
+### Added
+
+- OpenRouter is the recommended hosted connection in Settings, with a one-click preset for its API URL and credential variable. Local and custom connections remain available.
+- `--env-file <file>` loads an explicitly selected private environment file before startup defaults are resolved. Exported variables take precedence; files are parsed as data, with bounded reads and sanitized errors. Credential values are not included in connection profiles or API responses.
+
+### Clarified
+
+- HTTP 402 refusals show fixed payment and credit guidance for connection checks and the local coding engine, without echoing provider error text.
+- A blank goal token limit removes only that goal's cap. Daily and per-task limits still apply; start deadlines and execution stop times remain independent controls.
+- Model connections support discovery and synthetic tool checks. They do not enable coding with those models. The local coding engine still uses Claude Code; managed mode remains Coming soon.
+
 ## [1.0.0-alpha.20] - 2026-10-15
 
 ### Fixed
